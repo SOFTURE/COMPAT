@@ -16,7 +16,12 @@ export type CodeSet = ReadonlyMap<string, CodeDeclaration>;
 /** The codes one live client ref translates. */
 export type ClientRefCodes = { ref: string; commit: string; paths: string[]; codes: ReadonlySet<string> };
 
-export type ClientCodes = { client: string; refs: ClientRefCodes[] };
+export type ClientCodes = {
+  client: string;
+  refs: ClientRefCodes[];
+  /** The client build at the revision, for a client deployed with the server (`deployedWith: "revision"`). */
+  deployed?: ClientRefCodes;
+};
 
 export type ClassifyErrorCodesOptions = { base: CodeSet; revision: CodeSet; clients: ClientCodes[] };
 
@@ -62,24 +67,32 @@ export function classifyErrorCodes({ base, revision, clients }: ClassifyErrorCod
       }),
     );
   }
-  for (const { client, refs } of clients) {
+  for (const { client, refs, deployed } of clients) {
     for (const code of added) {
       const lacking = refs.filter((ref) => !ref.codes.has(code));
       if (lacking.length === 0) continue;
       const declaration = revision.get(code) as CodeDeclaration;
-      findings.push(
-        createFinding("error-code-unknown-to-client", {
-          scope: client,
-          subject: code,
-          message: `error code ${code} is new in the revision and not translated by ${formatClientRefs(client, lacking)}; these builds show a generic error instead of its message`,
-          evidence: [
-            declaration.evidence,
-            ...lacking.flatMap(({ ref, commit, paths }) =>
-              paths.map((path): Evidence => ({ side: "client", ref, commit, path })),
-            ),
-          ],
-        }),
-      );
+      const finding = createFinding("error-code-unknown-to-client", {
+        scope: client,
+        subject: code,
+        message: `error code ${code} is new in the revision and not translated by ${formatClientRefs(client, lacking)}; these builds show a generic error instead of its message`,
+        evidence: [
+          declaration.evidence,
+          ...lacking.flatMap(({ ref, commit, paths }) =>
+            paths.map((path): Evidence => ({ side: "client", ref, commit, path })),
+          ),
+        ],
+      });
+      if (deployed?.codes.has(code)) {
+        // The build deployed with the server translates it; only tabs opened before the deploy lack it.
+        finding.class = "safe";
+        finding.reclassified = {
+          from: ERROR_CODE_FINDING_CLASSES["error-code-unknown-to-client"],
+          by: ERROR_CODES_LAYER,
+          reason: `only ${formatClientRefs(client, lacking)} tabs opened before the deploy; ${client}@${deployed.ref} translates it`,
+        };
+      }
+      findings.push(finding);
     }
   }
   return findings;

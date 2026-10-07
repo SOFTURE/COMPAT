@@ -35,6 +35,7 @@ beforeAll(async () => {
     { files: { "src/Errors.cs": ERRORS_V1 }, tag: "server-2.2.4" },
     { files: { "app/constants/api.ts": map(["Shop.Cart.Full", "Shop.Cart.NotFound"]) }, tag: "mobile-2.2.4" },
     { files: { "src/Errors.cs": ERRORS_V2, "app/constants/api.ts": null }, tag: "server-2.3.5" },
+    { files: { "app/constants/api.ts": map(["Shop.Cart.Full", "Shop.Cart.NotFound"]) }, tag: "server-2.3.6" },
   ]);
   tempRoot = await mkdtemp(join(tmpdir(), "compat-error-codes-layer-"));
   const opened = await Promise.all([
@@ -59,11 +60,11 @@ const mobile = {
   pattern: '"(?<code>[\\w.]+)":',
 };
 
-const run = (config: unknown) =>
+const run = (config: unknown, revisionTree = revision) =>
   errorCodesLayer.run({
     config: errorCodesLayer.configSchema.parse(config),
     base,
-    revision,
+    revision: revisionTree,
     repoDir: repo.dir,
     tempDir: tempRoot,
     env: process.env,
@@ -182,5 +183,59 @@ describe("error-codes layer", () => {
     expect(result.status === "failed" && result.error).toMatch(
       /^client "mobile": .*fetch the client refs \(actions\/checkout with fetch-depth: 0\)$/,
     );
+  });
+
+  describe("a client deployed with the server", () => {
+    const web = { ...mobile, name: "web", refs: ["mobile-2.0.1"], deployedWith: "revision" };
+
+    const openRevision = async (ref: string) => {
+      const tree = await openRefTree({ repoDir: repo.dir, ref, side: "revision", tempRoot });
+      if (!tree.ok) throw new Error(tree.error);
+      return tree.value;
+    };
+
+    const unknown = (findings: { id: string; subject: string; class: string }[]) =>
+      findings
+        .filter((finding) => finding.id === "error-code-unknown-to-client")
+        .map((finding) => [finding.subject, finding.class]);
+
+    it("makes a code the revision build translates safe as a stale-tab gap", async () => {
+      const result = await run({ codes, clients: [web] }, await openRevision("server-2.3.6"));
+      if (result.status === "skipped") throw new Error("skipped");
+      expect(unknown(result.findings)).toEqual([
+        ["FeatureFlag.General.Disabled", "needs-action"],
+        ["Shop.Cart.NotFound", "safe"],
+      ]);
+      expect(
+        result.findings.find(
+          (finding) =>
+            finding.id === "error-code-unknown-to-client" && finding.subject === "Shop.Cart.NotFound",
+        )?.reclassified,
+      ).toEqual({
+        from: "needs-action",
+        by: "error-codes",
+        reason: "only web@mobile-2.0.1 tabs opened before the deploy; web@server-2.3.6 translates it",
+      });
+      expect(result.notes).toContain('client "web" at revision server-2.3.6: 2 translated code(s)');
+    });
+
+    it("keeps needs-action without deployedWith", async () => {
+      const result = await run(
+        { codes, clients: [{ ...web, deployedWith: undefined }] },
+        await openRevision("server-2.3.6"),
+      );
+      if (result.status === "skipped") throw new Error("skipped");
+      expect(unknown(result.findings)).toEqual([
+        ["FeatureFlag.General.Disabled", "needs-action"],
+        ["Shop.Cart.NotFound", "needs-action"],
+      ]);
+    });
+
+    it("fails when the revision has no map file for the client", async () => {
+      const result = await run({ codes, clients: [web] });
+      expect(result.status === "failed" && result.error).toBe(
+        'client "web": server-2.3.5: no file matches app/constants/api.ts',
+      );
+    });
   });
 });

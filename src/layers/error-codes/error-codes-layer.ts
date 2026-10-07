@@ -215,20 +215,44 @@ async function readClient(
           : `${resolver} resolved to ${ref} (${commit ?? ref}), which is not in the local clone`;
       return err(`${cause}; fetch the client refs (actions/checkout with fetch-depth: 0)`);
     }
-    const files = await readFiles(tree.value, client.files, regex);
-    if (!files.ok) return err(`${ref}: ${files.error}`);
-    if (files.value.length === 0) return err(`${ref}: no file matches ${client.files.join(", ")}`);
-    const codes = new Set(files.value.flatMap((file) => file.codes.map(({ code }) => code)));
-    // No key at all means a wrong pattern or file: every new code would read as untranslated.
-    if (codes.size === 0) {
-      return err(`${ref}: pattern captured no code in ${files.value.map(({ path }) => path).join(", ")}`);
-    }
-    read.push({ ref, commit: tree.value.commit, paths: files.value.map(({ path }) => path), codes });
+    const codes = await readClientTree(tree.value, client, regex);
+    if (!codes.ok) return codes;
+    read.push(codes.value);
+  }
+  let deployed: ClientRefCodes | undefined;
+  if (client.deployedWith === "revision") {
+    const codes = await readClientTree(context.revision, client, regex);
+    if (!codes.ok) return codes;
+    deployed = codes.value;
   }
   const counts = read.map(({ codes }) => codes.size).join("/");
   const notes = [
     `client "${client.name}" at ${read.map(({ ref }) => ref).join(", ")}: ${counts} translated code(s)`,
+    ...(deployed === undefined
+      ? []
+      : [`client "${client.name}" at revision ${deployed.ref}: ${deployed.codes.size} translated code(s)`]),
     ...formatResolvers(client.name, refs.value),
   ];
-  return ok({ codes: { client: client.name, refs: read }, notes });
+  return ok({
+    codes: { client: client.name, refs: read, ...(deployed === undefined ? {} : { deployed }) },
+    notes,
+  });
+}
+
+/** The codes the client's translation files capture at one tree. */
+async function readClientTree(
+  tree: RefTree,
+  client: ErrorCodeClient,
+  regex: RegExp,
+): Promise<Result<ClientRefCodes>> {
+  const { ref } = tree;
+  const files = await readFiles(tree, client.files, regex);
+  if (!files.ok) return err(`${ref}: ${files.error}`);
+  if (files.value.length === 0) return err(`${ref}: no file matches ${client.files.join(", ")}`);
+  const codes = new Set(files.value.flatMap((file) => file.codes.map(({ code }) => code)));
+  // No key at all means a wrong pattern or file: every new code would read as untranslated.
+  if (codes.size === 0) {
+    return err(`${ref}: pattern captured no code in ${files.value.map(({ path }) => path).join(", ")}`);
+  }
+  return ok({ ref, commit: tree.commit, paths: files.value.map(({ path }) => path), codes });
 }
