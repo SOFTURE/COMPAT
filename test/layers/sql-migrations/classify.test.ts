@@ -139,6 +139,73 @@ describe("classifyMigrations", () => {
     expect(items[0]?.finding.evidence[0]?.line).toBe(1);
   });
 
+  describe("sequence reset after explicit-id inserts", () => {
+    const INSERTS = [
+      'INSERT INTO s."T" ("Id", "Name") VALUES (418, \'a\');',
+      'INSERT INTO s."T" ("Id", "Name") VALUES (496, \'b\');',
+    ].join("\n");
+    const EF_SETVAL = [
+      "DO $EF$",
+      "BEGIN",
+      '    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = \'0002\') THEN',
+      "    PERFORM setval(",
+      "        pg_get_serial_sequence('s.\"T\"', 'Id'),",
+      "        GREATEST(",
+      '            (SELECT MAX("Id") FROM s."T") + 1,',
+      "            nextval(pg_get_serial_sequence('s.\"T\"', 'Id'))),",
+      "        false);",
+      "    END IF;",
+      "END $EF$;",
+    ].join("\n");
+
+    it("keeps only the max(Id) precondition when an EF setval follows the inserts", () => {
+      const items = classify([migration("0002", `${INSERTS}\n${EF_SETVAL}`)]);
+      expect(summary(items)).toEqual(["insert-explicit-id needs-action 0002: s.T"]);
+      expect(items[0]?.finding.message).toBe(
+        "inserts 2 row(s) into s.T with explicit Id 418-496; precondition: production max(Id) < 418; the migration moves the identity sequence past them",
+      );
+      expect(items[0]?.finding.evidence).toEqual([
+        { ...REVISION, path: "db/0002.sql", line: 1 },
+        { ...REVISION, path: "db/0002.sql", line: 6 },
+      ]);
+    });
+
+    it("keeps today's message without a setval", () => {
+      const items = classify([migration("0002", INSERTS)]);
+      expect(items[0]?.finding.message).toBe(
+        "inserts 2 row(s) into s.T with explicit Id 418-496; precondition: production max(Id) < 418, and the identity sequence must continue after 496",
+      );
+      expect(items[0]?.finding.evidence).toHaveLength(1);
+    });
+
+    it("ignores a setval on another table or before the inserts", () => {
+      const other = EF_SETVAL.replaceAll('s."T"', 's."U"');
+      for (const sql of [`${INSERTS}\n${other}`, `${EF_SETVAL}\n${INSERTS}`]) {
+        const items = classify([migration("0002", sql)]);
+        expect(items[0]?.finding.message).toContain("the identity sequence must continue after 496");
+        expect(items[0]?.finding.evidence).toHaveLength(1);
+      }
+    });
+
+    it("accepts a literal restart above the last id and rejects one that is not", () => {
+      const message = (reset: string) =>
+        classify([migration("0002", `${INSERTS}\n${reset}`)])[0]?.finding.message ?? "";
+      expect(message('ALTER SEQUENCE s."T_Id_seq" RESTART WITH 497;')).toContain(
+        "moves the identity sequence",
+      );
+      expect(message('ALTER TABLE s."T" ALTER COLUMN "Id" RESTART WITH 497;')).toContain(
+        "moves the identity sequence",
+      );
+      expect(message("SELECT setval('s.\"T_Id_seq\"', 496);")).toContain("moves the identity sequence");
+      expect(message("SELECT setval('s.\"T_Id_seq\"', 496, false);")).toContain(
+        "the identity sequence must continue after 496",
+      );
+      expect(message('ALTER SEQUENCE s."T_Id_seq" RESTART;')).toContain(
+        "the identity sequence must continue after 496",
+      );
+    });
+  });
+
   it("applies IDENTITY_INSERT only within the same migration", () => {
     const identity = migration(
       "A",

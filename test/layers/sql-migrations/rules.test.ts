@@ -12,6 +12,10 @@ function summarize(matches: StatementMatch[]): string[] {
   return matches.map((match) => {
     if (match.kind === "rule") return `${match.rule} ${match.class} ${match.object}`;
     if (match.kind === "identity-insert") return `identity-insert ${match.table.display}`;
+    if (match.kind === "sequence-reset") {
+      const next = match.next.kind === "value" ? match.next.value : match.next.kind;
+      return `sequence-reset ${match.table.display}.${match.column} ${next}`;
+    }
     return `nested ${match.sql.trim()}`;
   });
 }
@@ -156,7 +160,15 @@ describe("matchStatement rules", () => {
     ],
     ["postgres", 'CREATE VIEW "v" AS SELECT 1', []],
     ["postgres", "SELECT 1", []],
-    ["postgres", "SELECT setval('\"Breeds_Id_seq\"', 496)", []],
+    ["postgres", "SELECT setval('\"Breeds_Id_seq\"', 496)", ["sequence-reset Breeds.Id 497"]],
+    [
+      "postgres",
+      'PERFORM setval(pg_get_serial_sequence(\'d."B"\', \'Id\'), GREATEST((SELECT MAX("Id") FROM d."B") + 1, 1), false)',
+      ["sequence-reset d.B.Id after-max"],
+    ],
+    ["postgres", 'ALTER SEQUENCE d."B_Id_seq" RESTART WITH 10', ["sequence-reset d.B.Id 10"]],
+    ["postgres", 'ALTER TABLE d."B" ALTER COLUMN "Id" RESTART WITH 10', ["sequence-reset d.B.Id 10"]],
+    ["postgres", "SELECT setval('counter', 5)", []],
     ["postgres", "START TRANSACTION", []],
     ["postgres", "END IF", []],
   ];

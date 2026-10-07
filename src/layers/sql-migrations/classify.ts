@@ -6,11 +6,13 @@ import {
   describeExplicitIds,
   type ExplicitIds,
   getDefinedObject,
+  isSequenceMovedPast,
   matchStatement,
   mergeExplicitIds,
   RULE_CLASSES,
   type RuleId,
   type RuleMatch,
+  type SequenceReset,
 } from "./rules.js";
 
 export const SQL_MIGRATIONS_LAYER = "sql-migrations";
@@ -41,7 +43,7 @@ export type ClassifyOptions = {
   revision: Pick<RefTree, "side" | "ref" | "commit">;
 };
 
-type LocatedMatch = { match: RuleMatch; line: number; order: number };
+type LocatedMatch = { match: RuleMatch | SequenceReset; line: number; order: number };
 
 /** Statement positions across all new migrations of a source, and where each object is defined. */
 type Walk = { order: number; definedAt: Map<string, number> };
@@ -58,7 +60,7 @@ function matchMigration(migration: Migration, dialect: SqlDialect, walk: Walk): 
       if (match.kind === "identity-insert") {
         if (match.isEnabled) identityInsertTables.add(match.table.key);
         else identityInsertTables.delete(match.table.key);
-      } else if (match.kind === "rule") {
+      } else if (match.kind === "rule" || match.kind === "sequence-reset") {
         located.push({ match, line, order: walk.order });
       } else if (depth < MAX_NESTING) {
         const nestedLine =
@@ -85,7 +87,7 @@ export function getCreatedTables(migrations: Migration[], dialect: SqlDialect): 
   const walk: Walk = { order: 0, definedAt: new Map() };
   for (const migration of migrations) {
     for (const { match } of matchMigration(migration, dialect, walk)) {
-      if (match.rule === "create-table" && match.table) tables.add(match.table.key);
+      if (match.kind === "rule" && match.rule === "create-table" && match.table) tables.add(match.table.key);
     }
   }
   return tables;
@@ -125,12 +127,23 @@ const NEW_TABLE_ACTIONS: Record<Exclude<RuleId, AdditiveRuleId>, string> = {
   "object-redefined": "drops and creates again",
 };
 
-type MergedInsert = { item: ClassifiedFinding; table: SqlName; ids: ExplicitIds; isNewTable: boolean };
+type MergedInsert = {
+  item: ClassifiedFinding;
+  table: SqlName;
+  ids: ExplicitIds;
+  isNewTable: boolean;
+  /** Position of the last insert, so only a sequence reset after it counts. */
+  lastOrder: number;
+  resets: LocatedSequenceReset[];
+};
+
+type LocatedSequenceReset = { reset: SequenceReset; line: number; order: number };
 
 /**
  * Turns the statements of the new migrations into findings: tables created by these migrations
  * make later findings on them `safe`, a dropped object that a later statement creates again is a
- * redefinition, and explicit-id inserts are merged per migration and table.
+ * redefinition, and explicit-id inserts are merged per migration and table. A sequence reset on the
+ * table later in the same migration drops the sequence half of their precondition.
  */
 export function classifyMigrations(options: ClassifyOptions): ClassifiedFinding[] {
   const walk: Walk = { order: 0, definedAt: new Map() };
@@ -144,7 +157,12 @@ export function classifyMigrations(options: ClassifyOptions): ClassifiedFinding[
   const merged = new Map<string, MergedInsert>();
 
   for (const { migration, matches } of matched) {
+    const resets: LocatedSequenceReset[] = [];
     for (const { match, line, order } of matches) {
+      if (match.kind === "sequence-reset") {
+        resets.push({ reset: match, line, order });
+        continue;
+      }
       const tableKey = match.table?.key ?? null;
       const isNewTable = tableKey !== null && created.has(tableKey) && !ADDITIVE_RULES.has(match.rule);
       if (match.rule === "create-table" && tableKey !== null) {
@@ -166,17 +184,42 @@ export function classifyMigrations(options: ClassifyOptions): ClassifiedFinding[
         const earlier = merged.get(key);
         if (earlier) {
           earlier.ids = mergeExplicitIds(earlier.ids, match.explicitIds);
+          earlier.lastOrder = order;
           continue;
         }
-        merged.set(key, { item, table: match.table, ids: match.explicitIds, isNewTable });
+        merged.set(key, {
+          item,
+          table: match.table,
+          ids: match.explicitIds,
+          isNewTable,
+          lastOrder: order,
+          resets,
+        });
       }
       classified.push(item);
     }
   }
-  for (const { item, table, ids, isNewTable } of merged.values()) {
-    if (!isNewTable) item.finding.message = describeExplicitIds(table, ids);
+  for (const insert of merged.values()) {
+    if (insert.isNewTable) continue;
+    const moved = findSequenceMove(insert);
+    insert.item.finding.message = describeExplicitIds(insert.table, insert.ids, moved !== undefined);
+    const evidence = insert.item.finding.evidence[0];
+    if (moved !== undefined && evidence) insert.item.finding.evidence.push({ ...evidence, line: moved.line });
   }
   return classified;
+}
+
+/** The first reset of the inserted table's identity sequence after its last insert that moves it past the ids. */
+function findSequenceMove({ table, ids, lastOrder, resets }: MergedInsert): LocatedSequenceReset | undefined {
+  return resets.find(
+    ({ reset, order }) =>
+      order > lastOrder &&
+      reset.table.key === table.key &&
+      (reset.column === null ||
+        ids.column === null ||
+        reset.column.toLowerCase() === ids.column.toLowerCase()) &&
+      isSequenceMovedPast(reset.next, ids),
+  );
 }
 
 function describeNewTableFinding(ruleId: Exclude<RuleId, AdditiveRuleId>, object: string): string {
