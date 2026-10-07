@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 export type Commit = {
   /** File path to content; `null` deletes the file. */
-  files: Record<string, string | null>;
+  files: Record<string, string | Buffer | null>;
   tag?: string;
 };
 

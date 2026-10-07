@@ -272,9 +272,9 @@ exit 1, evidence `drizzle/0002_x.sql:<line>`; the same with an accept entry → 
 ### Phase 1: Shared SQL scanner and UTF-16 decoding
 
 #### Automated
-- [ ] 1.1 The named scanner and identifier tests pass
-- [ ] 1.2 `RefTree.readFile` returns the same text for UTF-8, UTF-8 with BOM, UTF-16LE and UTF-16BE (BOM) files
-- [ ] 1.3 Gates green (typecheck, lint, test)
+- [x] 1.1 The named scanner and identifier tests pass
+- [x] 1.2 `RefTree.readFile` returns the same text for UTF-8, UTF-8 with BOM, UTF-16LE and UTF-16BE (BOM) files
+- [x] 1.3 Gates green (typecheck, lint, test)
 
 ### Phase 2: Statement rules and migration classification
 
