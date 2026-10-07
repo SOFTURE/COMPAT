@@ -10,7 +10,48 @@ describe("message-contracts config", () => {
       queues: [{ kind: "regex", name: "q", files: "**/Queues.cs", pattern: '"(PETSEO\\.[\\w.]+)"' }],
     });
     expect(parsed.sources[0]?.enumStorage).toBe("string");
-    expect(parsed.queues?.[0]).toMatchObject({ flags: "", comments: "slash" });
+    expect(parsed.queues?.[0]).toMatchObject({ flags: "", comments: "slash", report: true });
+  });
+
+  const endpoint = { kind: "regex", name: "endpoint", files: "x", pattern: '"Name": "(.+)"', report: false };
+  const group = { kind: "regex", name: "group", files: "y", pattern: '"(\\w+)"', report: false };
+  const composed = (extra: object) => ({
+    kind: "composed",
+    name: "groups",
+    template: "{endpoint}{separator}{group}",
+    parts: { endpoint: "endpoint", group: "group", separator: { default: "." } },
+    ...extra,
+  });
+
+  it("accepts a composed queue source over regex sources", () => {
+    const parsed = messageContractsConfigSchema.parse({
+      sources: [source],
+      queues: [composed({}), endpoint, group],
+    });
+    expect(parsed.queues?.[0]).toEqual(composed({}));
+    expect(parsed.queues?.[1]).toMatchObject({ report: false });
+  });
+
+  it.each([
+    ["a part naming an unknown source", { parts: { endpoint: "nope", group: "group", separator: "group" } }],
+    [
+      "a part naming a composed source",
+      { parts: { endpoint: "groups", group: "group", separator: { default: "." } } },
+    ],
+    ["a placeholder without a part", { parts: { endpoint: "endpoint", group: "group" } }],
+    [
+      "a part missing from the template",
+      { template: "{endpoint}.{group}", parts: { endpoint: "endpoint", group: "group", separator: "group" } },
+    ],
+    ["a template without placeholders", { template: "PETSEO", parts: {} }],
+    [
+      "a part with neither source nor default",
+      { parts: { endpoint: "endpoint", group: "group", separator: {} } },
+    ],
+    ["only constant parts", { template: "{a}.{b}", parts: { a: { default: "x" }, b: { default: "y" } } }],
+  ])("rejects %s", (_, extra) => {
+    const config = { sources: [source], queues: [endpoint, group, composed(extra)] };
+    expect(messageContractsConfigSchema.safeParse(config).success).toBe(false);
   });
 
   it.each([

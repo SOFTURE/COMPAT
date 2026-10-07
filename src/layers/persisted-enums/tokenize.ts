@@ -6,8 +6,13 @@ export type Token = {
   /** Identifier name, number literal, string or char content (unescaped), punctuation, or the directive name. */
   text: string;
   line: number;
-  /** A C# interpolated string (`$"..."`): its text holds the holes, not a constant value. */
+  /**
+   * A C# interpolated string (`$"..."`) or a TypeScript template literal with `${...}` holes: its text is
+   * not a constant value. A C# text holds the holes; a TypeScript text holds each hole as `${}`.
+   */
   isInterpolated?: boolean;
+  /** The source of each `${...}` hole of a TypeScript template literal, in order. */
+  holes?: string[];
 };
 
 const IDENTIFIER_START = /[A-Za-z_$À-￿]/;
@@ -130,7 +135,15 @@ export function tokenize(
       });
     } else if (language === "csharp" && char === "'") {
       tokens.push({ kind: "char", text: readCSharpChar(), line: startLine });
-    } else if (char === '"' || char === "'" || (language === "typescript" && char === "`")) {
+    } else if (language === "typescript" && char === "`") {
+      const template = readTemplate();
+      tokens.push({
+        kind: "string",
+        text: template.text,
+        line: startLine,
+        ...(template.holes.length > 0 ? { isInterpolated: true, holes: template.holes } : {}),
+      });
+    } else if (char === '"' || char === "'") {
       tokens.push({ kind: "string", text: readQuoted(char, true), line: startLine });
     } else if (language === "typescript" && char === "/" && isRegexStart(tokens.at(-1))) {
       skipRegex();
@@ -150,6 +163,67 @@ export function tokenize(
     }
   }
   return tokens;
+
+  /**
+   * A TypeScript template literal starting at `index` (on the backtick). Holes may hold strings, braces,
+   * comments and template literals of their own: `` `/a/${encodeURIComponent(`${id}`)}/b` ``.
+   */
+  function readTemplate(): { text: string; holes: string[] } {
+    advance(1);
+    let content = "";
+    const holes: string[] = [];
+    while (index < text.length && text[index] !== "`") {
+      if (text[index] === "\\" && index + 1 < text.length) {
+        content += text[index + 1];
+        advance(2);
+        continue;
+      }
+      if (text[index] === "$" && text[index + 1] === "{") {
+        advance(2);
+        const start = index;
+        skipHole();
+        holes.push(text.slice(start, index));
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: a hole is kept as the literal text `${}`.
+        content += "${}";
+        advance(1);
+        continue;
+      }
+      content += text[index];
+      advance(1);
+    }
+    advance(1);
+    return { text: content, holes };
+  }
+
+  /** Moves `index` to the `}` closing a template hole, or to the end of the text. */
+  function skipHole(): void {
+    let depth = 0;
+    while (index < text.length) {
+      const current = text[index] as string;
+      const following = text[index + 1];
+      if (current === '"' || current === "'") {
+        readQuoted(current, true);
+        continue;
+      }
+      if (current === "`") {
+        readTemplate();
+        continue;
+      }
+      if (current === "/" && following === "/") {
+        while (index < text.length && text[index] !== "\n") advance(1);
+        continue;
+      }
+      if (current === "/" && following === "*") {
+        const end = text.indexOf("*/", index + 2);
+        advance(end === -1 ? text.length - index : end + 2 - index);
+        continue;
+      }
+      if (current === "}" && depth === 0) return;
+      if (current === "{") depth++;
+      if (current === "}") depth--;
+      advance(1);
+    }
+  }
 
   function isRegexStart(previous: Token | undefined): boolean {
     if (previous === undefined) return true;

@@ -1,5 +1,5 @@
 import { type Evidence, FINDING_CLASSES, type Finding, type LayerResult } from "../model/finding.js";
-import { getLayerVerdict } from "../model/gate.js";
+import { getLayerVerdict, type InactiveLayer } from "../model/gate.js";
 import type { RefInfo, Report } from "./report.js";
 
 const CLASSES_BY_SEVERITY = [...FINDING_CLASSES].reverse();
@@ -47,6 +47,11 @@ function countByClass(result: LayerResult): string[] {
   );
 }
 
+function formatRequired(required: string[]): string {
+  if (required.length === 0) return "";
+  return `, required: ${required.map((layer) => `\`${layer.replace(/`/g, "'")}\``).join(", ")}`;
+}
+
 /** `\`aaaa\`` for a plain ref, `github-deployment:prod → 2.2.4 \`aaaa\`` for a resolved one. */
 function formatRefInfo(info: RefInfo): string {
   const commit = `\`${shortCommit(info.commit)}\``;
@@ -54,16 +59,26 @@ function formatRefInfo(info: RefInfo): string {
   return `${escapeMarkdown(info.resolver)} → ${escapeMarkdown(info.ref)} ${commit}`;
 }
 
+function formatInactiveStatus(layer: InactiveLayer): string {
+  return layer.status === "disabled" ? "disabled" : "not configured";
+}
+
 export function renderMarkdown(report: Report): string {
   const lines: string[] = [];
   lines.push(
     `# Backward compatibility: ${escapeMarkdown(report.base.ref)} → ${escapeMarkdown(report.revision.ref)}`,
     "",
-    `Base ${formatRefInfo(report.base)}, revision ${formatRefInfo(report.revision)}, fail on \`${report.failOn}\`${report.allowIncomplete ? ", incomplete layers allowed" : ""}.`,
+    `Base ${formatRefInfo(report.base)}, revision ${formatRefInfo(report.revision)}, fail on \`${report.failOn}\`${formatRequired(report.required)}${report.allowIncomplete ? ", incomplete layers allowed" : ""}.`,
     "",
   );
   lines.push(report.gate.passed ? "**Gate: PASS**" : "**Gate: FAIL**");
   for (const reason of report.gate.reasons) lines.push(`- ${escapeMarkdown(reason)}`);
+  if (report.inactive.length > 0) {
+    const names = report.inactive.map(
+      (layer) => `${escapeMarkdown(layer.layer)} (${formatInactiveStatus(layer)})`,
+    );
+    lines.push("", `Not checked: ${names.join(", ")}`);
+  }
   lines.push(
     "",
     `| Layer | Verdict | ${CLASSES_BY_SEVERITY.join(" | ")} |`,
@@ -74,7 +89,11 @@ export function renderMarkdown(report: Report): string {
       `| ${escapeMarkdown(result.layer)} | ${getLayerVerdict(result)} | ${countByClass(result).join(" | ")} |`,
     );
   }
-  if (report.layers.length === 0) lines.push("| (none) | - | - | - | - | - |");
+  for (const layer of report.inactive) {
+    lines.push(`| ${escapeMarkdown(layer.layer)} | ${formatInactiveStatus(layer)} | - | - | - | - |`);
+  }
+  if (report.layers.length === 0 && report.inactive.length === 0)
+    lines.push("| (none) | - | - | - | - | - |");
 
   const findings = report.layers.flatMap((result) => (result.status === "skipped" ? [] : result.findings));
   for (const findingClass of CLASSES_BY_SEVERITY) {

@@ -43,6 +43,16 @@ describe("loadConfig", () => {
 });
 
 describe("parseConfig", () => {
+  it("lists disabled and unconfigured layers in registry order", () => {
+    const result = parseConfig({ layers: { other: { enabled: false } } }, layers, "c.json");
+    if (!result.ok) throw new Error(result.error);
+    expect(result.value.layers).toEqual([]);
+    expect(result.value.inactive).toEqual([
+      { layer: "stub", status: "not-configured" },
+      { layer: "other", status: "disabled" },
+    ]);
+  });
+
   it("skips a layer with enabled false and strips the flag", () => {
     const result = parseConfig(
       { layers: { stub: { enabled: false }, other: { enabled: true } } },
