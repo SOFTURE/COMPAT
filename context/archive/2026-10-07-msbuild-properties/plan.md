@@ -60,6 +60,11 @@ wrong folder.
 ## Decisions (auto)
 - Complexity → low-medium, two phases.
 - "Chain up the folder tree" read as MSBuild does it: nearest file plus explicit imports (see Rejected).
+- Impl review W1-W3 → fixed after implementation (drift from the phases above, see `reviews/impl-review.md`):
+  property groups inside `<Target>` are ignored; properties expand at definition time from the values defined so far;
+  `'$(Name)' == ''` / `!= ''` conditions are decided, and a property that other conditions give different values is
+  ambiguous, so a version using it stays `dependency-changed` with the values listed. `EvaluatedProperties` gained
+  `ambiguous`.
 
 ## Progress
 
@@ -68,12 +73,12 @@ wrong folder.
 ### Phase 1: Property evaluation and reader
 
 #### Automated
-- [ ] 1.1 Every listed case passes in `msbuild-properties.test.ts`, `readers.test.ts`, `classify.test.ts`
-- [ ] 1.2 Gates green (typecheck, lint, test)
+- [x] 1.1 Every listed case passes in `msbuild-properties.test.ts`, `readers.test.ts`, `classify.test.ts` — b1a0cd6
+- [x] 1.2 Gates green (typecheck, lint, test) — b1a0cd6
 
 ### Phase 2: Layer wiring, end to end, README
 
 #### Automated
-- [ ] 2.1 End-to-end cases pass in `test/e2e/dependencies.test.ts`
-- [ ] 2.2 `npm run build` and `npm run test:pack` pass
-- [ ] 2.3 Gates green (typecheck, lint, test)
+- [x] 2.1 End-to-end cases pass in `test/e2e/dependencies.test.ts` — d6daf0f
+- [x] 2.2 `npm run build` and `npm run test:pack` pass — d6daf0f
+- [x] 2.3 Gates green (typecheck, lint, test) — d6daf0f

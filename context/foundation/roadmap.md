@@ -35,7 +35,7 @@ opens.
 | --- | --- | --- | --- | --- | --- |
 | **CMP-7** | `seed-silent-writes` | seed writes inside dynamic SQL are diffed; `COPY` and unreadable dynamic SQL are reported instead of silent | — | autonomous | new |
 | **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | new |
-| **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | new |
+| **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | done |
 | **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | new |
 | **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | new |
 | **CMP-12** | `release-0-3-0` | README and backlog brought up to date, version `0.3.0` released | CMP-7..CMP-11 | autonomous | new |
@@ -72,7 +72,7 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ### CMP-9: MSBuild properties
 - **Change ID:** `msbuild-properties`
-- **Status:** new
+- **Status:** done
 - **Outcome:** `$(Property)` in a package version resolves through the `Directory.Build.props` chain and explicit
   in-repository `<Import>`s, nearest definition winning.
 - **Why it matters:** today it resolves only from the declaring file, so `Version="$(MassTransitVersion)"` with the
