@@ -1,7 +1,7 @@
 {
   "language": "en",
   "mainBranch": "master",
-  "gates": { "typecheck": null, "lint": null, "test": null },
+  "gates": { "typecheck": "npm run typecheck", "lint": "npm run lint", "test": "npm test" },
   "integration": { "local": null, "remote": null },
   "migrations": null,
   "worktree": { "setup": ["npm ci"], "maxParallel": 4 },

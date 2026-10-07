@@ -16,7 +16,7 @@ older server build (still running, or rolled back to) cannot live with.
 
 ## Context
 Roadmap item CMP-2 (`context/foundation/roadmap.md`). Design input: research §4 layer 3 and §3 (SQL Server is a
-first-class dialect; Squawk covers only Postgres) in `../backward-compat-checker/research.md`.
+first-class dialect; Squawk covers only Postgres) in `../../archive/2026-10-07-backward-compat-checker/research.md`.
 Acceptance fixtures: F4 (only new schema/tables → `safe`) and F5 (insert with explicit IDs 418–496 →
 `needs-action` with the precondition that production `max(Id)` is below the first inserted id).
 

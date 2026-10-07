@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info:
+  title: PETSEO B2C (fixture)
+  version: "1"
+paths:
+  /api/pets/{petId}/medications:
+    post:
+      operationId: addMedication
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMedicationCommand"
+      responses:
+        "200":
+          description: ok
+  /api/shop/items:
+    get:
+      operationId: listShopItems
+      responses:
+        "200":
+          description: ok
+  /api/feature-flags:
+    get:
+      operationId: getFeatureFlags
+      responses:
+        "200":
+          description: ok
+components:
+  schemas:
+    AddMedicationCommand:
+      type: object
+      properties:
+        name:
+          type: string
+        daysOfWeek:
+          type: array
+          items:
+            type: integer

@@ -1,12 +1,12 @@
 ---
 change_id: backward-compat-checker
 title: "An npm CLI tells, for two git refs, whether the new server release is backward compatible with what runs in production"
-status: preparing
+status: archived
 roadmap_item: CMP-1
 branch: null
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -66,3 +66,5 @@ What is known today is in `research.md`: the tool landscape, the stacks of the S
   roadmap v1 (`context/foundation/roadmap.md`). This change delivers its first item, CMP-1: the core command
   (config, git refs, finding model, reports, exit codes) and the `openapi` layer. The other v1 layers are
   CMP-2 to CMP-5, release readiness is CMP-6, and the later layers wait in `context/backlog/later-layers.md`.
+- 2026-10-07: plan, plan review, three phases and the implementation review done (PR #2).
+- Archived 2026-10-07: `softure-compat check` runs end to end with the finding model, git refs, Markdown/JSON reports, exit codes and the `openapi` layer (oasdiff), reproducing research F1 and F2.

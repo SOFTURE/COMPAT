@@ -16,7 +16,7 @@ updated: 2026-10-07
 > - Parallelism: one thread per change, started by the project coordinator; an item starts once its
 >   prerequisites are merged into `master`
 
-Source: `context/changes/backward-compat-checker/research.md` (no PRD; the research and the owner's
+Source: `context/archive/2026-10-07-backward-compat-checker/research.md` (no PRD; the research and the owner's
 requests of 2026-10-07 are the product input). Scope of v1 follows research §6 question 4: `openapi`,
 `sql-migrations`, `seed`, `persisted-enums` and `config`. The layers `client-usage`, `message-contracts` and
 `behaviour` wait in `context/backlog/later-layers.md`.
@@ -25,7 +25,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 
 | ID | Change | Outcome | Depends on | Mode | Status |
 | --- | --- | --- | --- | --- | --- |
-| **CMP-1** | `backward-compat-checker` | `softure-compat check` runs end to end with the finding model, git refs, reports, exit codes and the `openapi` layer | — | autonomous | ready |
+| **CMP-1** | `backward-compat-checker` | `softure-compat check` runs end to end with the finding model, git refs, reports, exit codes and the `openapi` layer | — | autonomous | done |
 | **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | ready |
 | **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | ready |
 | **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | ready |
@@ -43,7 +43,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-1: Core CLI and the OpenAPI layer
 - **Change ID:** `backward-compat-checker`
-- **Status:** ready
+- **Status:** done
 - **Outcome:** `softure-compat check --base <ref> --revision <ref>` reads `compat.config.json`, runs enabled
   layers on both refs, prints Markdown or JSON and exits non-zero at or above `--fail-on`. The `openapi` layer
   wraps oasdiff with an allowlist for reviewed false positives.
@@ -113,3 +113,4 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 ## Owner decisions and checks
 
 ## Done
+- **CMP-1** `backward-compat-checker`: core CLI (config, `RefTree`, finding model, gate, Markdown/JSON reports, exit codes) and the `openapi` layer on oasdiff, with CI; archived in `archive/2026-10-07-backward-compat-checker/`
