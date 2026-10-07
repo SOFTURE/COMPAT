@@ -345,15 +345,35 @@ opened by old app versions, or behaviour of refactored code. Those layers are pl
 
 ## Releasing (maintainers)
 
-1. Bump `version` in `package.json` (and `package-lock.json` with `npm install --package-lock-only`) on `master`.
-2. Push a tag `v<version>` on that commit: `git tag v0.1.0 && git push origin v0.1.0`.
-3. The [Publish workflow](.github/workflows/publish.yml) checks that the tag matches `package.json` and is on
-   `master`, runs every gate with a real oasdiff, and runs `npm publish --provenance --access public`. A version with
-   a prerelease suffix (`0.2.0-rc.1`) goes to the `next` dist-tag.
+Releases are tag-driven, as in `SOFTURE/skills`:
 
-The workflow needs the repository secret `NPM_TOKEN`: an npm token with publish rights on the `@softure-ai` scope.
-Running the workflow by hand (Actions → Publish → Run workflow) is a dry run that publishes nothing. Once the package
-exists on npm, the token can be replaced by npm trusted publishing for this repository and workflow.
+```sh
+npm version patch          # or minor / major: bumps package.json and creates tag vX.Y.Z
+git push --follow-tags
+```
+
+The `v*.*.*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+1. checks that the tag matches `package.json` and points at a commit of `master`, then runs every gate with a real
+   oasdiff, tests the packed CLI and packs the tarball;
+2. publishes `@softure-ai/compat` to **npmjs.com** through trusted publishing (OIDC, provenance, no stored token);
+3. publishes `@softure/compat` to **GitHub Packages** (GitHub requires the scope to match the org);
+4. creates the **GitHub Release** with generated notes and the package tarball attached.
+
+A version with a prerelease suffix (`0.2.0-rc.1`) goes to the `next` dist-tag. A version already on a registry is
+skipped, so re-running a release only fills in what is missing. Running the workflow by hand only validates and packs.
+
+Trusted publishing is configured once on npmjs.com, in the package settings: publisher GitHub Actions, repository
+`SOFTURE/COMPAT`, workflow `release.yml`. npm offers that setting only for a package that exists, so the very first
+version is published once by hand (`npm publish --access public` from a clean checkout of the tag); the tag's
+workflow then skips npm and still publishes to GitHub Packages and creates the GitHub Release.
+
+Ways to install a release:
+
+| Source | Command |
+| --- | --- |
+| npm | `npm i -D @softure-ai/compat` |
+| GitHub Release (no auth) | `npm i -D https://github.com/SOFTURE/COMPAT/releases/download/vX.Y.Z/softure-ai-compat-X.Y.Z.tgz` |
+| GitHub Packages | `npm i -D @softure/compat` with `@softure:registry=https://npm.pkg.github.com` and a token with `read:packages` |
 
 ## License
 

@@ -1,0 +1,174 @@
+name: SOFTURE COMPAT - RELEASE
+
+# Modelled on SOFTURE/skills `release.yml`. Pull requests and master are validated by ci.yml; this workflow runs on
+# release tags. Pushing a tag `vX.Y.Z` (matching package.json, on a commit of master) releases that version:
+#   1. npmjs.com       @softure-ai/compat  (trusted publishing over OIDC, with provenance; no stored token)
+#   2. GitHub Packages @softure/compat     (GitHub Packages requires the scope to equal the org)
+#   3. GitHub Release  vX.Y.Z              (generated notes + the package tarball as an asset)
+# Cut a release with: npm version patch|minor|major && git push --follow-tags
+# Running it by hand (workflow_dispatch) only validates and packs; nothing is published.
+#
+# Keep this file name: the npm trusted publisher is bound to `release.yml`.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 🏷️ Read version (and match it against the tag and master)
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION}"
+              exit 1
+            fi
+            git fetch --no-tags origin master
+            if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/master; then
+              echo "::error::Tag ${GITHUB_REF_NAME} points at a commit that is not on master"
+              exit 1
+            fi
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Install oasdiff
+        run: go install github.com/oasdiff/oasdiff@v1.33.0
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: ✅ Test (real oasdiff required)
+        run: npm test
+        env:
+          COMPAT_REQUIRE_OASDIFF: "1"
+      - run: npm run build
+      - name: 🧪 Test the packed CLI
+        run: npm run test:pack
+      - name: 📦 Pack
+        run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: "*.tgz"
+
+  publish-npm:
+    needs: validate
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: ⬆️ npm with trusted publishing (OIDC) support
+        run: npm install -g npm@latest
+      - run: npm ci
+      - name: 🚀 Publish to npmjs.com
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          # A prerelease (1.2.0-rc.1) goes to the `next` dist-tag, so `latest` stays on a stable version.
+          DIST_TAG="latest"
+          case "${VERSION}" in *-*) DIST_TAG="next" ;; esac
+          if npm view "@softure-ai/compat@${VERSION}" version >/dev/null 2>&1; then
+            echo "@softure-ai/compat@${VERSION} is already on npm, skipping."
+          else
+            npm publish --provenance --access public --tag "${DIST_TAG}"
+          fi
+
+  publish-github:
+    needs: validate
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@softure"
+      - run: npm ci
+      - name: 🔁 Rename to the org scope required by GitHub Packages
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.name = "@softure/compat";
+            pkg.publishConfig = { registry: "https://npm.pkg.github.com" };
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+      - name: 🚀 Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          DIST_TAG="latest"
+          case "${VERSION}" in *-*) DIST_TAG="next" ;; esac
+          if npm view "@softure/compat@${VERSION}" version >/dev/null 2>&1; then
+            echo "@softure/compat@${VERSION} is already on GitHub Packages, skipping."
+          else
+            npm publish --tag "${DIST_TAG}"
+          fi
+
+  github-release:
+    needs: [validate, publish-npm, publish-github]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+      - name: 📝 Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          NOTES=$(printf '%s\n' \
+            "Install from npm: \`npm i -D @softure-ai/compat@${VERSION}\`" \
+            "" \
+            "Install from this release (no registry, no auth): \`npm i -D https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/softure-ai-compat-${VERSION}.tgz\`" \
+            "" \
+            "GitHub Packages: \`@softure/compat@${VERSION}\` (requires a token with read:packages)")
+          PRERELEASE=""
+          case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" softure-ai-compat-*.tgz --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" softure-ai-compat-*.tgz \
+              --verify-tag --generate-notes --title "${GITHUB_REF_NAME}" --notes "${NOTES}" ${PRERELEASE}
+          fi
