@@ -47,6 +47,14 @@ describe("applyRevisions", () => {
       { layer: "openapi", index: 0, finding: { ...finding, accepted: { reason: "hidden" } } },
       "revision of openapi finding #0 changes accepted",
     ],
+    [
+      {
+        layer: "openapi",
+        index: 0,
+        finding: { ...finding, exposure: [{ api: "b2c", fields: ["Dto.type"] }] },
+      },
+      "revision of openapi finding #0 changes exposure",
+    ],
   ])("rejects %j", (revision, error) => {
     expect(applyRevisions(results, [revision])).toEqual({ ok: false, error });
   });

@@ -11,10 +11,11 @@ import { sqlMigrationsLayer } from "./sql-migrations/sql-migrations-layer.js";
 /** Every layer the CLI knows, in the order they run and appear in reports. Add one line per layer. */
 export const LAYERS: Layer[] = [
   openapiLayer,
-  clientUsageLayer,
   sqlMigrationsLayer,
   seedLayer,
   persistedEnumsLayer,
+  // Refines openapi and persisted-enums findings, so it runs after both.
+  clientUsageLayer,
   configLayer,
   dependenciesLayer,
   messageContractsLayer,

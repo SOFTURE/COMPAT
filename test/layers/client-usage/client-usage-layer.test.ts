@@ -15,6 +15,10 @@ beforeAll(() => {
   repo = createRepo([
     { files: { "app/client.ts": CLIENT, "app/screens/pets.ts": "deletePet(id);\n" }, tag: "app-1" },
     { files: { "app/client.ts": "export const nothing = 1;\n" }, tag: "app-2" },
+    {
+      files: { "app/client.ts": CLIENT, "app/screens/inbox.ts": "switch (item.type) {}\n" },
+      tag: "app-3",
+    },
   ]);
 });
 afterAll(() => repo.cleanup());
@@ -67,10 +71,11 @@ describe("client-usage layer", () => {
     ]);
   });
 
-  it("fails without an openapi result", async () => {
+  it("fails without an openapi or persisted-enums result", async () => {
     expect(await run({}, [])).toMatchObject({
       status: "failed",
-      error: "client-usage refines openapi findings; enable layers.openapi",
+      error:
+        "client-usage refines openapi and exposed persisted-enums findings; enable layers.openapi or layers.persisted-enums",
     });
   });
 
@@ -107,6 +112,102 @@ describe("client-usage layer", () => {
     expect(output.status === "ran" && output.notes).toContain(
       'client "mobile": the openapi layer has no finding for API "admin"',
     );
+  });
+});
+
+describe("client-usage layer on exposed enums (issue #15)", () => {
+  const exposedFinding = createFinding("needs-action", {
+    layer: "persisted-enums",
+    scope: "NotificationType",
+    id: "enum-member-exposed-added",
+    subject: "NotificationType.TermsChange",
+    exposure: [{ api: "b2c", fields: ["NotificationDto.type"] }],
+  });
+  const enums: LayerResult = {
+    layer: "persisted-enums",
+    status: "ran",
+    findings: [createFinding("rollback-risk", { layer: "persisted-enums" }), exposedFinding],
+    notes: [],
+  };
+  const sources = ["app/screens/**/*.ts"];
+
+  it("drops the finding to safe when no live ref branches on the field, without openapi", async () => {
+    const output = await run({ sources }, [enums]);
+    expect(output.status).toBe("ran");
+    expect(output.status === "ran" && output.notes).toEqual([
+      'client "mobile" (API "b2c"): mobile@app-1; 1 operation(s) read',
+      "reclassified 1 exposed enum finding(s) to safe; 0 keep their class with client evidence",
+    ]);
+    expect(output.revisions).toEqual([
+      {
+        layer: "persisted-enums",
+        index: 1,
+        finding: expect.objectContaining({
+          class: "safe",
+          reclassified: {
+            from: "needs-action",
+            by: "client-usage",
+            reason: "no live client ref branches on NotificationDto.type: mobile@app-1",
+          },
+        }),
+      },
+    ]);
+  });
+
+  it("keeps the class and cites the switch of a ref that branches", async () => {
+    const output = await run({ sources, refs: ["app-1", "app-3"] }, [enums]);
+    const revised = output.revisions?.[0]?.finding;
+    expect(revised?.class).toBe("needs-action");
+    expect(revised?.message).toBe(
+      "a needs-action change; mobile@app-3 branch on NotificationDto.type (client-usage)",
+    );
+    expect(revised?.evidence.at(-1)).toEqual({
+      side: "client",
+      ref: "app-3",
+      commit: expect.any(String),
+      path: "app/screens/inbox.ts",
+      line: 1,
+    });
+  });
+
+  it("keeps the class when the client has no sources", async () => {
+    const output = await run({}, [enums]);
+    expect(output.status === "ran" && output.notes).toContain(
+      'client "mobile": no "sources", so whether it branches on exposed enums cannot be checked',
+    );
+    const revised = output.revisions?.[0]?.finding;
+    expect(revised?.class).toBe("needs-action");
+    expect(revised?.message).toBe(
+      'a needs-action change; mobile@app-1 cannot be checked without "sources" (client-usage)',
+    );
+  });
+
+  it("leaves a finding of an API without clients alone", async () => {
+    const output = await run({ sources, api: "admin" }, [enums]);
+    expect(output.revisions).toEqual([]);
+  });
+
+  it("refines openapi and enum findings together", async () => {
+    const output = await run({ sources }, [openapi, enums]);
+    expect(output.revisions?.map((revision) => [revision.layer, revision.finding.class])).toEqual([
+      ["openapi", "breaking"],
+      ["persisted-enums", "safe"],
+    ]);
+  });
+
+  it("still refines enum findings when the openapi layer was skipped", async () => {
+    const output = await run({ sources }, [{ layer: "openapi", status: "skipped", reason: "off" }, enums]);
+    expect(output.status === "ran" && output.notes).toContain("the openapi layer was skipped (off)");
+    expect(output.revisions).toHaveLength(1);
+  });
+
+  it("is skipped when there is nothing to refine", async () => {
+    const plain: LayerResult = { ...enums, findings: [createFinding("rollback-risk")] };
+    expect(await run({ sources }, [plain])).toEqual({
+      layer: "client-usage",
+      status: "skipped",
+      reason: "neither openapi findings nor exposed persisted-enums findings to refine",
+    });
   });
 });
 

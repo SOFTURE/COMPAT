@@ -296,8 +296,9 @@ source starts its own app. `init` proposes a disabled `serve` source for every `
 ### client-usage
 
 oasdiff judges the contract, not what deployed clients do. This layer reads what the live builds of each client
-call and send, and re-classifies the `openapi` findings of that client's API. It runs right after `openapi` and needs
-it enabled; it adds no findings of its own.
+call and send, and re-classifies the `openapi` findings of that client's API and the
+[`enum-member-exposed-added`](#exposed-enums) findings of `persisted-enums`. It runs after both and needs at least one
+of them enabled; it adds no findings of its own.
 
 ```json
 {
@@ -339,6 +340,20 @@ The TypeScript reader understands NSwag, swaggie, orval, axios or fetch style cl
 ref missing from the clone (fetch tags, `fetch-depth: 0`), a generated client that is absent or yields no operation,
 or `sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
 called with every method.
+
+For an `enum-member-exposed-added` finding of an enum exposed through an API with clients, the layer scans the
+`sources` of every live ref for code that branches on the exposed fields:
+
+- No ref branches → `safe`, reason `no live client ref branches on NotificationDto.type: mobile@2.2.4`.
+- A ref branches → the class stays, the message names the refs, and the branch sites are added as evidence.
+- A client without `sources`, or an exposing API with no client, cannot prove the absence of a branch: the class
+  stays and the message says why.
+
+A branch is a `switch` over the property (the last segment of the field, compared case-insensitively) or the enum,
+an equality (`===`, `!==`, `==`, `!=`) with an operand ending in the property or naming the enum, `case Enum.X`,
+`Record<Enum, ...>` or `Record<Dto["property"], ...>`, `[key in Enum]`, or an index access `map[x.property]`. A
+line that looks like a branch and holds the property or enum name where the scanner read no code (inside a template
+literal, after a literal it lost) counts as a branch too, so a scanner miss never reads as "does not branch".
 
 ### sql-migrations
 
@@ -432,7 +447,7 @@ Enum members stored in the database must stay readable by both builds. The layer
 | Key | Meaning |
 | --- | --- |
 | `sources` | glob or globs of the files that declare enums |
-| `enums[]` `named` | an enum by `name`; `file` pins the declaration when several files declare that name |
+| `enums[]` `named` | an enum by `name`; `file` pins the declaration when several files declare that name; `exposed` lists where clients receive it (below) |
 | `enums[]` `discover` | every enum whose name the regex `pattern` captures in `files` (named group `name`, else the first group) |
 | `storage` | `string` (stored by name or string value) or `int` (stored by number) |
 | `accept[]` | `{ id, enum, member?, reason }` |
@@ -446,6 +461,26 @@ Enum members stored in the database must stay readable by both builds. The layer
 | `enum-member-unresolved` | `needs-action`: the stored number cannot be computed without a compiler |
 | `enum-added` | `safe` |
 | `enum-removed` | `needs-action` |
+| `enum-member-exposed-added` | `needs-action`, only for an enum with `exposed` (below) |
+
+#### Exposed enums
+
+Many APIs send an enum to clients as a plain `string` DTO field, so the spec has no `enum` list and `openapi` cannot
+see a new value. A named entry declares those fields:
+
+```json
+{
+  "kind": "named",
+  "name": "NotificationType",
+  "storage": "string",
+  "exposed": [{ "api": "b2c", "fields": ["NotificationDto.type"] }]
+}
+```
+
+`api` is the API name used by `openapi` and `client-usage`; each field is `Type.property`. Every added member then
+also gets `enum-member-exposed-added` (`needs-action`: old clients receive an unknown value in that field), with the
+same subject and evidence as `enum-member-added`. It can be accepted like any other finding, and
+[`client-usage`](#client-usage) re-classifies it by whether live client builds branch on the field.
 
 ### config
 

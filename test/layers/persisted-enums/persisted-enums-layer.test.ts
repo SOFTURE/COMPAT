@@ -124,6 +124,69 @@ describe("persisted-enums layer", () => {
     ]);
   });
 
+  describe("exposed enums (issue #15)", () => {
+    const exposed = [{ api: "b2c", fields: ["NotificationDto.type"] }];
+
+    it("adds enum-member-exposed-added next to enum-member-added, with the same evidence", async () => {
+      const result = await run({
+        enums: [discover, { kind: "named", name: "Color", storage: "string", exposed }],
+      });
+      expect(brief(result)).toEqual([
+        ["enum-member-added", "rollback-risk", "Color.Blue"],
+        ["enum-member-exposed-added", "needs-action", "Color.Blue"],
+        ["enum-added", "safe", "Shape"],
+      ]);
+      const findings = "findings" in result ? result.findings : [];
+      expect(findings[1]).toEqual({
+        layer: "persisted-enums",
+        scope: "Color",
+        id: "enum-member-exposed-added",
+        subject: "Color.Blue",
+        class: "needs-action",
+        message:
+          'old clients receive the unknown value "Blue" in NotificationDto.type (API "b2c"); check that they tolerate it',
+        evidence: findings[0]?.evidence,
+        exposure: exposed,
+      });
+    });
+
+    it("names the string value of a TypeScript member and every exposing API", async () => {
+      const result = await run({
+        enums: [
+          {
+            kind: "named",
+            name: "Status",
+            storage: "string",
+            exposed: [...exposed, { api: "admin", fields: ["StatusDto.status", "Row.state"] }],
+          },
+        ],
+      });
+      const finding = "findings" in result ? result.findings[1] : undefined;
+      expect(finding?.message).toBe(
+        'old clients receive the unknown value "live" in NotificationDto.type (API "b2c"); StatusDto.status, Row.state (API "admin"); check that they tolerate it',
+      );
+    });
+
+    it("reports nothing extra for removed or renumbered members", async () => {
+      const result = await run({ enums: [{ kind: "named", name: "Size", storage: "int", exposed }] });
+      expect(brief(result)).toEqual([["enum-member-renumbered", "breaking", "Size.Large"]]);
+    });
+
+    it("accepts the exposed finding on its own", async () => {
+      const result = await run({
+        enums: [{ kind: "named", name: "Status", storage: "string", exposed }],
+        accept: [
+          { id: "enum-member-exposed-added", enum: "Status", member: "Live", reason: "clients ignore it" },
+        ],
+      });
+      const findings = "findings" in result ? result.findings : [];
+      expect(findings.map((finding) => [finding.id, finding.accepted?.reason])).toEqual([
+        ["enum-member-added", undefined],
+        ["enum-member-exposed-added", "clients ignore it"],
+      ]);
+    });
+  });
+
   it("compares TypeScript string enums by value", async () => {
     const result = await run({ enums: [{ kind: "named", name: "Status", storage: "string" }] });
     expect(brief(result)).toEqual([["enum-member-added", "rollback-risk", "Status.Live"]]);
