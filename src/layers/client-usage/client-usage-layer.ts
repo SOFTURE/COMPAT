@@ -98,7 +98,7 @@ function getBranchTargets(exposed: { finding: Finding }[], api: string): BranchT
   for (const { finding } of exposed) {
     for (const exposure of finding.exposure ?? []) {
       if (exposure.api !== api) continue;
-      const target = toBranchTarget(finding.scope, exposure);
+      const target = toBranchTarget(finding.scope, exposure, finding.enumValues);
       targets.set(getBranchKey(target), target);
     }
   }

@@ -26,6 +26,25 @@ beforeAll(() => {
       },
       tag: "app-4",
     },
+    {
+      files: {
+        "app/client.ts": CLIENT,
+        "app/screens/inbox.ts": null,
+        "app/screens/picker.ts": [
+          "const onChange = (event: PickerEvent) => { if (event.type === 'set') save(event); };",
+          "const isJson = (key: string) => key.toLowerCase() === 'content-type';",
+          "",
+        ].join("\n"),
+      },
+      tag: "app-5",
+    },
+    {
+      files: {
+        "app/screens/picker.ts": null,
+        "app/screens/inbox.ts": "switch (n.type) {\n  case 'Unknown': break;\n}\n",
+      },
+      tag: "app-6",
+    },
   ]);
 });
 afterAll(() => repo.cleanup());
@@ -186,6 +205,7 @@ describe("client-usage layer on exposed enums (issue #15)", () => {
     id: "enum-member-exposed-added",
     subject: "NotificationType.TermsChange",
     exposure: [{ api: "b2c", fields: ["NotificationDto.type"] }],
+    enumValues: ["Reminder", "TermsChange", "Unknown"],
   });
   const enums: LayerResult = {
     layer: "persisted-enums",
@@ -232,6 +252,24 @@ describe("client-usage layer on exposed enums (issue #15)", () => {
       path: "app/screens/inbox.ts",
       line: 1,
     });
+  });
+
+  it("drops to safe when the client only compares other properties named type to strings (issue #69)", async () => {
+    const output = await run({ sources, refs: ["app-5"] }, [enums]);
+    expect(output.revisions?.[0]?.finding).toMatchObject({
+      class: "safe",
+      reclassified: { reason: "no live client ref branches on NotificationDto.type: mobile@app-5" },
+    });
+  });
+
+  it("still counts a case label that names an enum member (issue #69)", async () => {
+    const output = await run({ sources, refs: ["app-5", "app-6"] }, [enums]);
+    const revised = output.revisions?.[0]?.finding;
+    expect(revised?.class).toBe("needs-action");
+    expect(revised?.message).toBe(
+      "a needs-action change; mobile@app-6 branch on NotificationDto.type (client-usage)",
+    );
+    expect(revised?.evidence.at(-1)).toMatchObject({ ref: "app-6", path: "app/screens/inbox.ts", line: 1 });
   });
 
   it("keeps the class when the client has no sources", async () => {

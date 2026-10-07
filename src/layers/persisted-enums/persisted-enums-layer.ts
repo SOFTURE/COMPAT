@@ -451,6 +451,7 @@ function checkTarget({
     base: { tree: sides.base, path: atBase.value.path },
     revision: { tree: sides.revision, path: atRevision.value.path },
   };
+  const enumValues = getEnumValues([atBase.value.declaration, atRevision.value.declaration]);
   return ok(
     changes.flatMap((change) => {
       const finding = toFinding(change, target, files);
@@ -466,9 +467,19 @@ function checkTarget({
       const exposed = toExposedFinding(change, target, classified.finding);
       return exposed === undefined
         ? [classified]
-        : [classified, { finding: exposed, members: change.members }];
+        : [classified, { finding: { ...exposed, enumValues }, members: change.members }];
     }),
   );
+}
+
+/** The distinct names and string values of the members of the given declarations, sorted. */
+function getEnumValues(declarations: EnumDeclaration[]): string[] {
+  const values = declarations.flatMap((declaration) =>
+    declaration.members.flatMap((member) =>
+      member.stringValue === null ? [member.name] : [member.name, member.stringValue],
+    ),
+  );
+  return [...new Set(values)].sort();
 }
 
 /** The client-side finding for a member added to an enum that DTOs send as a plain string. */
