@@ -248,6 +248,19 @@ describe("parseEnums with literals that hide comment or string openers (impl rev
     ]);
   });
 
+  it("reads C# interpolated strings whose holes hold strings, chars and braces", () => {
+    const text = [
+      'var a = $"{(ok ? "}" : "x")} {{ /* text */";',
+      'var c = $"{x + "/*"}";',
+      'var b = $@"{\'"\'} "" {new { X = 1 }.X}";',
+      "enum After { A, B }",
+    ].join("\n");
+    expect(summary(parse(text, "csharp")[0])).toEqual([
+      ["A", "0"],
+      ["B", "1"],
+    ]);
+  });
+
   it("skips TypeScript regular expression literals that contain comment openers or quotes", () => {
     const text = [
       'const trimmed = p.replace(/\\/*$/, "");',

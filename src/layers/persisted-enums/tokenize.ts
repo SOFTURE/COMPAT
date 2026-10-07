@@ -143,8 +143,10 @@ export function tokenize(text: string, language: SourceLanguage): Token[] {
   /** Regular, verbatim (`@`), interpolated (`$`) and raw (`"""`, `$$"""`) C# strings. */
   function readCSharpString(): string {
     let isVerbatim = false;
+    let isInterpolated = false;
     while (text[index] === "@" || text[index] === "$") {
       if (text[index] === "@") isVerbatim = true;
+      else isInterpolated = true;
       advance(1);
     }
     let quotes = 0;
@@ -157,7 +159,59 @@ export function tokenize(text: string, language: SourceLanguage): Token[] {
       advance(end === -1 ? text.length - index : end + quotes - index);
       return content;
     }
-    return readQuoted('"', !isVerbatim);
+    return isInterpolated ? readInterpolated(isVerbatim) : readQuoted('"', !isVerbatim);
+  }
+
+  /**
+   * An interpolated string whose holes may hold strings, chars and braces of their own:
+   * `$"{(a ? "x" : "}")}"`. `{{` and `}}` are literal braces outside holes.
+   */
+  function readInterpolated(isVerbatim: boolean): string {
+    advance(1);
+    const start = index;
+    let depth = 0;
+    while (index < text.length) {
+      const current = text[index] as string;
+      const following = text[index + 1];
+      if (depth > 0) {
+        if (
+          current === '"' ||
+          ((current === "@" || current === "$") && /^[$@]*"/.test(text.slice(index, index + 4)))
+        ) {
+          readCSharpString();
+          continue;
+        }
+        if (current === "'") {
+          readCSharpChar();
+          continue;
+        }
+        if (current === "{") depth++;
+        if (current === "}") depth--;
+        advance(1);
+        continue;
+      }
+      if (current === '"') {
+        if (isVerbatim && following === '"') {
+          advance(2);
+          continue;
+        }
+        break;
+      }
+      if (!isVerbatim && current === "\\") {
+        advance(2);
+        continue;
+      }
+      if (!isVerbatim && current === "\n") break;
+      if ((current === "{" || current === "}") && following === current) {
+        advance(2);
+        continue;
+      }
+      if (current === "{") depth = 1;
+      advance(1);
+    }
+    const content = text.slice(start, index);
+    if (text[index] === '"') advance(1);
+    return content;
   }
 
   function readCSharpChar(): string {
