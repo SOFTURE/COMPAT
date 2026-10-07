@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CONFIG_FINDING_IDS } from "../src/layers/config/classify.js";
 import { DEPENDENCY_FINDING_IDS } from "../src/layers/dependencies/config.js";
+import { MESSAGE_CONTRACT_FINDING_IDS } from "../src/layers/message-contracts/config.js";
 import { ENUM_CHANGE_IDS } from "../src/layers/persisted-enums/config.js";
 import { LAYERS } from "../src/layers/registry.js";
 import { SEED_RULE_CLASSES } from "../src/layers/seed/classify.js";
@@ -49,6 +50,11 @@ describe("README reference", () => {
   it("lists every persisted-enums and config finding id", () => {
     for (const id of ENUM_CHANGE_IDS) expect(getSection("persisted-enums"), id).toContain(`| \`${id}\` |`);
     for (const id of CONFIG_FINDING_IDS) expect(getSection("config"), id).toContain(`| \`${id}\` |`);
+  });
+
+  it("lists every message-contracts finding id", () => {
+    for (const id of MESSAGE_CONTRACT_FINDING_IDS)
+      expect(getSection("message-contracts"), id).toContain(`\`${id}\``);
   });
 
   it("lists every dependencies finding id", () => {

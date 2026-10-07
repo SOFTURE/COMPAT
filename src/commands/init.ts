@@ -38,6 +38,10 @@ const ENUM_DISCOVERY = {
   storage: "string",
 };
 
+const CONTRACT_GLOBS = ["**/*Contract*/**/*.cs", "**/*Messages/**/*.cs"];
+const CONTRACT_FOLDER = /Contract|Messages$/;
+const TEST_FOLDER = /(?:^|\.)Tests?$/i;
+
 const isIgnored = (path: string) => path.split("/").some((segment) => IGNORED_SEGMENTS.has(segment));
 
 /** Repository files matching the globs, without dependency and build output folders. */
@@ -251,6 +255,37 @@ async function detectDependencies(tree: RefTree): Promise<Result<StarterLayer>> 
   return ok({ name: "dependencies", config: { sources }, summary: found.join(", "), enabled: true });
 }
 
+/** The outermost folder of each C# file under a `*Contract*` or `*Messages` folder. */
+async function detectMessageContracts(tree: RefTree): Promise<Result<StarterLayer>> {
+  const files = await listSourceFiles(tree, CONTRACT_GLOBS);
+  if (!files.ok) return files;
+  const folders = new Set<string>();
+  for (const path of files.value) {
+    const segments = path.split("/");
+    const position = segments.findIndex(
+      (segment, index) => index < segments.length - 1 && CONTRACT_FOLDER.test(segment),
+    );
+    if (position !== -1 && !segments.some((segment) => TEST_FOLDER.test(segment)))
+      folders.add(segments.slice(0, position + 1).join("/"));
+  }
+  const globs = [...folders].sort().map((folder) => `${folder}/**/*.cs`);
+  if (globs.length === 0) {
+    return ok(
+      disabled(
+        "message-contracts",
+        { sources: [{ name: "contracts", language: "csharp", files: "src/**/*.Contracts/**/*.cs" }] },
+        "no C# files under a *Contract* or *Messages folder; point a source at your message contracts",
+      ),
+    );
+  }
+  return ok({
+    name: "message-contracts",
+    config: { sources: [{ name: "contracts", language: "csharp", files: globs }] },
+    summary: [...folders].sort().join(", "),
+    enabled: true,
+  });
+}
+
 /** Builds the starter config for the committed files of `tree`, one entry per registered layer. */
 export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterLayer[]>> {
   const sqlFiles = await readSqlFiles(tree);
@@ -265,6 +300,8 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
   if (!config.ok) return config;
   const dependencies = await detectDependencies(tree);
   if (!dependencies.ok) return dependencies;
+  const messageContracts = await detectMessageContracts(tree);
+  if (!messageContracts.ok) return messageContracts;
   const detected = [
     openapi.value,
     detectSqlMigrations(sqlFiles.value, drizzleFolders.value),
@@ -272,6 +309,7 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
     persistedEnums.value,
     config.value,
     dependencies.value,
+    messageContracts.value,
   ];
   // Registry order, so the file reads like the report; a layer without a detector would be a bug here.
   const ordered: StarterLayer[] = [];
