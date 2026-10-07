@@ -1,4 +1,5 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Compose interpolation syntax is the test input
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -307,5 +308,28 @@ describe("config layer key normalization (issue #18)", () => {
       scope: "compose, dotnet-required",
       accepted: { reason: "in the vault" },
     });
+  });
+
+  it("runs the presence command in the repository only when a finding needs a value in production", async () => {
+    const marker = join(tempRoot, "presence-ran");
+    const optionalOnly = await run({
+      sources: [{ kind: "compose", files: ["deploy/compose.prod.yaml"] }],
+      presence: { run: `touch "${marker}"` },
+    });
+    expect(summary(optionalOnly)).toEqual(["PROD_ONLY config-key-added-optional compose"]);
+    expect(existsSync(marker)).toBe(false);
+    const required = await run({
+      sources: [{ kind: "compose" }],
+      presence: { run: `pwd > "${marker}"; echo new` },
+    });
+    expect(readFileSync(marker, "utf8").trim()).toBe(realpathSync(repo.dir));
+    expect(required.status === "ran" && required.findings.map((f) => `${f.subject} ${f.class}`)).toEqual([
+      "NEW safe",
+      "OLD safe",
+      "PROD_ONLY safe",
+    ]);
+    expect(required.status === "ran" && required.notes).toContain(
+      "presence command listed 1 key(s) in the target environment",
+    );
   });
 });

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CONFIG_FINDING_IDS } from "./classify.js";
 import { COMMENT_STYLES } from "./comments.js";
 import { KEY_MATCHING_MODES } from "./keys.js";
+import { presenceSchema } from "./presence.js";
 
 export const DEFAULT_COMPOSE_FILES = ["**/{docker-compose,compose}{,.*}.{yml,yaml}"];
 
@@ -152,6 +153,8 @@ export const configLayerConfigSchema = z.strictObject({
       (sources) => new Set(sources.map((source) => source.name)).size === sources.length,
       "source names must be unique; name sources of the same kind with `name`",
     ),
+  /** Lists the key names of the target environment, never values; resolves keys that need a value there. */
+  presence: presenceSchema.optional(),
   accept: z.array(configAcceptEntrySchema).optional(),
 });
 
