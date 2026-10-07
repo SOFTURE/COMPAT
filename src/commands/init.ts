@@ -291,6 +291,26 @@ async function detectDependencies(tree: RefTree): Promise<Result<StarterLayer>> 
   return ok({ name: "dependencies", config: { sources }, summary: found.join(", "), enabled: true });
 }
 
+/** Always disabled: which client builds are live is not in the repository. */
+function detectClientUsage(openapi: StarterLayer): StarterLayer {
+  const apis = (openapi.config as { apis?: { name: string }[] }).apis;
+  const example = {
+    clients: [
+      {
+        name: "mobile",
+        api: apis?.[0]?.name ?? "api",
+        refs: { tags: "mobile-*" },
+        generatedClient: { kind: "typescript", path: "app/api/client.ts" },
+      },
+    ],
+  };
+  return disabled(
+    "client-usage",
+    example,
+    "list the live client refs and their generated TypeScript client to re-classify openapi findings by what they call",
+  );
+}
+
 /** The outermost folder of each C# file under a `*Contract*` or `*Messages` folder. */
 async function detectMessageContracts(tree: RefTree): Promise<Result<StarterLayer>> {
   const files = await listSourceFiles(tree, CONTRACT_GLOBS);
@@ -340,6 +360,7 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
   if (!messageContracts.ok) return messageContracts;
   const detected = [
     openapi.value,
+    detectClientUsage(openapi.value),
     detectSqlMigrations(sqlFiles.value, drizzleFolders.value),
     detectSeed(sqlFiles.value, drizzleFolders.value),
     persistedEnums.value,

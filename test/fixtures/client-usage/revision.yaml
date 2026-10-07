@@ -1,0 +1,27 @@
+openapi: 3.0.3
+info:
+  title: Pets (client-usage fixture)
+  version: "2"
+paths:
+  /api/pets:
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPet"
+      responses:
+        "200":
+          description: ok
+components:
+  schemas:
+    NewPet:
+      type: object
+      required: [name, nickname]
+      properties:
+        name:
+          type: string
+        nickname:
+          type: string

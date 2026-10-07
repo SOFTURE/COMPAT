@@ -1,6 +1,6 @@
 # Later layers and ideas
 
-- [ ] 2026-10-07 backward-compat-checker: `client-usage` layer, limit `breaking` OpenAPI findings to operations and fields that live client refs actually call (turns F2 into `safe` with evidence) (warning) context/archive/2026-10-07-backward-compat-checker/research.md
+- [x] 2026-10-07 backward-compat-checker: `client-usage` layer, limit `breaking` OpenAPI findings to operations and fields that live client refs actually call (turns F2 into `safe` with evidence) (warning) context/archive/2026-10-07-backward-compat-checker/research.md Done 2026-10-07 (issue #14, change client-usage-layer).
 - [x] 2026-10-07 backward-compat-checker: `message-contracts` layer, run Microsoft.DotNet.ApiCompat on configured contract assemblies and list new queues (F8, F9) (warning) context/archive/2026-10-07-backward-compat-checker/research.md Done 2026-10-07 as a source-level C# parser (issue #16, change message-contracts-layer).
 - [ ] 2026-10-07 message-contracts-layer: optional precise mode that runs Microsoft.DotNet.ApiCompat on built contract assemblies, and base types outside the sources (suggestion) context/archive/2026-10-07-message-contracts-layer/plan.md
 - [ ] 2026-10-07 backward-compat-checker: `behaviour` layer, run the base ref's black-box tests against the revision's stack through a configured command (F12) (suggestion) context/archive/2026-10-07-backward-compat-checker/research.md

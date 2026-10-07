@@ -4,8 +4,11 @@ export type FindingClass = (typeof FINDING_CLASSES)[number];
 
 export type Side = "base" | "revision";
 
+/** `client` marks evidence read from a live client ref, not from the base or the revision. */
+export type EvidenceSide = Side | "client";
+
 export type Evidence = {
-  side: Side;
+  side: EvidenceSide;
   ref: string;
   commit: string;
   path: string;
@@ -24,6 +27,8 @@ export type Finding = {
   message: string;
   evidence: Evidence[];
   accepted?: { reason: string };
+  /** Set when a later layer changed `class`, for example `client-usage` on an `openapi` finding. */
+  reclassified?: { from: FindingClass; by: string; reason: string };
 };
 
 export type LayerResult =
