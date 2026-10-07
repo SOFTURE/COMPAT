@@ -86,11 +86,11 @@ describe("client-usage layer", () => {
   });
 
   it("reads the refs a resolver chose and names them in a note", async () => {
-    const output = await run({ refs: ["latest-tag:app-*"] });
+    const output = await run({ refs: ["latest-tag:app-[1-3]"] });
     expect(output.status === "failed" ? output.error : output.status).toBe("ran");
     expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
       'client "mobile" (API "b2c"): mobile@app-3; 1 operation(s) read',
-      'client "mobile": latest-tag:app-* → app-3',
+      'client "mobile": latest-tag:app-[1-3] → app-3',
     ]);
   });
 
