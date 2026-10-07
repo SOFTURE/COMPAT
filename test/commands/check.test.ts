@@ -59,6 +59,29 @@ describe("runCheck", () => {
     expect(run.stderr()).toContain("no layer is enabled");
   });
 
+  it("reports a disabled layer and fails only when --require names it", async () => {
+    const layers = [createStubLayer(), createStubLayer("openapi")];
+    const config = JSON.stringify({ layers: { stub: { level: "safe" }, openapi: { enabled: false } } });
+    writeRepoFile(repo, "disabled-openapi.json", config);
+
+    const lenient = createIo(repo.dir, layers);
+    expect(await runCheck(options({ configPath: "disabled-openapi.json" }), lenient.io)).toBe(0);
+    expect(lenient.stdout()).toContain("**Gate: PASS**\n\nNot checked: openapi (disabled)");
+    expect(lenient.stdout()).toContain("| openapi | disabled | - | - | - | - |");
+
+    const strict = createIo(repo.dir, layers);
+    expect(
+      await runCheck(options({ configPath: "disabled-openapi.json", required: ["openapi"] }), strict.io),
+    ).toBe(1);
+    expect(strict.stdout()).toContain("- openapi: layer disabled, but --require names it");
+  });
+
+  it("returns 2 when --require names an unknown layer", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ required: ["stub", "openapy"] }), run.io)).toBe(2);
+    expect(run.stderr()).toContain("--require names unknown layer(s) openapy; known layers: stub");
+  });
+
   it("returns 2 when the config is missing", async () => {
     const run = createIo(repo.dir, [createStubLayer()]);
     expect(await runCheck(options({ configPath: "nope.json" }), run.io)).toBe(2);

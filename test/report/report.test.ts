@@ -1,21 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { LayerResult } from "../../src/model/finding.js";
-import { evaluateGate } from "../../src/model/gate.js";
+import { evaluateGate, type InactiveLayer } from "../../src/model/gate.js";
 import { renderJson } from "../../src/report/json.js";
 import { escapeMarkdown, renderMarkdown } from "../../src/report/markdown.js";
 import type { Report } from "../../src/report/report.js";
 import { createFinding } from "../helpers/stub-layer.js";
 
-function buildReport(layers: LayerResult[]): Report {
-  const options = { failOn: "breaking" as const, allowIncomplete: false };
+function buildReport(layers: LayerResult[], inactive: InactiveLayer[] = [], required: string[] = []): Report {
+  const options = { failOn: "breaking" as const, allowIncomplete: false, required };
   return {
     base: { ref: "2.2.4", commit: "a".repeat(40) },
     revision: { ref: "2.3.4", commit: "b".repeat(40) },
     ...options,
-    gate: evaluateGate(layers, options),
+    gate: evaluateGate(layers, options, inactive),
     layers,
+    inactive,
   };
 }
+
+const unchecked: InactiveLayer[] = [
+  { layer: "openapi", status: "disabled" },
+  { layer: "behaviour", status: "not-configured" },
+];
 
 const mixed: LayerResult[] = [
   {
@@ -104,6 +110,40 @@ describe("renderMarkdown", () => {
   });
 });
 
+describe("renderMarkdown with layers that did not run", () => {
+  const seedRan: LayerResult[] = [{ layer: "seed", status: "ran", findings: [], notes: [] }];
+
+  it("lists disabled and unconfigured layers under a passing gate and in the table", () => {
+    const markdown = renderMarkdown(buildReport(seedRan, unchecked));
+    expect(markdown).toBe(
+      [
+        "# Backward compatibility: 2.2.4 → 2.3.4",
+        "",
+        "Base `aaaaaaaaaaaa`, revision `bbbbbbbbbbbb`, fail on `breaking`.",
+        "",
+        "**Gate: PASS**",
+        "",
+        "Not checked: openapi (disabled), behaviour (not configured)",
+        "",
+        "| Layer | Verdict | breaking | rollback-risk | needs-action | safe |",
+        "| --- | --- | --- | --- | --- | --- |",
+        "| seed | no-findings | 0 | 0 | 0 | 0 |",
+        "| openapi | disabled | - | - | - | - |",
+        "| behaviour | not configured | - | - | - | - |",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("names required layers in the header and fails the gate on a disabled one", () => {
+    const markdown = renderMarkdown(buildReport(seedRan, unchecked, ["openapi", "seed"]));
+    expect(markdown).toContain("fail on `breaking`, required: `openapi`, `seed`.");
+    expect(markdown).toContain(
+      "**Gate: FAIL**\n- openapi: layer disabled, but --require names it\n\nNot checked: openapi (disabled)",
+    );
+  });
+});
+
 describe("renderJson", () => {
   it("renders a versioned document with layer verdicts", () => {
     const document = JSON.parse(renderJson(buildReport(mixed)));
@@ -118,6 +158,16 @@ describe("renderJson", () => {
       ["config", "failed"],
     ]);
     expect(document.layers[0].findings[2].accepted).toEqual({ reason: "unused since 2.0" });
+  });
+
+  it("lists layers that did not run with their status and the required layers", () => {
+    const document = JSON.parse(renderJson(buildReport([], unchecked, ["openapi"])));
+    expect(document.required).toEqual(["openapi"]);
+    expect(document.layers).toEqual([
+      { layer: "openapi", status: "disabled", verdict: "disabled", findings: [], notes: [] },
+      { layer: "behaviour", status: "not-configured", verdict: "not-configured", findings: [], notes: [] },
+    ]);
+    expect(document.gate.reasons).toEqual(["openapi: layer disabled, but --require names it"]);
   });
 
   it("includes the resolver of a resolved ref", () => {

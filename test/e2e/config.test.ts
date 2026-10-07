@@ -63,10 +63,11 @@ beforeAll(() => {
       },
     }),
   );
+  // Not hex, so a commit hash in the JSON report can never contain it by chance.
   for (const [name, script, timeoutSeconds] of [
     ["presence.json", "printf 'SHOP_API_KEY\\n'", undefined],
-    ["presence-values.json", "printf 'SHOP_API_KEY=abc\\nLogging__Level=abc\\n'", undefined],
-    ["presence-failing.json", "echo SHOP_API_KEY=abc; exit 2", undefined],
+    ["presence-values.json", "printf 'SHOP_API_KEY=xyzsecret\\nLogging__Level=xyzsecret\\n'", undefined],
+    ["presence-failing.json", "echo SHOP_API_KEY=xyzsecret; exit 2", undefined],
   ] as const) {
     writeRepoFile(
       repo,
@@ -171,15 +172,15 @@ describe("config presence end to end (issue #20)", () => {
       const run = createIo(repo.dir);
       await main([...check("presence-values.json"), "--format", format], run.io);
       expect(run.stdout()).toContain("present in the target environment");
-      expect(run.stdout()).not.toContain("abc");
-      expect(run.stderr()).not.toContain("abc");
+      expect(run.stdout()).not.toContain("xyzsecret");
+      expect(run.stderr()).not.toContain("xyzsecret");
     }
   });
 
   it("keeps the classes and adds a note when the presence command fails", async () => {
     const run = createIo(repo.dir);
     await main([...check("presence-failing.json"), "--format", "json"], run.io);
-    expect(run.stdout()).not.toContain("abc");
+    expect(run.stdout()).not.toContain("xyzsecret");
     const report = JSON.parse(run.stdout()) as {
       layers: { status: string; notes: string[]; findings: JsonFinding[] }[];
     };

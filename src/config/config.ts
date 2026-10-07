@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Layer } from "../layers/layer.js";
+import type { InactiveLayer } from "../model/gate.js";
 import { err, ok, type Result } from "../result.js";
 
 export const DEFAULT_CONFIG_FILE = "compat.config.json";
@@ -8,6 +9,8 @@ export const DEFAULT_CONFIG_FILE = "compat.config.json";
 export type CompatConfig = {
   /** Enabled layers with their parsed config, in registry order. */
   layers: { layer: Layer; config: Record<string, unknown> }[];
+  /** Known layers that will not run, in registry order. */
+  inactive: InactiveLayer[];
 };
 
 export function buildConfigSchema(layers: Layer[]) {
@@ -38,13 +41,21 @@ export function parseConfig(raw: unknown, layers: Layer[], source: string): Resu
     (Record<string, unknown> & { enabled?: boolean }) | undefined
   >;
   const enabled: CompatConfig["layers"] = [];
+  const inactive: InactiveLayer[] = [];
   for (const layer of layers) {
     const entry = configured[layer.name];
-    if (entry === undefined || entry.enabled === false) continue;
+    if (entry === undefined) {
+      inactive.push({ layer: layer.name, status: "not-configured" });
+      continue;
+    }
+    if (entry.enabled === false) {
+      inactive.push({ layer: layer.name, status: "disabled" });
+      continue;
+    }
     const { enabled: _enabled, ...config } = entry;
     enabled.push({ layer, config });
   }
-  return ok({ layers: enabled });
+  return ok({ layers: enabled, inactive });
 }
 
 export async function loadConfig(path: string, layers: Layer[]): Promise<Result<CompatConfig>> {

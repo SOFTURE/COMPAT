@@ -398,6 +398,53 @@ describe("softure-compat init", () => {
     });
   });
 
+  it("keeps only contract folders whose types travel through the broker (issue #45)", async () => {
+    const repo = repoWith({
+      "src/PETSEO.Contract.Internal.Messages/Started.cs": "public record Started(int X);\n",
+      "src/PETSEO.Contract.B2C.Internal.Requests/AddMedicationRequest.cs":
+        "public record AddMedicationRequest(List<DayOfWeek>? DaysOfWeek);\n",
+      "src/PETSEO.Contract.Internal.Requests/GetPetRequest.cs": "public record GetPetRequest(Guid Id);\n",
+      "src/Billing.Contracts/Invoices/InvoicePaid.cs":
+        "public sealed class InvoicePaid { public int Id { get; set; } }\n",
+      "src/Billing.Contracts/Invoices/InvoiceDto.cs": "public sealed class InvoiceDto { }\n",
+      "src/Orders.Contracts/OrderShipped.cs": "public record OrderShipped(int Id);\n",
+      "src/Worker/InvoicePaidConsumer.cs":
+        "public class InvoicePaidConsumer : IConsumer<InvoicePaid> { public Task Consume(ConsumeContext<InvoicePaid> context) => Task.CompletedTask; }\n",
+      "src/Api/Orders.cs": "await bus.Publish(new Orders.OrderShipped(1));\n",
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers["message-contracts"]).toEqual({
+      sources: [
+        {
+          name: "contracts",
+          language: "csharp",
+          files: [
+            "src/Billing.Contracts/**/*.cs",
+            "src/Orders.Contracts/**/*.cs",
+            "src/PETSEO.Contract.Internal.Messages/**/*.cs",
+          ],
+        },
+      ],
+    });
+    expect(stderr).toContain(
+      "skipped: no IConsumer<T>, ConsumeContext<T>, IRequestClient<T>, Publish or Send names a type of src/PETSEO.Contract.B2C.Internal.Requests, src/PETSEO.Contract.Internal.Requests",
+    );
+  });
+
+  it("writes message contracts disabled when no contract folder is used by the broker", async () => {
+    const repo = repoWith({
+      "src/Shop.Contract.Requests/CreateOrderRequest.cs": "public record CreateOrderRequest(int Id);\n",
+      "src/Shop.Api/Endpoint.cs": "public class Endpoint { void Send<T>(T value) { } }\n",
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers["message-contracts"]).toEqual({
+      enabled: false,
+      sources: [{ name: "contracts", language: "csharp", files: ["src/Shop.Contract.Requests/**/*.cs"] }],
+    });
+    expect(stderr).toContain("message-contracts disabled: no IConsumer<T>");
+    expect(stderr).toContain("enable the layer if these types travel through a broker");
+  });
+
   it("refuses to overwrite an existing config without --force", async () => {
     const repo = repoWith({ "compose.yaml": "services: {}\n" });
     writeRepoFile(repo, "compat.config.json", "{}\n");
@@ -473,9 +520,11 @@ describe("softure-compat init", () => {
     const exitCode = await main(["check", "--base", "v1", "--revision", "HEAD", "--format", "json"], run.io);
     expect(exitCode).toBe(0);
     const report = JSON.parse(run.stdout()) as {
-      layers: { layer: string; findings: { subject: string; id: string }[] }[];
+      layers: { layer: string; status: string; findings: { subject: string; id: string }[] }[];
     };
-    expect(report.layers.map((layer) => layer.layer)).toEqual(["config"]);
+    expect(report.layers.filter((layer) => layer.status !== "disabled").map((layer) => layer.layer)).toEqual([
+      "config",
+    ]);
     expect(report.layers[0]?.findings.map((finding) => `${finding.subject} ${finding.id}`)).toEqual([
       "B config-key-added-required",
     ]);

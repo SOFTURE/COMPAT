@@ -151,6 +151,13 @@ async function readClientRef(
   if (model.operations.length === 0) {
     return err(`no HTTP operation could be read from ${path}; is it a generated TypeScript client?`);
   }
+  const [firstUnread] = model.unreadUrls;
+  if (firstUnread !== undefined) {
+    // An unread request would count as "not called" and turn its findings safe: fail closed instead.
+    return err(
+      `${model.unreadUrls.length} request URL(s) in ${path} could not be read, first "${firstUnread.text}" at line ${firstUnread.line}; their operations would count as not called`,
+    );
+  }
   const notes = model.operations
     .filter((operation) => operation.method === "*")
     .map(

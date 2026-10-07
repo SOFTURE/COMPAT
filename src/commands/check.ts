@@ -31,6 +31,8 @@ export type CheckOptions = {
   outputPath?: string;
   failOn: FailOn;
   allowIncomplete: boolean;
+  /** Layers that must run; a disabled, unconfigured, skipped or failed one fails the gate. */
+  required?: string[];
 };
 
 export type CheckIo = {
@@ -52,6 +54,14 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
   const repoDir = resolve(io.cwd, options.repoDir ?? ".");
   const configPath = resolvePath(repoDir, io.cwd, options.configPath);
   const layers = io.layers ?? LAYERS;
+  const required = options.required ?? [];
+  const unknown = required.filter((name) => !layers.some((layer) => layer.name === name));
+  if (unknown.length > 0) {
+    io.stderr(
+      `softure-compat: --require names unknown layer(s) ${unknown.join(", ")}; known layers: ${layers.map((l) => l.name).join(", ") || "none"}\n`,
+    );
+    return EXIT_CANNOT_RUN;
+  }
 
   const config = await loadConfig(configPath, layers);
   if (!config.ok) {
@@ -133,14 +143,21 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
       }
     }
 
-    const gate = evaluateGate(results, { failOn: options.failOn, allowIncomplete: options.allowIncomplete });
+    const { inactive } = config.value;
+    const gate = evaluateGate(
+      results,
+      { failOn: options.failOn, allowIncomplete: options.allowIncomplete, required },
+      inactive,
+    );
     const report = {
       base: base.value.info,
       revision: revision.value.info,
       failOn: options.failOn,
       allowIncomplete: options.allowIncomplete,
+      required,
       gate,
       layers: results,
+      inactive,
     };
     const rendered = options.format === "json" ? renderJson(report) : renderMarkdown(report);
     if (options.outputPath === undefined) {

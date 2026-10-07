@@ -103,7 +103,7 @@ describe("persisted-enums layer (research F7)", () => {
     const run = createIo(repo.dir);
     expect(await main(check("plain.json", "--format", "json", "--fail-on", "rollback-risk"), run.io)).toBe(1);
     const report = JSON.parse(run.stdout());
-    expect(report.layers).toHaveLength(1);
+    expect(report.layers.filter((item: { status: string }) => item.status === "ran")).toHaveLength(1);
     const [layer] = report.layers;
     expect(layer.status).toBe("ran");
     expect(layer.findings).toHaveLength(1);

@@ -27,6 +27,11 @@ describe("main", () => {
     [["init", "--base", "a"], "--base is only for check"],
     [["init", "--fail-on", "never"], "--fail-on is only for check"],
     [["init", "now"], 'unknown command "init now"'],
+    [
+      ["check", "--base", "a", "--revision", "b", "--require", " , "],
+      "--require needs at least one layer name",
+    ],
+    [["init", "--require", "openapi"], "--require is only for check"],
   ])("returns 2 for %j", async (argv, message) => {
     const run = createIo(process.cwd());
     expect(await main(argv, run.io)).toBe(2);
