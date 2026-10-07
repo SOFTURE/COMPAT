@@ -6,6 +6,7 @@ name: SOFTURE COMPAT - RELEASE
 #   1. npmjs.com       @softure-ai/compat  (with provenance; trusted publishing over OIDC, `NPM_TOKEN` as fallback)
 #   2. GitHub Packages @softure/compat     (GitHub Packages requires the scope to equal the org)
 #   3. GitHub Release  vX.Y.Z              (creates the tag on the released commit; generated notes + the tarball)
+#   4. Major tag       vX                  (moved to the released commit, so `uses: SOFTURE/COMPAT@vX` follows it)
 # Cut a release by bumping the version in a pull request (`npm version minor --no-git-tag-version`) and merging it.
 # Every step skips what is already published, so re-running the workflow only fills in what is missing.
 #
@@ -220,4 +221,41 @@ jobs:
             # Creates the tag on the released commit when it does not exist yet.
             gh release create "${TAG}" softure-ai-compat-*.tgz \
               --target "${GITHUB_SHA}" --generate-notes --title "${TAG}" --notes "${NOTES}" ${PRERELEASE}
+          fi
+
+  # `uses: SOFTURE/COMPAT@v0` follows the latest stable release: the major tag is moved to the commit of `vX.Y.Z`.
+  # Runs on every push, so a re-run also repairs the tag. A prerelease never moves it, and neither does a release whose
+  # commit has no action.yml (versions before the action existed).
+  move-major-tag:
+    needs: [validate, github-release]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.github-release.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: 🏷️ Move the major tag to the released commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          case "${VERSION}" in *-*) echo "${VERSION} is a prerelease; the major tag stays."; exit 0 ;; esac
+          if ! SHA=$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${VERSION}" --jq .sha 2>/dev/null); then
+            echo "Tag v${VERSION} does not exist yet; nothing to move."
+            exit 0
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/contents/action.yml?ref=${SHA}" --silent 2>/dev/null; then
+            echo "v${VERSION} has no action.yml; the major tag stays."
+            exit 0
+          fi
+          MAJOR="v${VERSION%%.*}"
+          CURRENT=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${MAJOR}" --jq .object.sha 2>/dev/null || true)
+          if [ "${CURRENT}" = "${SHA}" ]; then
+            echo "${MAJOR} already points at v${VERSION} (${SHA})."
+          elif [ -n "${CURRENT}" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR}" -f sha="${SHA}" -F force=true --silent
+            echo "Moved ${MAJOR} to v${VERSION} (${SHA})."
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${MAJOR}" -f sha="${SHA}" --silent
+            echo "Created ${MAJOR} at v${VERSION} (${SHA})."
           fi

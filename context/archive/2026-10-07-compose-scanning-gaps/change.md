@@ -1,12 +1,12 @@
 ---
 change_id: compose-scanning-gaps
 title: "The config layer reads every compose variable reference, including block scalars and pass-through entries"
-status: new
+status: archived
 roadmap_item: CMP-8
-branch: null
+branch: claude/compose-scanning-gaps-x7qxx5
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
