@@ -4,6 +4,7 @@ import type { RefTree } from "../../../src/git/ref-tree.js";
 import { clientUsageLayer } from "../../../src/layers/client-usage/client-usage-layer.js";
 import { clientUsageConfigSchema } from "../../../src/layers/client-usage/config.js";
 import type { LayerResult } from "../../../src/model/finding.js";
+import { createFakeGitHub, GITHUB_ENV } from "../../helpers/fake-github.js";
 import { createRepo, type TestRepo } from "../../helpers/git-repo.js";
 import { createFinding } from "../../helpers/stub-layer.js";
 
@@ -38,7 +39,11 @@ const openapi: LayerResult = {
   notes: [],
 };
 
-function run(client: Record<string, unknown>, results: LayerResult[] | undefined = [openapi]) {
+function run(
+  client: Record<string, unknown>,
+  results: LayerResult[] | undefined = [openapi],
+  github?: { env: NodeJS.ProcessEnv; fetch: typeof fetch },
+) {
   const config = clientUsageConfigSchema.parse({
     clients: [
       {
@@ -58,11 +63,14 @@ function run(client: Record<string, unknown>, results: LayerResult[] | undefined
     revision: unused,
     repoDir: repo.dir,
     tempDir: tmpdir(),
-    env: process.env,
+    env: github?.env ?? process.env,
+    fetch: github?.fetch,
     log: () => {},
     results,
   });
 }
+
+const RUNS = "/actions/workflows/build.yml/runs?status=success&per_page=100&page=1";
 
 describe("client-usage layer", () => {
   it("revises the openapi findings and notes what it read", async () => {
@@ -75,6 +83,52 @@ describe("client-usage layer", () => {
     expect(output.revisions?.map((revision) => revision.finding.message)).toEqual([
       "a breaking change; called by mobile@app-1 (client-usage)",
     ]);
+  });
+
+  it("reads the refs a resolver chose and names them in a note", async () => {
+    const output = await run({ refs: ["latest-tag:app-[1-3]"] });
+    expect(output.status === "failed" ? output.error : output.status).toBe("ran");
+    expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
+      'client "mobile" (API "b2c"): mobile@app-3; 1 operation(s) read',
+      'client "mobile": latest-tag:app-[1-3] → app-3',
+    ]);
+  });
+
+  it("reads the head commit of every successful workflow run since a version", async () => {
+    const app1 = repo.git("rev-parse", "app-1").trim();
+    const app3 = repo.git("rev-parse", "app-3").trim();
+    const runs = [app3, app1].map((sha, index) => ({
+      head_sha: sha,
+      head_branch: `mobile-2.${2 - index * 2}`,
+      event: "push",
+    }));
+    const github = createFakeGitHub({ [RUNS]: { workflow_runs: runs } });
+    const output = await run({ refs: { workflowRuns: "build.yml", since: "2.0" } }, [openapi], {
+      env: GITHUB_ENV,
+      fetch: github.fetch,
+    });
+    expect(output.status === "failed" ? output.error : output.status).toBe("ran");
+    expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
+      'client "mobile" (API "b2c"): mobile@mobile-2.0, mobile-2.2; 1/1 operation(s) read',
+      'client "mobile": workflowRuns:build.yml since 2.0 → mobile-2.0, mobile-2.2',
+    ]);
+    expect(output.revisions?.[0]?.finding.evidence).toContainEqual(
+      expect.objectContaining({ side: "client", ref: "mobile-2.0", commit: app1 }),
+    );
+  });
+
+  it("fails with a fetch hint when a resolved commit is not in the clone", async () => {
+    const github = createFakeGitHub({
+      [RUNS]: { workflow_runs: [{ head_sha: "f".repeat(40), head_branch: "mobile-9", event: "push" }] },
+    });
+    const output = await run({ refs: { workflowRuns: "build.yml" } }, [openapi], {
+      env: GITHUB_ENV,
+      fetch: github.fetch,
+    });
+    expect(output).toMatchObject({
+      status: "failed",
+      error: `client "mobile": workflowRuns:build.yml resolved to mobile-9 (${"f".repeat(40)}), which is not in the local clone; fetch the client refs (actions/checkout with fetch-depth: 0)`,
+    });
   });
 
   it("fails without an openapi or persisted-enums result", async () => {

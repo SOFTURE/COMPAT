@@ -3,6 +3,7 @@ import { runProcess } from "../process/run-process.js";
 import { err, ok, type Result } from "../result.js";
 import { type FetchFn, type GitHubContext, getGitHubContext, getRepoJson } from "./github.js";
 import { formatRefSpec, type RefSpec } from "./ref-spec.js";
+import { selectTags } from "./versions.js";
 
 /** The ref to compare. `commit` is set when the resolver knows the exact commit (a deployment or a run). */
 export type ResolvedRef = { ref: string; commit?: string; resolver?: string };
@@ -10,6 +11,9 @@ export type ResolvedRef = { ref: string; commit?: string; resolver?: string };
 export type ResolveRefOptions = { repoDir: string; env: NodeJS.ProcessEnv; fetch?: FetchFn };
 
 const DEPLOYMENTS_PAGE_SIZE = 100;
+const RUNS_PAGE_SIZE = 100;
+const RUNS_MAX_PAGES = 10;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const GIT_TIMEOUT_MS = 60_000;
 
 const deploymentsSchema = z.array(z.object({ id: z.number(), sha: z.string(), ref: z.string() }));
@@ -107,4 +111,53 @@ async function resolveWith(
   return spec.kind === "github-deployment"
     ? resolveDeployment(context.value, spec.environment)
     : resolveWorkflow(context.value, spec.workflow);
+}
+
+export type WorkflowRunsOptions = { workflow: string; since?: string };
+
+/**
+ * One ref per successful run of a workflow (a build per tag, typically), in version order: the run's
+ * `head_branch` (the tag of a tag run) labels its `head_sha`. `since` is a date (`YYYY-MM-DD`, runs
+ * created on or after it) or a version (runs whose label holds a version at or above it).
+ */
+export async function resolveWorkflowRuns(
+  { workflow, since }: WorkflowRunsOptions,
+  options: ResolveRefOptions,
+): Promise<Result<ResolvedRef[]>> {
+  if (workflow === "") return err("a workflow file is required");
+  const sinceDate = since !== undefined && DATE_PATTERN.test(since) ? since : undefined;
+  const sinceVersion = sinceDate === undefined ? since : undefined;
+  const context = await getGitHubContext(options);
+  if (!context.ok) return context;
+  const created = sinceDate === undefined ? "" : `&created=${encodeURIComponent(`>=${sinceDate}`)}`;
+  // Newest first, so the first run seen for a label is its newest (a re-run of the same tag).
+  const commits = new Map<string, string>();
+  for (let page = 1; ; page++) {
+    const runs = await getRepoJson(
+      context.value,
+      `/actions/workflows/${encodeURIComponent(workflow)}/runs?status=success&per_page=${RUNS_PAGE_SIZE}&page=${page}${created}`,
+      workflowRunsSchema,
+    );
+    if (!runs.ok) return runs;
+    for (const run of runs.value.workflow_runs) {
+      const label = run.head_branch || run.head_sha;
+      if (!commits.has(label)) commits.set(label, run.head_sha);
+    }
+    if (runs.value.workflow_runs.length < RUNS_PAGE_SIZE) break;
+    if (page === RUNS_MAX_PAGES) {
+      return err(
+        `workflow "${workflow}" has more than ${RUNS_PAGE_SIZE * RUNS_MAX_PAGES} successful runs; set "since" to a date (YYYY-MM-DD)`,
+      );
+    }
+  }
+  const selected = selectTags([...commits.keys()], sinceVersion);
+  if (!selected.ok) return err(`${selected.error} and is not a date (YYYY-MM-DD)`);
+  if (selected.value.length === 0) {
+    const scope = since === undefined ? "" : ` since ${since}`;
+    return err(
+      `no successful run of workflow "${workflow}"${scope} in ${context.value.owner}/${context.value.repo}`,
+    );
+  }
+  // Every selected label is a key of `commits`.
+  return ok(selected.value.map((ref) => ({ ref, commit: commits.get(ref) as string })));
 }

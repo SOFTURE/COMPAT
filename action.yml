@@ -9,16 +9,17 @@ branding:
 # package.json, so `uses: SOFTURE/COMPAT@v0.3.0` (or the moving `@v0`) always runs the CLI released from that commit.
 inputs:
   base:
-    description: Git ref or resolver running in production (`--base`), e.g. `github-deployment:production` or `latest-tag:v*`.
-    required: true
+    description: Git ref or resolver running in production (`--base`), e.g. `github-deployment:production` or `latest-tag:v*`. Empty uses `check.base` from the config.
+    required: false
+    default: ""
   revision:
-    description: Git ref about to be released (`--revision`).
+    description: Git ref about to be released (`--revision`). Empty uses `check.revision` from the config.
     required: false
-    default: HEAD
+    default: ""
   fail-on:
-    description: Lowest class that fails the step (`breaking`, `rollback-risk`, `needs-action` or `never`).
+    description: Lowest class that fails the step (`breaking`, `rollback-risk`, `needs-action` or `never`). Empty uses `check.failOn` from the config, then `breaking`.
     required: false
-    default: breaking
+    default: ""
   config:
     description: Config file (`--config`), relative to `working-directory`. Default `compat.config.json` there.
     required: false
@@ -91,7 +92,11 @@ runs:
         REPORT="${RUNNER_TEMP}/softure-compat-report.md"
         rm -f "${REPORT}"
 
-        ARGS=(check --base "${COMPAT_BASE}" --revision "${COMPAT_REVISION}" --fail-on "${COMPAT_FAIL_ON}" --output "${REPORT}")
+        # Empty inputs are left out, so the `check` defaults of the config apply.
+        ARGS=(check --output "${REPORT}")
+        if [ -n "${COMPAT_BASE}" ]; then ARGS+=(--base "${COMPAT_BASE}"); fi
+        if [ -n "${COMPAT_REVISION}" ]; then ARGS+=(--revision "${COMPAT_REVISION}"); fi
+        if [ -n "${COMPAT_FAIL_ON}" ]; then ARGS+=(--fail-on "${COMPAT_FAIL_ON}"); fi
         if [ -n "${COMPAT_CONFIG}" ]; then ARGS+=(--config "${COMPAT_CONFIG}"); fi
         read -r -a EXTRA <<< "${COMPAT_ARGS}"
         ARGS+=("${EXTRA[@]}")

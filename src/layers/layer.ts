@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import type { RefTree } from "../git/ref-tree.js";
 import type { Finding, LayerResult } from "../model/finding.js";
+import type { FetchFn } from "../resolve/github.js";
 
 export type LayerContext<C> = {
   config: C;
@@ -10,6 +11,8 @@ export type LayerContext<C> = {
   /** A directory owned by this layer for the current run; removed afterwards. */
   tempDir: string;
   env: NodeJS.ProcessEnv;
+  /** `fetch` for the GitHub resolvers; tests inject a mock here, the CLI leaves it unset. */
+  fetch?: FetchFn;
   log(message: string): void;
   /** Results of the layers that ran before this one, in registry order; absent when run on its own. */
   results?: readonly LayerResult[];

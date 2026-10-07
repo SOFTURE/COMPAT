@@ -48,14 +48,20 @@ go install github.com/oasdiff/oasdiff@v1.33.0
 ## Quick start
 
 ```sh
-npx softure-compat init                                  # writes compat.config.json from the files committed at HEAD
-npx softure-compat check --base v2.2.4 --revision HEAD   # Markdown report on stdout, exit code for CI
+npx softure-compat init    # writes compat.config.json from the files committed at HEAD
+npx softure-compat check   # compares the refs in its "check" section; Markdown report on stdout, exit code for CI
 ```
 
 `init` looks at the files committed at `HEAD` and writes every layer into `compat.config.json`. A layer whose inputs
 it found is enabled; any other layer is written with `"enabled": false` and an example, so you can see what to fill
 in. Review the file, adjust it, and remove `"enabled": false` from the layers you want. `init` never overwrites an
 existing file unless you pass `--force`.
+
+`init` also writes the refs `check` compares by default (see [Configuration](#configuration)). It reads the
+repository's GitHub deployments (with the token and repository the [resolvers](#finding-the-production-ref) use):
+the two environments with the most recent successful deployments become `base` and `revision`, the one named like
+`prod` being the base, otherwise the one deployed less recently. A single deployed environment is compared with
+`HEAD`. With no successful deployment, or when GitHub cannot be read, it writes `latest-tag` and `HEAD` and says why.
 
 What `init` detects:
 
@@ -79,19 +85,19 @@ batch lines or `[dbo]` names, otherwise as Postgres.
 ## Command line
 
 ```
-softure-compat check --base <ref> --revision <ref> [options]
+softure-compat check [--base <ref>] [--revision <ref>] [options]
 softure-compat init [--repo <dir>] [--config <file>] [--force]
 ```
 
 | Option | Command | Meaning |
 | --- | --- | --- |
-| `--base <ref>` | check | git ref running in production, or a [resolver](#finding-the-production-ref) (required) |
-| `--revision <ref>` | check | git ref about to be released, or a [resolver](#finding-the-production-ref) (required) |
+| `--base <ref>` | check | git ref running in production, or a [resolver](#finding-the-production-ref) (default: `check.base` in the config) |
+| `--revision <ref>` | check | git ref about to be released, or a [resolver](#finding-the-production-ref) (default: `check.revision` in the config) |
 | `--repo <dir>` | both | repository directory (default: current directory) |
 | `--config <file>` | both | config file (default: `<repo>/compat.config.json`) |
 | `--format <md\|json>` | check | report format (default: `md`) |
 | `--output <file>` | check | write the report to a file instead of stdout |
-| `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `breaking`) |
+| `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `check.failOn` in the config, then `breaking`) |
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
 | `--require <layer,...>` | check | fail the gate unless these layers ran: disabled, not configured, skipped or failed all fail it, even with `--allow-incomplete` |
 | `--no-download` | check | never download oasdiff; the `openapi` layer is skipped when it is missing |
@@ -100,7 +106,8 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `-v`, `--version` | both | show the version |
 
 **Exit codes:** `0` the gate passed (`init`: the config was written), `1` the gate failed, `2` the command could not
-run (bad arguments, invalid config, unknown ref, a resolver that found nothing, unreadable repository).
+run (bad arguments, invalid config, a base or revision set neither on the command line nor in the config, unknown
+ref, a resolver that found nothing, unreadable repository).
 
 ### Finding the production ref
 
@@ -116,8 +123,9 @@ git ref, `--base` and `--revision` take a resolver:
 The GitHub resolvers read the token from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`; the repository from
 `GITHUB_REPOSITORY`, then the `origin` remote; the API from `GITHUB_API_URL` (default `https://api.github.com`). A
 resolver that finds nothing stops the check with exit code `2`; it never falls back to a guess. The resolved commit
-must be in the clone, so fetch the full history. The report header names both, e.g.
-"Base github-deployment:prod → 2.2.4 `26b8973e1f0a`". A branch literally named `latest-tag` has to be passed as
+must be in the clone, so fetch the full history. The report header names both and where the value was set, e.g.
+"Base github-deployment:prod → 2.2.4 `26b8973e1f0a` (config)" or "(--base)" when the flag set it; the JSON report
+carries `"source": "config"` or `"flag"`. A branch literally named `latest-tag` has to be passed as
 `refs/heads/latest-tag`.
 
 ### Classes and the gate
@@ -165,9 +173,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0
-        with:
-          base: github-deployment:production
+      - uses: SOFTURE/COMPAT@v0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
 `@v0` follows the latest `0.x` release; pin `@v0.3.0` to stay on one version. The action runs the CLI version released
@@ -175,9 +181,9 @@ from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `base` | (required) | `--base`: a git ref or a resolver |
-| `revision` | `HEAD` | `--revision` |
-| `fail-on` | `breaking` | `--fail-on` |
+| `base` | `check.base` | `--base`: a git ref or a resolver |
+| `revision` | `check.revision` | `--revision` |
+| `fail-on` | `check.failOn`, then `breaking` | `--fail-on` |
 | `config` | `compat.config.json` | `--config`, relative to `working-directory` |
 | `working-directory` | `.` | the repository directory |
 | `args` | | extra CLI arguments, split on whitespace (`--allow-incomplete --no-download`) |
@@ -224,8 +230,13 @@ typo never silently disables a check. Every layer is optional; a configured laye
 `"enabled": false`. All paths and globs are relative to the repository root; globs support `**`, `*`, `?` and
 `{a,b}`.
 
+The optional `check` section holds the defaults of `check`: `base`, `revision` (a git ref or a
+[resolver](#finding-the-production-ref)) and `failOn`. Each command-line flag overrides its key, so `softure-compat
+check` needs no flags once they are set; a base or revision set in neither place is exit code `2`.
+
 ```json
 {
+  "check": { "base": "github-deployment:prod", "revision": "github-deployment:dev", "failOn": "breaking" },
   "layers": {
     "openapi": { "apis": [{ "name": "public", "source": { "kind": "file", "path": "api/openapi.yaml" } }] },
     "sql-migrations": { "sources": [{ "name": "db", "dialect": "postgres", "kind": "folder", "path": "drizzle" }] },
@@ -379,9 +390,24 @@ of them enabled; it adds no findings of its own.
 | --- | --- |
 | `clients[].name` | unique name (letters, digits, `.`, `_`, `-`), shown in reasons as `mobile@2.0.1` |
 | `clients[].api` | the `openapi` API name this client calls |
-| `clients[].refs` | the live client builds: a list of git refs, or `{ tags, since? }`: local tags matching the `git tag --list` pattern, at or above the `since` version |
+| `clients[].refs` | the live client builds: a list of entries, or one selector on its own (see below) |
 | `clients[].generatedClient` | `{ kind: "typescript", path }`: the generated client, read at every client ref |
 | `clients[].sources` | optional globs of the client's own code; an operation then counts as called only when its client function is referenced there |
+
+An entry of `refs` is one of:
+
+| Entry | Resolves to |
+| --- | --- |
+| a git ref, e.g. `"2.2.4"` | that ref |
+| a [resolver](#finding-the-production-ref): `"github-deployment:<environment>"`, `"github-workflow:<file>"`, `"latest-tag[:<glob>]"` | one ref, as for `--base`; a web client deployed with the server is `"github-deployment:prod"` |
+| `{ "tags": "<pattern>", "since"?: "<version>" }` | local tags matching the `git tag --list` pattern, at or above the `since` version |
+| `{ "workflowRuns": "<file>", "since"?: "<version or YYYY-MM-DD>" }` | the head commit of every successful run of that workflow, labelled by the run's tag or branch (the newest run per label); `since` keeps labels at or above a version, or runs created on or after a date |
+
+For a mobile client built by a workflow on its tags, `{ "workflowRuns": "eas-prod.yml", "since": "2.0.1" }` lists
+exactly the shipped builds, even when server tags are interleaved with them. The GitHub entries use the token and
+repository of the `--base` resolvers, and more than 1000 successful runs need a date `since`. A resolver that finds
+nothing, or a resolved commit missing from the clone, fails the layer. The layer notes name what each resolver
+resolved to, e.g. `client "mobile": workflowRuns:eas-prod.yml since 2.0.1 → 2.0.1, 2.0.2, 2.1.1, 2.1.2, 2.2.4`.
 
 What changes, per `openapi` finding of the client's API that is not accepted and not `safe`, for an operation
 (`METHOD /path`):
