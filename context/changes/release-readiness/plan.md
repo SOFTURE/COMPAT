@@ -161,14 +161,14 @@ a compose-only repository, `main` usage errors.
 ### Phase 1: Acceptance run over all five layers
 
 #### Automated
-- [x] 1.1 `npx vitest run test/e2e/acceptance.test.ts` passes with oasdiff on PATH and asserts F1, F2, F4, F5, F6, F7, F10 with their classes and the gate outcomes before and after accepting F2
-- [x] 1.2 Gates green (typecheck, lint, test)
+- [x] 1.1 `npx vitest run test/e2e/acceptance.test.ts` passes with oasdiff on PATH and asserts F1, F2, F4, F5, F6, F7, F10 with their classes and the gate outcomes before and after accepting F2 — 6de5d4c
+- [x] 1.2 Gates green (typecheck, lint, test) — 6de5d4c
 
 ### Phase 2: `softure-compat init`
 
 #### Automated
-- [ ] 2.1 `npx vitest run test/commands/init.test.ts test/main.test.ts` passes with detection, overwrite, no-commit and init-then-check cases
-- [ ] 2.2 Gates green (typecheck, lint, test)
+- [x] 2.1 `npx vitest run test/commands/init.test.ts test/main.test.ts` passes with detection, overwrite, no-commit and init-then-check cases
+- [x] 2.2 Gates green (typecheck, lint, test)
 
 ### Phase 3: Package, CI and publish workflow
 

@@ -1,32 +1,32 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import {
-  type CheckIo,
-  EXIT_CANNOT_RUN,
-  REPORT_FORMATS,
-  type ReportFormat,
-  runCheck,
-} from "./commands/check.js";
-import { FAIL_ON_VALUES, type FailOn } from "./model/gate.js";
+import { type CheckIo, EXIT_CANNOT_RUN, REPORT_FORMATS, runCheck } from "./commands/check.js";
+import { runInit } from "./commands/init.js";
+import { FAIL_ON_VALUES } from "./model/gate.js";
 
 export const USAGE = `Usage: softure-compat check --base <ref> --revision <ref> [options]
+       softure-compat init [--repo <dir>] [--config <file>] [--force]
 
-Tells whether the revision is backward compatible with the base (the release in production).
+check   tells whether the revision is backward compatible with the base (the release in production)
+init    writes a starter compat.config.json from the files committed at HEAD
 
 Options:
-  --base <ref>            git ref running in production (required)
-  --revision <ref>        git ref about to be released (required)
+  --base <ref>            check: git ref running in production (required)
+  --revision <ref>        check: git ref about to be released (required)
   --repo <dir>            repository directory (default: current directory)
   --config <file>         config file (default: <repo>/compat.config.json)
-  --format <md|json>      report format (default: md)
-  --output <file>         write the report to a file instead of stdout
-  --fail-on <class>       breaking | rollback-risk | needs-action | never (default: breaking)
-  --allow-incomplete      do not fail when a layer was skipped or failed
+  --format <md|json>      check: report format (default: md)
+  --output <file>         check: write the report to a file instead of stdout
+  --fail-on <class>       check: breaking | rollback-risk | needs-action | never (default: breaking)
+  --allow-incomplete      check: do not fail when a layer was skipped or failed
+  --force                 init: overwrite an existing config file
   -h, --help              show this help
   -v, --version           show the version
 
-Exit codes: 0 gate passed, 1 gate failed, 2 the check could not run.
+Exit codes: 0 gate passed (init: config written), 1 gate failed, 2 the command could not run.
 `;
+
+const CHECK_ONLY_FLAGS = ["base", "revision", "format", "output", "fail-on", "allow-incomplete"] as const;
 
 function readVersion(): string {
   const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -49,10 +49,11 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       revision: { type: "string" },
       repo: { type: "string" },
       config: { type: "string" },
-      format: { type: "string", default: "md" },
+      format: { type: "string" },
       output: { type: "string" },
-      "fail-on": { type: "string", default: "breaking" },
-      "allow-incomplete": { type: "boolean", default: false },
+      "fail-on": { type: "string" },
+      "allow-incomplete": { type: "boolean" },
+      force: { type: "boolean" },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
     },
@@ -66,19 +67,26 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
     return 0;
   }
   const [command, ...rest] = positionals;
-  if (command !== "check" || rest.length > 0) {
+  if ((command !== "check" && command !== "init") || rest.length > 0) {
     return usageError(
       io,
       command === undefined ? "missing command" : `unknown command "${[command, ...rest].join(" ")}"`,
     );
   }
+  if (command === "init") {
+    const checkOnly = CHECK_ONLY_FLAGS.find((flag) => values[flag] !== undefined);
+    if (checkOnly !== undefined) return usageError(io, `--${checkOnly} is only for check`);
+    return runInit({ repoDir: values.repo, configPath: values.config, force: values.force ?? false }, io);
+  }
+  if (values.force !== undefined) return usageError(io, "--force is only for init");
   if (values.base === undefined || values.revision === undefined) {
     return usageError(io, "--base and --revision are required");
   }
-  if (!isOneOf(REPORT_FORMATS, values.format)) {
+  const format = values.format ?? "md";
+  if (!isOneOf(REPORT_FORMATS, format)) {
     return usageError(io, `--format must be one of ${REPORT_FORMATS.join(", ")}`);
   }
-  const failOn = values["fail-on"];
+  const failOn = values["fail-on"] ?? "breaking";
   if (!isOneOf(FAIL_ON_VALUES, failOn)) {
     return usageError(io, `--fail-on must be one of ${FAIL_ON_VALUES.join(", ")}`);
   }
@@ -88,10 +96,10 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       revision: values.revision,
       repoDir: values.repo,
       configPath: values.config,
-      format: values.format as ReportFormat,
+      format,
       outputPath: values.output,
-      failOn: failOn as FailOn,
-      allowIncomplete: values["allow-incomplete"],
+      failOn,
+      allowIncomplete: values["allow-incomplete"] ?? false,
     },
     io,
   );
