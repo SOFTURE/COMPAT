@@ -26,7 +26,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 | ID | Change | Outcome | Depends on | Mode | Status |
 | --- | --- | --- | --- | --- | --- |
 | **CMP-1** | `backward-compat-checker` | `softure-compat check` runs end to end with the finding model, git refs, reports, exit codes and the `openapi` layer | — | autonomous | done |
-| **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | ready |
+| **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | done |
 | **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | ready |
 | **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | ready |
 | **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | done |
@@ -55,7 +55,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-2: SQL migrations layer
 - **Change ID:** `sql-migrations-layer`
-- **Status:** ready
+- **Status:** done
 - **Outcome:** migrations present in the revision and absent in the base (a folder of scripts or an EF idempotent
   script) are split into statements and classified by dialect-aware rules.
 - **Prerequisites:** CMP-1.
@@ -114,4 +114,5 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ## Done
 - **CMP-1** `backward-compat-checker`: core CLI (config, `RefTree`, finding model, gate, Markdown/JSON reports, exit codes) and the `openapi` layer on oasdiff, with CI; archived in `archive/2026-10-07-backward-compat-checker/`
+- **CMP-2** `sql-migrations-layer`: `sql-migrations` layer (folder and EF Core idempotent sources, Postgres and SQL Server, 26 rules, accept allowlist), shared SQL scanner in `src/sql/` for CMP-3, UTF-16 decoding in `RefTree`; archived in `archive/2026-10-07-sql-migrations-layer/`
 - **CMP-5** `config-layer`: `config` layer over compose interpolation, `.env` examples and configured regex sources; new required keys and removed defaults are `needs-action`, compared file by file and failing closed on silent sources; archived in `archive/2026-10-07-config-layer/`

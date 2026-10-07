@@ -15,7 +15,10 @@ export type RefTree = {
   commit: string;
   /** Repository-relative paths of files at this commit matching any of the globs, sorted. */
   listFiles(globs: string | string[]): Promise<Result<string[]>>;
-  /** File content at this commit decoded as UTF-8 without a BOM, or `null` when the file does not exist there. */
+  /**
+   * File content at this commit, or `null` when the file does not exist there. Decoded by its BOM
+   * (UTF-8, UTF-16LE, UTF-16BE, BOM removed) and as UTF-8 without one.
+   */
   readFile(path: string): Promise<Result<string | null>>;
   /** A directory holding every tracked file of this commit; created once per run. */
   materialize(): Promise<Result<string>>;
@@ -24,15 +27,25 @@ export type RefTree = {
 export type OpenRefTreeOptions = { repoDir: string; ref: string; side: Side; tempRoot: string };
 
 const GIT_TIMEOUT_MS = 600_000;
-const UTF8_BOM = "\uFEFF";
 
-async function runGit(repoDir: string, args: string[], env?: NodeJS.ProcessEnv): Promise<Result<string>> {
+/** Decodes file bytes by their BOM; text without a BOM is read as UTF-8. */
+export function decodeText(bytes: Buffer): string {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3).toString("utf8");
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString("utf16le");
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+  return bytes.toString("utf8");
+}
+
+type RunGitOptions = { env?: NodeJS.ProcessEnv; stdoutEncoding?: "utf8" | "latin1" };
+
+async function runGit(repoDir: string, args: string[], options: RunGitOptions = {}): Promise<Result<string>> {
   const result = await runProcess({
     command: "git",
     args,
     cwd: repoDir,
-    env: env ?? process.env,
+    env: options.env ?? process.env,
     timeoutMs: GIT_TIMEOUT_MS,
+    stdoutEncoding: options.stdoutEncoding ?? "utf8",
   });
   if (!result.ok) {
     return err(
@@ -101,9 +114,12 @@ export async function openRefTree(options: OpenRefTreeOptions): Promise<Result<R
       const files = await listAllFiles();
       if (!files.ok) return files;
       if (!files.value.has(path)) return ok(null);
-      const content = await runGit(repoDir, ["cat-file", "blob", `${commit.value}:${path}`]);
+      // `latin1` keeps every byte, so the encoding is decided here from the BOM, not by the pipe.
+      const content = await runGit(repoDir, ["cat-file", "blob", `${commit.value}:${path}`], {
+        stdoutEncoding: "latin1",
+      });
       if (!content.ok) return err(`cannot read ${path} at ${ref}: ${content.error}`);
-      return ok(content.value.startsWith(UTF8_BOM) ? content.value.slice(1) : content.value);
+      return ok(decodeText(Buffer.from(content.value, "latin1")));
     },
     materialize() {
       materialized ??= materializeTree(repoDir, commit.value, side, tempRoot);
@@ -125,9 +141,11 @@ async function materializeTree(
   const treeDir = join(workDir, "tree");
   await mkdir(treeDir);
   const env = { ...process.env, GIT_INDEX_FILE: join(workDir, "index") };
-  const readTree = await runGit(repoDir, ["read-tree", commit], env);
+  const readTree = await runGit(repoDir, ["read-tree", commit], { env });
   if (!readTree.ok) return err(`cannot materialize ${commit}: ${readTree.error}`);
-  const checkout = await runGit(repoDir, ["checkout-index", "-a", "-f", `--prefix=${treeDir}/`], env);
+  const checkout = await runGit(repoDir, ["checkout-index", "-a", "-f", `--prefix=${treeDir}/`], {
+    env,
+  });
   if (!checkout.ok) return err(`cannot materialize ${commit}: ${checkout.error}`);
   await rm(join(workDir, "index"), { force: true });
   // The real path, so paths reported by tools (oasdiff) can be made relative to it even when
