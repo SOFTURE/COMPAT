@@ -1,12 +1,12 @@
 ---
 change_id: seed-silent-writes
 title: "Seed writes hidden in dynamic SQL or bulk loads are read or reported, never silent"
-status: new
+status: done
 roadmap_item: CMP-7
-branch: null
+branch: claude/seed-silent-writes-xtyoyw
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -23,3 +23,4 @@ Roadmap v2 item CMP-7. Backlog seed-layer entry "dynamic SQL, `COPY` and `BULK I
 
 ## Notes
 - 2026-10-07: opened from roadmap v2.
+- 2026-10-07: implemented and archived (dynamic SQL unwrapped, `COPY ... FROM` and unreadable dynamic SQL reported).

@@ -48,6 +48,49 @@ describe("scanCompose", () => {
     expect(scanCompose("a: ${1}\nb: ${A/x/y}\nc: ${OPEN\nd: ${}\ne: $1")).toEqual([]);
   });
 
+  it("reads references inside block scalars, also after a hash", () => {
+    const text = [
+      "command: | # ${HEADER_NOTE}",
+      "  run ${FIRST} # ${AFTER_HASH}",
+      "  # ${HASH_LINE}",
+      "b: 1 # ${DROPPED}",
+    ];
+    expect(scanCompose(text.join("\n"))).toEqual([
+      { key: "FIRST", line: 2, default: null },
+      { key: "AFTER_HASH", line: 2, default: null },
+      { key: "HASH_LINE", line: 3, default: null },
+    ]);
+  });
+
+  it("reads references on continuation lines of multi-line quoted scalars", () => {
+    const text = ['a: "start ${ONE}', "  # ${TWO}", '  end" # ${DROPPED}', "b: 'x", "  #${THREE}'"];
+    expect(scanCompose(text.join("\n"))).toEqual([
+      { key: "ONE", line: 1, default: null },
+      { key: "TWO", line: 2, default: null },
+      { key: "THREE", line: 5, default: null },
+    ]);
+  });
+
+  it("drops a trailing comment after an apostrophe in a plain scalar", () => {
+    expect(scanCompose("command: echo it's ${KEPT} # ${OLD}")).toEqual([
+      { key: "KEPT", line: 1, default: null },
+    ]);
+  });
+
+  it("reads pass-through environment entries as keys without a default", () => {
+    const text = [
+      "services:",
+      "  app:",
+      "    environment:",
+      "      - API_KEY",
+      "      - LOG=${LOG_LEVEL:-info}",
+    ];
+    expect(scanCompose(text.join("\n"))).toEqual([
+      { key: "LOG_LEVEL", line: 5, default: "info" },
+      { key: "API_KEY", line: 4, default: null },
+    ]);
+  });
+
   it("returns nothing for an empty file", () => {
     expect(scanCompose("")).toEqual([]);
   });
