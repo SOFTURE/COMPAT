@@ -1,3 +1,4 @@
+import { chmodSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,16 +58,79 @@ const changes = (items: object[]) => ({
 });
 
 describe("openapi layer", () => {
-  it("is skipped with an install hint when oasdiff is missing", async () => {
+  it("is skipped with an install hint when oasdiff is not on PATH", async () => {
+    const result = await openapiLayer.run({
+      config: { apis: [fileApi("b2c", "api/b2c.yaml")] },
+      base,
+      revision,
+      repoDir: repo.dir,
+      tempDir: tempRoot,
+      env: { ...process.env, PATH: "/nonexistent", SOFTURE_COMPAT_OASDIFF: undefined },
+      log: () => {},
+    });
+    expect(result).toEqual({
+      layer: "openapi",
+      status: "skipped",
+      reason:
+        "oasdiff not found on PATH (set layers.openapi.oasdiff.path or SOFTURE_COMPAT_OASDIFF, or install it with `go install github.com/oasdiff/oasdiff@v1.33.0`)",
+    });
+  });
+
+  it("fails when a configured oasdiff path does not exist", async () => {
     const result = await run({
       apis: [fileApi("b2c", "api/b2c.yaml")],
       oasdiff: { path: "/nonexistent/oasdiff" },
     });
     expect(result).toEqual({
       layer: "openapi",
-      status: "skipped",
-      reason:
-        'oasdiff not found (tried "/nonexistent/oasdiff"; set layers.openapi.oasdiff.path or SOFTURE_COMPAT_OASDIFF, or install it with `go install github.com/oasdiff/oasdiff@v1.33.0`)',
+      status: "failed",
+      error: "oasdiff at /nonexistent/oasdiff cannot run --version (ENOENT)",
+      findings: [],
+      notes: [],
+    });
+  });
+
+  it("resolves a relative configured path against the repository and fails when it is not executable", async () => {
+    writeFileSync(join(repo.dir, "oasdiff-not-executable"), "#!/bin/sh\n");
+    chmodSync(join(repo.dir, "oasdiff-not-executable"), 0o644);
+    const result = await run({
+      apis: [fileApi("b2c", "api/b2c.yaml")],
+      oasdiff: { path: "./oasdiff-not-executable" },
+    });
+    expect(result).toEqual({
+      layer: "openapi",
+      status: "failed",
+      error: `oasdiff at ${join(repo.dir, "oasdiff-not-executable")} cannot run --version (EACCES)`,
+      findings: [],
+      notes: [],
+    });
+  });
+
+  it("fails when oasdiff --version exits non-zero", async () => {
+    const result = await run(
+      { apis: [fileApi("b2c", "api/b2c.yaml")] },
+      { FAKE_OASDIFF_MODE: "version-fail" },
+    );
+    expect(result).toEqual({
+      layer: "openapi",
+      status: "failed",
+      error: `oasdiff at ${FAKE_OASDIFF} --version exited 2`,
+      findings: [],
+      notes: [],
+    });
+  });
+
+  it("keeps the findings of other APIs when one API fails", async () => {
+    const result = await run(
+      { apis: [fileApi("b2c", "api/b2c.yaml"), fileApi("b2b", "api/b2b.yaml")] },
+      changes([{ id: "endpoint-removed", text: "removed", level: 3, operation: "GET", path: "/a" }]),
+    );
+    expect(result).toEqual({
+      layer: "openapi",
+      status: "failed",
+      error: 'API "b2b": spec api/b2b.yaml exists at neither ref',
+      findings: [expect.objectContaining({ id: "endpoint-removed", class: "breaking", scope: "b2c" })],
+      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
     });
   });
 
@@ -89,6 +153,8 @@ describe("openapi layer", () => {
       layer: "openapi",
       status: "failed",
       error: 'API "b2c": oasdiff changelog exited 3: Error: failed to load base spec',
+      findings: [],
+      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
     });
   });
 
@@ -98,6 +164,8 @@ describe("openapi layer", () => {
       layer: "openapi",
       status: "failed",
       error: 'API "b2c": oasdiff changelog printed output that is not JSON',
+      findings: [],
+      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
     });
   });
 
@@ -165,6 +233,8 @@ describe("openapi layer", () => {
       layer: "openapi",
       status: "failed",
       error: 'API "b2b": spec api/b2b.yaml exists at neither ref',
+      findings: [],
+      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
     });
   });
 });

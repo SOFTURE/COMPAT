@@ -21,25 +21,42 @@ export const openapiLayer = defineLayer({
   description: "HTTP API contract: OpenAPI specs of both refs compared with oasdiff",
   configSchema: openapiConfigSchema,
   async run(context) {
-    const located = await locateOasdiff({ configuredPath: context.config.oasdiff?.path, env: context.env });
-    if (!located.ok) return { layer: OPENAPI_LAYER, status: "failed", error: located.error };
+    const located = await locateOasdiff({
+      configuredPath: context.config.oasdiff?.path,
+      env: context.env,
+      repoDir: context.repoDir,
+    });
+    if (!located.ok)
+      return { layer: OPENAPI_LAYER, status: "failed", error: located.error, findings: [], notes: [] };
     if (located.value.status === "not-found") {
       return {
         layer: OPENAPI_LAYER,
         status: "skipped",
-        reason: `oasdiff not found (tried "${located.value.tried}"; set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
+        reason: `oasdiff not found on PATH (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
       };
     }
     const { oasdiff } = located.value;
     const findings: Finding[] = [];
     const notes = [`oasdiff ${oasdiff.version || "(no version)"} at ${oasdiff.path}`];
+    const errors: string[] = [];
+    // Every API is checked even when one fails, so the findings of the others still reach the gate.
     for (const api of context.config.apis) {
       const outcome = await checkApi(context, api, oasdiff);
       if (!outcome.ok) {
-        return { layer: OPENAPI_LAYER, status: "failed", error: `API "${api.name}": ${outcome.error}` };
+        errors.push(`API "${api.name}": ${outcome.error}`);
+        continue;
       }
       findings.push(...outcome.value.findings);
       notes.push(...outcome.value.notes);
+    }
+    if (errors.length > 0) {
+      return {
+        layer: OPENAPI_LAYER,
+        status: "failed",
+        error: errors.join("; "),
+        findings,
+        notes,
+      } satisfies LayerResult;
     }
     return { layer: OPENAPI_LAYER, status: "ran", findings, notes } satisfies LayerResult;
   },

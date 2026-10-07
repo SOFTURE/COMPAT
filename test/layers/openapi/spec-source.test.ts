@@ -109,6 +109,13 @@ describe("resolveSpec", () => {
     });
   });
 
+  it("does not pass a committed copy of the output off as a fresh export", async () => {
+    expect(await resolveWith({ kind: "command", run: "true", output: "tools/export.sh" })).toEqual({
+      ok: false,
+      error: "export command at revision (v2) succeeded but did not write tools/export.sh",
+    });
+  });
+
   it("fails when a command source times out", async () => {
     const result = await resolveWith({
       kind: "command",

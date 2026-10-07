@@ -29,7 +29,8 @@ export type Finding = {
 export type LayerResult =
   | { layer: string; status: "ran"; findings: Finding[]; notes: string[] }
   | { layer: string; status: "skipped"; reason: string }
-  | { layer: string; status: "failed"; error: string };
+  /** A layer that could not finish; the findings it made before failing still count for the gate. */
+  | { layer: string; status: "failed"; error: string; findings: Finding[]; notes: string[] };
 
 export function getClassRank(findingClass: FindingClass): number {
   return FINDING_CLASSES.indexOf(findingClass);

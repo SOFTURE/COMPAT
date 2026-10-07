@@ -23,17 +23,15 @@ export function getLayerVerdict(result: LayerResult): LayerVerdict {
 export function evaluateGate(results: LayerResult[], options: GateOptions): Gate {
   const reasons: string[] = [];
   for (const result of results) {
-    if (result.status === "ran") {
-      if (options.failOn === "never") continue;
+    if (result.status !== "skipped" && options.failOn !== "never") {
       const failing = result.findings.filter(
         (finding) => !finding.accepted && compareClass(finding.class, options.failOn as FindingClass) >= 0,
       );
       if (failing.length > 0) {
         reasons.push(`${result.layer}: ${failing.length} finding(s) at or above ${options.failOn}`);
       }
-      continue;
     }
-    if (options.allowIncomplete) continue;
+    if (result.status === "ran" || options.allowIncomplete) continue;
     reasons.push(`${result.layer}: layer ${result.status}, so the check is incomplete`);
   }
   const passed = reasons.length === 0;

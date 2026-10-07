@@ -295,5 +295,5 @@ skipped when the binary is absent, unless `COMPAT_REQUIRE_OASDIFF=1`, which make
 
 #### Automated
 - [x] 3.1 `npm run build` produces `dist/cli.js`, `node dist/cli.js --help` exits 0 and `npm run test:pack` passes — f33ea8c
-- [ ] 3.2 The CI workflow is green on the pull request, including the real-oasdiff tests
+- [x] 3.2 The CI workflow is green on the pull request, including the real-oasdiff tests — f33ea8c (verified: CI run 37596461332 green on 785fa1c)
 - [x] 3.3 Gates green (typecheck, lint, test) — f33ea8c

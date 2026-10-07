@@ -4,9 +4,19 @@ import type { Report } from "./report.js";
 
 const CLASSES_BY_SEVERITY = [...FINDING_CLASSES].reverse();
 
-/** Escapes text placed inside a Markdown table cell or a list item. */
+/**
+ * Escapes text placed inside a Markdown table cell or a list item. Spec-controlled text must
+ * not open HTML (which can hide the rest of a PR comment) or mention people and teams.
+ */
 export function escapeMarkdown(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/`/g, "\\`").replace(/\r?\n/g, " ");
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "\\`")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/(^|\s)@(?=[\w-])/g, "$1@\u200b")
+    .replace(/\r?\n/g, " ");
 }
 
 function shortCommit(commit: string): string {
@@ -20,12 +30,12 @@ function formatEvidence(evidence: Evidence): string {
 
 function formatFinding(finding: Finding): string {
   const evidence = finding.evidence.length > 0 ? ` (${finding.evidence.map(formatEvidence).join(", ")})` : "";
-  const line = `- **${escapeMarkdown(finding.layer)} / ${escapeMarkdown(finding.scope)}** \`${finding.id}\` ${escapeMarkdown(finding.subject)}: ${escapeMarkdown(finding.message)}${evidence}`;
+  const line = `- **${escapeMarkdown(finding.layer)} / ${escapeMarkdown(finding.scope)}** \`${finding.id.replace(/`/g, "'")}\` ${escapeMarkdown(finding.subject)}: ${escapeMarkdown(finding.message)}${evidence}`;
   return finding.accepted ? `${line}\n  - accepted: ${escapeMarkdown(finding.accepted.reason)}` : line;
 }
 
 function countByClass(result: LayerResult): string[] {
-  if (result.status !== "ran") return CLASSES_BY_SEVERITY.map(() => "-");
+  if (result.status === "skipped") return CLASSES_BY_SEVERITY.map(() => "-");
   return CLASSES_BY_SEVERITY.map((findingClass) =>
     String(result.findings.filter((finding) => !finding.accepted && finding.class === findingClass).length),
   );
@@ -53,7 +63,7 @@ export function renderMarkdown(report: Report): string {
   }
   if (report.layers.length === 0) lines.push("| (none) | - | - | - | - | - |");
 
-  const findings = report.layers.flatMap((result) => (result.status === "ran" ? result.findings : []));
+  const findings = report.layers.flatMap((result) => (result.status === "skipped" ? [] : result.findings));
   for (const findingClass of CLASSES_BY_SEVERITY) {
     const inClass = findings.filter((finding) => !finding.accepted && finding.class === findingClass);
     if (inClass.length === 0) continue;
@@ -72,7 +82,7 @@ export function renderMarkdown(report: Report): string {
     }
   }
   const notes = report.layers.flatMap((result) =>
-    result.status === "ran"
+    result.status !== "skipped"
       ? result.notes.map((note) => `- **${escapeMarkdown(result.layer)}**: ${escapeMarkdown(note)}`)
       : [],
   );

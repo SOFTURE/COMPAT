@@ -98,6 +98,7 @@ describe("openapi layer without oasdiff", () => {
     expect(await main(check("missing.json"), { ...run.io, env })).toBe(1);
     expect(run.stdout()).toContain("| openapi | skipped |");
     expect(run.stdout()).toContain("go install github.com/oasdiff/oasdiff@v1.33.0");
+    expect(run.stdout()).toContain("oasdiff not found on PATH");
   });
 
   it("passes with --allow-incomplete", async () => {

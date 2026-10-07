@@ -37,7 +37,13 @@ const mixed: LayerResult[] = [
     notes: ["oasdiff version main"],
   },
   { layer: "seed", status: "skipped", reason: "no seed files" },
-  { layer: "config", status: "failed", error: "cannot read compose.yaml" },
+  {
+    layer: "config",
+    status: "failed",
+    error: "cannot read compose.yaml",
+    findings: [createFinding("needs-action", { layer: "config", id: "key-added", subject: "Shop__ApiKey" })],
+    notes: ["read 2 of 3 sources"],
+  },
 ];
 
 describe("renderMarkdown", () => {
@@ -77,11 +83,16 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain(
       "## Not checked\n\n- **seed** skipped: no seed files\n- **config** failed: cannot read compose.yaml",
     );
-    expect(markdown).toContain("## Notes\n\n- **openapi**: oasdiff version main");
+    expect(markdown).toContain(
+      "## Notes\n\n- **openapi**: oasdiff version main\n- **config**: read 2 of 3 sources",
+    );
+    expect(markdown).toContain("| config | failed | 0 | 0 | 1 | 0 |");
+    expect(markdown).toContain("## needs-action (1)\n\n- **config / api** `key-added` Shop__ApiKey");
   });
 
   it("escapes table and code characters", () => {
     expect(escapeMarkdown("a|b`c\\d\ne")).toBe("a\\|b\\`c\\\\d e");
+    expect(escapeMarkdown("<!-- @team/owners -->")).toBe("&lt;!-- @\u200bteam/owners --&gt;");
   });
 });
 

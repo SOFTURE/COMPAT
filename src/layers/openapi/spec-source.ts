@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RefTree } from "../../git/ref-tree.js";
 import { describeProcessError, getTailLines, runProcess } from "../../process/run-process.js";
@@ -57,6 +57,10 @@ async function resolveCommandSpec(
   const { tree } = options;
   const root = await tree.materialize();
   if (!root.ok) return root;
+  // A committed copy of the output must not pass for a fresh export when the command writes elsewhere.
+  const staleOutput = await resolveInsideTree(root.value, source.output);
+  if (!staleOutput.ok) return staleOutput;
+  if (staleOutput.value.status === "found") await rm(staleOutput.value.path, { force: true });
   const timeoutSeconds = source.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS;
   const result = await runProcess({
     command: source.run,

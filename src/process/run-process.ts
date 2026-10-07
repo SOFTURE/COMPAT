@@ -17,6 +17,31 @@ export type ProcessError =
   | { kind: "spawn-failed"; code: string; message: string }
   | { kind: "timed-out"; timeoutMs: number; stdout: string; stderr: string };
 
+/**
+ * How long output may keep arriving after the process exited. A background process that
+ * inherited the pipes (a build server, `cmd &`) would otherwise keep the call open forever.
+ */
+const DRAIN_GRACE_MS = 1_000;
+
+const isWindows = process.platform === "win32";
+
+/** Process groups started by `runProcess` that have not finished yet. */
+const liveGroups = new Set<number>();
+
+/** Kills every process group still running; used when the CLI is interrupted. */
+export function killAllProcessGroups(): void {
+  for (const pid of liveGroups) killGroup(pid);
+  liveGroups.clear();
+}
+
+function killGroup(pid: number): void {
+  try {
+    process.kill(isWindows ? pid : -pid, "SIGKILL");
+  } catch {
+    // Already gone.
+  }
+}
+
 export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOutput, ProcessError>> {
   return new Promise((resolve) => {
     const child = spawn(options.command, options.args ?? [], {
@@ -25,53 +50,59 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
       shell: options.shell ?? false,
       stdio: ["ignore", "pipe", "pipe"],
       // Its own process group, so a timeout also stops grandchildren (a shell's `sleep`, a build server).
-      detached: process.platform !== "win32",
+      detached: !isWindows,
     });
+    const pid = child.pid;
+    if (pid !== undefined) liveGroups.add(pid);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let isTimedOut = false;
     let isSettled = false;
+    let drainTimer: NodeJS.Timeout | undefined;
+
+    const settle = (result: Result<ProcessOutput, ProcessError>): void => {
+      if (isSettled) return;
+      isSettled = true;
+      if (timer) clearTimeout(timer);
+      if (drainTimer) clearTimeout(drainTimer);
+      if (pid !== undefined) {
+        // Stop whatever the process left behind in its group, then forget it.
+        if (!isWindows) killGroup(pid);
+        liveGroups.delete(pid);
+      }
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve(result);
+    };
+    const finish = (code: number | null): void => {
+      const out = Buffer.concat(stdout).toString("utf8");
+      const errOut = Buffer.concat(stderr).toString("utf8");
+      if (isTimedOut) {
+        settle(err({ kind: "timed-out", timeoutMs: options.timeoutMs ?? 0, stdout: out, stderr: errOut }));
+        return;
+      }
+      settle(ok({ exitCode: code ?? 1, stdout: out, stderr: errOut }));
+    };
+
     const timer =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             isTimedOut = true;
-            killTree(child.pid, () => child.kill("SIGKILL"));
+            if (pid === undefined) child.kill("SIGKILL");
+            else killGroup(pid);
           }, options.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error: NodeJS.ErrnoException) => {
-      if (isSettled) return;
-      isSettled = true;
-      if (timer) clearTimeout(timer);
-      resolve(err({ kind: "spawn-failed", code: error.code ?? "UNKNOWN", message: error.message }));
+      settle(err({ kind: "spawn-failed", code: error.code ?? "UNKNOWN", message: error.message }));
     });
-    child.on("close", (code) => {
-      if (isSettled) return;
-      isSettled = true;
-      if (timer) clearTimeout(timer);
-      const out = Buffer.concat(stdout).toString("utf8");
-      const errOut = Buffer.concat(stderr).toString("utf8");
-      if (isTimedOut) {
-        resolve(err({ kind: "timed-out", timeoutMs: options.timeoutMs ?? 0, stdout: out, stderr: errOut }));
-        return;
-      }
-      resolve(ok({ exitCode: code ?? 1, stdout: out, stderr: errOut }));
+    child.on("exit", (code) => {
+      drainTimer = setTimeout(() => finish(code), DRAIN_GRACE_MS);
     });
+    child.on("close", (code) => finish(code));
   });
-}
-
-function killTree(pid: number | undefined, fallback: () => void): void {
-  if (pid === undefined || process.platform === "win32") {
-    fallback();
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    fallback();
-  }
 }
 
 export function describeProcessError(command: string, error: ProcessError): string {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,12 @@ let tempRoot: string;
 beforeAll(async () => {
   repo = createRepo([
     {
-      files: { "api/openapi.yaml": "v1", "db/migrations/0001.sql": "create", "README.md": "readme" },
+      files: {
+        "api/openapi.yaml": "v1",
+        "db/migrations/0001.sql": "create",
+        "README.md": "readme",
+        "db/seed.sql": "\uFEFFinsert",
+      },
       tag: "v1",
     },
     {
@@ -66,6 +71,39 @@ describe("openRefTree", () => {
   it("returns null for a file absent at the ref", async () => {
     expect(await (await open("v2")).readFile("README.md")).toEqual({ ok: true, value: null });
     expect(await (await open("v1")).readFile("db/migrations/0002.sql")).toEqual({ ok: true, value: null });
+  });
+
+  it("strips a UTF-8 byte order mark", async () => {
+    expect(await (await open("v1")).readFile("db/seed.sql")).toEqual({ ok: true, value: "insert" });
+  });
+
+  it("uses repository-root paths when opened from a subdirectory", async () => {
+    const opened = await openRefTree({ repoDir: join(repo.dir, "db"), ref: "v2", side: "base", tempRoot });
+    if (!opened.ok) throw new Error(opened.error);
+    expect(await opened.value.listFiles("db/migrations/*.sql")).toEqual({
+      ok: true,
+      value: ["db/migrations/0001.sql", "db/migrations/0002.sql"],
+    });
+    expect(await opened.value.readFile("api/openapi.yaml")).toEqual({ ok: true, value: "v2" });
+    const materialized = await opened.value.materialize();
+    if (!materialized.ok) throw new Error(materialized.error);
+    expect(readFileSync(join(materialized.value, "api/openapi.yaml"), "utf8")).toBe("v2");
+  });
+
+  it("materializes under the real path when the temp root is behind a symlink", async () => {
+    const linkedRoot = join(tempRoot, "linked");
+    symlinkSync(tempRoot, linkedRoot);
+    const opened = await openRefTree({ repoDir: repo.dir, ref: "v1", side: "base", tempRoot: linkedRoot });
+    if (!opened.ok) throw new Error(opened.error);
+    const materialized = await opened.value.materialize();
+    if (!materialized.ok) throw new Error(materialized.error);
+    expect(materialized.value).toBe(realpathSync(materialized.value));
+    expect(materialized.value.startsWith(linkedRoot)).toBe(false);
+  });
+
+  it("returns an error outside a git repository", async () => {
+    const result = await openRefTree({ repoDir: tempRoot, ref: "v1", side: "base", tempRoot });
+    expect(result).toEqual({ ok: false, error: `${tempRoot} is not inside a git repository` });
   });
 
   it("lists files by path and by glob", async () => {

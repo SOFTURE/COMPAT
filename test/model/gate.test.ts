@@ -44,7 +44,7 @@ describe("evaluateGate", () => {
 
   it("fails on a skipped or failed layer unless incomplete checks are allowed", () => {
     const skipped: LayerResult = { layer: "openapi", status: "skipped", reason: "no oasdiff" };
-    const failed: LayerResult = { layer: "seed", status: "failed", error: "boom" };
+    const failed: LayerResult = { layer: "seed", status: "failed", error: "boom", findings: [], notes: [] };
     expect(evaluateGate([skipped], { ...strict, failOn: "never" })).toEqual({
       passed: false,
       exitCode: 1,
@@ -54,6 +54,21 @@ describe("evaluateGate", () => {
       "seed: layer failed, so the check is incomplete",
     ]);
     expect(evaluateGate([skipped, failed], { ...strict, allowIncomplete: true }).passed).toBe(true);
+  });
+
+  it("counts findings of a failed layer even when incomplete checks are allowed", () => {
+    const partial: LayerResult = {
+      layer: "openapi",
+      status: "failed",
+      error: 'API "other": spec missing',
+      findings: [createFinding("breaking")],
+      notes: [],
+    };
+    expect(evaluateGate([partial], { ...strict, allowIncomplete: true })).toEqual({
+      passed: false,
+      exitCode: 1,
+      reasons: ["openapi: 1 finding(s) at or above breaking"],
+    });
   });
 });
 
@@ -70,6 +85,8 @@ describe("getLayerVerdict", () => {
   it("returns no-findings, skipped or failed", () => {
     expect(getLayerVerdict(ran([]))).toBe("no-findings");
     expect(getLayerVerdict({ layer: "x", status: "skipped", reason: "r" })).toBe("skipped");
-    expect(getLayerVerdict({ layer: "x", status: "failed", error: "e" })).toBe("failed");
+    expect(getLayerVerdict({ layer: "x", status: "failed", error: "e", findings: [], notes: [] })).toBe(
+      "failed",
+    );
   });
 });

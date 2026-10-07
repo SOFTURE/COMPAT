@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { z } from "zod";
 import { getTailLines, runProcess } from "../../process/run-process.js";
 import { err, ok, type Result } from "../../result.js";
@@ -23,13 +24,25 @@ export type OasdiffChange = z.infer<typeof oasdiffChangeSchema>;
 
 export type Oasdiff = { path: string; version: string };
 
-export type LocateResult = { status: "found"; oasdiff: Oasdiff } | { status: "not-found"; tried: string };
+export type LocateResult = { status: "found"; oasdiff: Oasdiff } | { status: "not-found" };
 
+/**
+ * Finds oasdiff. Only a plain `oasdiff` missing from PATH counts as not found (the layer is
+ * skipped); a path the consumer configured that cannot run is an error, so a typo never passes
+ * as an incomplete check. A relative configured path is resolved against the repository root.
+ */
 export async function locateOasdiff(options: {
   configuredPath?: string;
   env: NodeJS.ProcessEnv;
+  repoDir: string;
 }): Promise<Result<LocateResult>> {
-  const candidate = options.configuredPath ?? options.env[OASDIFF_ENV_VAR] ?? "oasdiff";
+  const configured = options.configuredPath ?? options.env[OASDIFF_ENV_VAR];
+  const candidate =
+    configured === undefined
+      ? "oasdiff"
+      : configured.includes("/") || configured.includes("\\")
+        ? resolve(options.repoDir, configured)
+        : configured;
   const probe = await runProcess({
     command: candidate,
     args: ["--version"],
@@ -37,16 +50,14 @@ export async function locateOasdiff(options: {
     timeoutMs: 30_000,
   });
   if (!probe.ok) {
-    if (
-      probe.error.kind === "spawn-failed" &&
-      (probe.error.code === "ENOENT" || probe.error.code === "EACCES")
-    ) {
-      return ok({ status: "not-found", tried: candidate });
+    if (configured === undefined && probe.error.kind === "spawn-failed" && probe.error.code === "ENOENT") {
+      return ok({ status: "not-found" });
     }
-    return err(`oasdiff (${candidate}) did not answer --version`);
+    const cause = probe.error.kind === "spawn-failed" ? probe.error.code : "timed out";
+    return err(`oasdiff at ${candidate} cannot run --version (${cause})`);
   }
   if (probe.value.exitCode !== 0) {
-    return err(`oasdiff (${candidate}) --version exited ${probe.value.exitCode}`);
+    return err(`oasdiff at ${candidate} --version exited ${probe.value.exitCode}`);
   }
   return ok({ status: "found", oasdiff: { path: candidate, version: probe.value.stdout.trim() } });
 }
