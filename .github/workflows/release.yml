@@ -125,18 +125,28 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           DIST_TAG: ${{ needs.validate.outputs.dist-tag }}
-          # Empty when the secret is not set; npm then authenticates with OIDC (trusted publishing).
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Kept out of NODE_AUTH_TOKEN so the first attempt authenticates with OIDC (trusted publishing). The token is a
+          # fallback only: npm validates the trusted publisher on its first OIDC publish.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if npm view "${PACKAGE}@${VERSION}" version >/dev/null 2>&1; then
             echo "${PACKAGE}@${VERSION} is already on npm, skipping."
-          elif [ -z "${NODE_AUTH_TOKEN}" ] && ! npm view "${PACKAGE}" name >/dev/null 2>&1; then
-            # Trusted publishing cannot exist for a package that was never published, so OIDC would fail anyway.
-            echo "::warning::${PACKAGE} is not on npm yet and the NPM_TOKEN secret is not set. Add NPM_TOKEN and run this workflow from master to publish ${VERSION}."
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          elif ! npm view "${PACKAGE}" name >/dev/null 2>&1; then
+            # Trusted publishing cannot exist for a package that was never published, so only a token can publish it.
+            if [ -z "${NPM_TOKEN}" ]; then
+              echo "::warning::${PACKAGE} is not on npm yet and the NPM_TOKEN secret is not set. Add NPM_TOKEN and run this workflow from master to publish ${VERSION}."
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --provenance --access public --tag "${DIST_TAG}"
+          elif NODE_AUTH_TOKEN="" npm publish --provenance --access public --tag "${DIST_TAG}"; then
+            echo "Published ${PACKAGE}@${VERSION} with OIDC (trusted publishing)."
+          elif [ -n "${NPM_TOKEN}" ]; then
+            echo "::warning::Publishing with OIDC failed; falling back to NPM_TOKEN. Check the npm trusted publisher (SOFTURE/COMPAT, release.yml)."
+            NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --provenance --access public --tag "${DIST_TAG}"
           else
-            npm publish --provenance --access public --tag "${DIST_TAG}"
+            echo "::error::Publishing ${PACKAGE}@${VERSION} with OIDC failed and the NPM_TOKEN secret is not set."
+            exit 1
           fi
           echo "published=true" >> "$GITHUB_OUTPUT"
 
