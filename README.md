@@ -119,7 +119,8 @@ The check needs both refs in the clone, so fetch the full history (or at least t
 
 ## Configuration
 
-`compat.config.json` lives at the repository root (or wherever `--config` points). Unknown keys are errors, so a
+`check` and `init` use `compat.config.json` in the `--repo` directory (default: the current directory), or the
+file `--config` names. Unknown keys are errors, so a
 typo never silently disables a check. Every layer is optional; a configured layer runs unless it has
 `"enabled": false`. All paths and globs are relative to the repository root; globs support `**`, `*`, `?` and
 `{a,b}`.

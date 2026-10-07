@@ -11,7 +11,7 @@ import { type CheckIo, EXIT_CANNOT_RUN } from "./check.js";
 
 export type InitOptions = {
   repoDir?: string;
-  /** Where to write the config; relative to the current directory. Default: `<repo root>/compat.config.json`. */
+  /** Where to write the config; relative to the current directory. Default: `<repoDir>/compat.config.json`, as for `check`. */
   configPath?: string;
   force: boolean;
 };
@@ -272,11 +272,13 @@ export async function runInit(options: InitOptions, io: CheckIo): Promise<number
     io.stderr(`softure-compat: ${message}\n`);
     return EXIT_CANNOT_RUN;
   };
-  const repoRoot = await resolveRepoRoot(resolve(io.cwd, options.repoDir ?? "."));
+  const repoDir = resolve(io.cwd, options.repoDir ?? ".");
+  const repoRoot = await resolveRepoRoot(repoDir);
   if (!repoRoot.ok) return fail(repoRoot.error);
+  // The same default as `check`, so `init` and `check` started from one directory use one file.
   const configPath =
     options.configPath === undefined
-      ? resolve(repoRoot.value, DEFAULT_CONFIG_FILE)
+      ? resolve(repoDir, DEFAULT_CONFIG_FILE)
       : resolve(io.cwd, options.configPath);
   if (!options.force && (await exists(configPath))) {
     return fail(`${configPath} already exists; use --force to overwrite it`);

@@ -186,9 +186,9 @@ a compose-only repository, `main` usage errors.
 ### Phase 4: README
 
 #### Automated
-- [x] 4.1 `npx vitest run test/readme.test.ts` passes
-- [x] 4.4 `npm publish --dry-run` and the pack test list `README.md`
-- [x] 4.2 Gates green (typecheck, lint, test)
+- [x] 4.1 `npx vitest run test/readme.test.ts` passes — 38c7cad
+- [x] 4.4 `npm publish --dry-run` and the pack test list `README.md` — 38c7cad
+- [x] 4.2 Gates green (typecheck, lint, test) — 38c7cad
 
 #### Manual
 - [ ] 4.3 The owner can configure PETSEO from the README alone

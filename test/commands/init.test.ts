@@ -191,6 +191,19 @@ describe("softure-compat init", () => {
     expect(existsSync(join(repo.dir, "ops/compat.json"))).toBe(true);
   });
 
+  it("writes where check reads by default when started from a subdirectory", async () => {
+    const repo = repoWith({
+      "services/api/compose.yaml": "services:\n  api:\n    environment:\n      A: ${A}\n",
+    });
+    const subdir = join(repo.dir, "services/api");
+    const run = createIo(subdir);
+    expect(await main(["init"], run.io)).toBe(0);
+    expect(existsSync(join(subdir, "compat.config.json"))).toBe(true);
+    expect(existsSync(join(repo.dir, "compat.config.json"))).toBe(false);
+    const check = createIo(subdir);
+    expect(await main(["check", "--base", "v1", "--revision", "v1"], check.io)).toBe(0);
+  });
+
   it("asks for a commit in a repository without one", async () => {
     const dir = mkdtempSync(join(tmpdir(), "compat-init-empty-"));
     try {
