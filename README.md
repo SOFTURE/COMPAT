@@ -338,9 +338,11 @@ A re-classified finding keeps its rule id and shows `reclassified from <class> b
 report carries `reclassified: { from, by, reason }` and evidence with `side: "client"`.
 
 The TypeScript reader understands NSwag, swaggie, orval, axios or fetch style clients (a path literal plus
-`method: "POST"`, `.post(...)` or `request("post", ...)`) and openapi-typescript `paths`. It fails closed: a client
-ref missing from the clone (fetch tags, `fetch-depth: 0`), a generated client that is absent or yields no operation,
-or `sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
+`method: "POST"`, `.post(...)` or `request("post", ...)`) and openapi-typescript `paths`. Template holes, nested
+template literals included (`` `/api/pets/${encodeURIComponent(`${petId}`)}` ``), read as path parameters. It fails
+closed: a client ref missing from the clone (fetch tags, `fetch-depth: 0`), a generated client that is absent or
+yields no operation, a URL string (`const url = ...`, `url: ...`) the reader could not turn into an operation, or
+`sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
 called with every method.
 
 For an `enum-member-exposed-added` finding of an enum exposed through an API with clients, the layer scans the
