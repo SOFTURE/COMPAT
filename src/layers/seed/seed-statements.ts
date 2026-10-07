@@ -1,0 +1,584 @@
+import {
+  IDENTIFIER_PATTERN,
+  NAME_PATTERN,
+  parseName,
+  type SqlName,
+  unquoteIdentifier,
+} from "../../sql/identifiers.js";
+import { findClosingParen, type SqlDialect, splitStatements, splitTopLevel } from "../../sql/statements.js";
+
+/**
+ * Reads a seed script (a script that runs on every deploy) into the statements that write rows.
+ * Row-bearing statements keep one entry per row with its key, so two versions of a seed can be
+ * compared row by row; other writes keep their normalised text.
+ */
+
+/** What a statement does when the row already exists: overwrite it, leave it, or nothing guards it. */
+export type ConflictMode = "update" | "ignore" | "none";
+
+export type SeedRow = {
+  /** Normalised values of the key columns, joined with `, `. */
+  key: string;
+  /** Normalised values of the whole row, joined with `, `. */
+  values: string;
+  /** 1-based line of the row's tuple. */
+  line: number;
+};
+
+export type SeedStatement =
+  | {
+      kind: "rows";
+      table: SqlName;
+      /** Column names as written (unquoted); empty when the statement has no column list. */
+      columns: string[];
+      /** Columns the row key is made of, as written; `[]` with no column list (the first value is the key). */
+      keyColumns: string[];
+      rows: SeedRow[];
+      mode: ConflictMode;
+      /** `MERGE ... WHEN NOT MATCHED BY SOURCE THEN DELETE`: rows missing from the source are deleted. */
+      deletesMissing: boolean;
+      /**
+       * The normalised `IF NOT EXISTS (...)` condition when the mode comes from such a guard: it checks
+       * once for the whole block, so a row added under a guard the base already had never reaches
+       * databases where the guard is false.
+       */
+      guard: string | null;
+      /** Normalised text of what the statement does with its rows (`ON CONFLICT ...`, the `MERGE` clauses). */
+      action: string;
+      line: number;
+    }
+  | {
+      kind: "insert-query";
+      table: SqlName;
+      mode: ConflictMode;
+      /** Normalised text, prefixed with the `IF NOT EXISTS` guard when one applies. */
+      text: string;
+      line: number;
+    }
+  | {
+      kind: "merge-query";
+      table: SqlName;
+      updates: boolean;
+      deletes: boolean;
+      inserts: boolean;
+      text: string;
+      line: number;
+    }
+  | { kind: "update" | "delete" | "truncate"; table: SqlName; text: string; line: number };
+
+/** Nested SQL (a `DO` body) is unwrapped at most this deep. */
+const MAX_NESTING = 3;
+
+const NAME = NAME_PATTERN;
+const IDENT = IDENTIFIER_PATTERN;
+const TOP = "(?:TOP\\s*\\([^)]*\\)\\s+)?";
+
+const pattern = (source: string) => new RegExp(source, "is");
+
+const INSERT = pattern(`^INSERT\\s+(?:INTO\\s+)?(${NAME})(?:\\s+AS\\s+(?!VALUES\\b|SELECT\\b)${IDENT})?\\s*`);
+const MERGE = pattern(
+  `^MERGE\\s+${TOP}(?:INTO\\s+)?(${NAME})(?:\\s+WITH\\s*\\([^)]*\\))?(?:\\s+(?:AS\\s+)?(?!USING\\b)${IDENT})?\\s+USING\\s+`,
+);
+const UPDATE = pattern(`^UPDATE\\s+${TOP}(?:ONLY\\s+)?(${NAME})`);
+const DELETE = pattern(`^DELETE\\s+${TOP}(?:FROM\\s+)?(?:ONLY\\s+)?(${NAME})`);
+const TRUNCATE = pattern(`^TRUNCATE\\s+(?:TABLE\\s+)?(?:ONLY\\s+)?(${NAME})`);
+const DO_BLOCK = pattern("^DO\\s+(?:LANGUAGE\\s+\\w+\\s+)?(\\$\\w*\\$)(.*)\\1(?:\\s+LANGUAGE\\s+\\w+)?$");
+const ON_CONFLICT = pattern("\\bON\\s+CONFLICT\\b(.*?)\\bDO\\s+(UPDATE|NOTHING)\\b");
+const WHERE_NOT_EXISTS = pattern("\\bWHERE\\s+NOT\\s+EXISTS\\s*\\(");
+const MERGE_CLAUSE =
+  /\bWHEN\s+(NOT\s+MATCHED(?:\s+BY\s+(SOURCE|TARGET))?|MATCHED)\b.*?\bTHEN\s+(UPDATE|DELETE|INSERT|DO\s+NOTHING)\b/gis;
+const ON_PAIR = new RegExp(`(${IDENT})\\s*\\.\\s*(${IDENT})\\s*=\\s*(${IDENT})\\s*\\.\\s*(${IDENT})`, "g");
+const BEGIN_BLOCK = /^BEGIN\b(?!\s+(?:TRAN|TRANSACTION|DISTRIBUTED)\b)(?:\s+(?:TRY|CATCH)\b)?\s*/i;
+const END_BLOCK: Record<SqlDialect, RegExp> = {
+  postgres: /^END\b(?:\s+IF\b)?\s*/i,
+  sqlserver: /^END\b(?:\s+(?:TRY|CATCH)\b)?\s*/i,
+};
+const ELSE = /^ELSE\b\s*/i;
+const ELSIF = /^ELS(?:E\s+)?IF\b/i;
+const IF_NOT_EXISTS = /^IF\s+NOT\s+EXISTS\s*\(/i;
+
+/** An open `IF`/`BEGIN` block; `guard` is the normalised `IF NOT EXISTS (...)` condition of a guarding block. */
+type Block = { guard: string | null };
+
+type Piece = { sql: string; line: number };
+
+/** Collapses whitespace outside quotes and drops it around `(`, `)` and `,`, so formatting does not count. */
+export function normalizeSql(text: string, dialect: SqlDialect): string {
+  let result = "";
+  let pendingSpace = false;
+  let index = 0;
+  const closers: Record<string, string> = { "'": "'", '"': '"' };
+  if (dialect === "sqlserver") closers["["] = "]";
+  const flushSpace = (next: string) => {
+    if (pendingSpace && result !== "" && !/[(,]$/.test(result) && !/^[),]/.test(next)) result += " ";
+    pendingSpace = false;
+  };
+  while (index < text.length) {
+    const char = text[index] as string;
+    const close = closers[char];
+    if (close !== undefined) {
+      let end = index + 1;
+      while (end < text.length) {
+        if (text[end] === close) {
+          if (text[end + 1] === close) {
+            end += 2;
+            continue;
+          }
+          break;
+        }
+        end += 1;
+      }
+      const quoted = text.slice(index, end + 1);
+      flushSpace(quoted);
+      result += quoted;
+      index = end + 1;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      pendingSpace = true;
+      index += 1;
+      continue;
+    }
+    flushSpace(char);
+    result += char;
+    index += 1;
+  }
+  return result;
+}
+
+function countNewlines(text: string): number {
+  let count = 0;
+  for (const char of text) if (char === "\n") count += 1;
+  return count;
+}
+
+/** Text after `prefixLength` characters of `piece`, trimmed, with its true line. */
+function getRest(piece: Piece, prefixLength: number): Piece {
+  const rest = piece.sql.slice(prefixLength);
+  const leading = rest.length - rest.trimStart().length;
+  return {
+    sql: rest.trim(),
+    line: piece.line + countNewlines(piece.sql.slice(0, prefixLength + leading)),
+  };
+}
+
+/**
+ * When a string or quoted identifier starts at `index`, the index just after it; otherwise -1.
+ * Postgres `E'...'` strings use backslash escapes.
+ */
+function skipQuoted(text: string, index: number, dialect: SqlDialect): number {
+  const char = text[index];
+  if (char !== "'" && char !== '"' && !(char === "[" && dialect === "sqlserver")) return -1;
+  const close = char === "[" ? "]" : char;
+  const hasBackslashEscapes =
+    char === "'" &&
+    dialect === "postgres" &&
+    /[Ee]/.test(text[index - 1] ?? "") &&
+    !/[\w$]/.test(text[index - 2] ?? "");
+  let end = index + 1;
+  while (end < text.length) {
+    if (hasBackslashEscapes && text[end] === "\\") {
+      end += 2;
+      continue;
+    }
+    if (text[end] === close) {
+      if (text[end + 1] !== close) return end + 1;
+      end += 2;
+      continue;
+    }
+    end += 1;
+  }
+  return text.length;
+}
+
+/** Index of the `)` closing the `(` at `open`, scanning only from `open` (linear for long `VALUES` lists); -1 when unclosed. */
+function findTupleClose(text: string, open: number, dialect: SqlDialect): number {
+  let depth = 0;
+  let index = open;
+  while (index < text.length) {
+    const quotedEnd = skipQuoted(text, index, dialect);
+    if (quotedEnd !== -1) {
+      index = quotedEnd;
+      continue;
+    }
+    if (text[index] === "(") depth += 1;
+    else if (text[index] === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+/**
+ * Index of the first occurrence of `word` (a regular-expression source matched as a whole word) at
+ * parenthesis depth 0 and outside quotes, or -1.
+ */
+function findTopLevelWord(text: string, word: RegExp, dialect: SqlDialect): number {
+  let depth = 0;
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] as string;
+    const quotedEnd = skipQuoted(text, index, dialect);
+    if (quotedEnd !== -1) {
+      index = quotedEnd;
+      continue;
+    }
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (depth === 0 && !/[\w$#@]/.test(text[index - 1] ?? " ")) {
+      const match = word.exec(text.slice(index));
+      if (match && match.index === 0) return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+/**
+ * The statements of a `DO` body: from the first `BEGIN` to the `EXCEPTION` or `END` of that same
+ * block. Nested `BEGIN ... END` blocks and `CASE ... END` expressions are counted, so an inner
+ * `EXCEPTION` does not cut the body short.
+ */
+function getDoBody(body: string, dialect: SqlDialect): { text: string; offset: number } | null {
+  const begin = /\bBEGIN\b/i.exec(body);
+  if (!begin) return null;
+  const start = begin.index + begin[0].length;
+  const words = /\b(?:BEGIN|CASE|END(?:\s+(?:IF|LOOP|CASE)\b)?|EXCEPTION)\b/giy;
+  let depth = 1;
+  let index = start;
+  while (index < body.length) {
+    const quotedEnd = skipQuoted(body, index, dialect);
+    if (quotedEnd !== -1) {
+      index = quotedEnd;
+      continue;
+    }
+    words.lastIndex = index;
+    const word = /[\w$]/.test(body[index - 1] ?? " ") ? null : words.exec(body);
+    if (!word) {
+      index += 1;
+      continue;
+    }
+    const upper = word[0].toUpperCase().replace(/\s+/g, " ");
+    if (upper === "BEGIN" || upper === "CASE") depth += 1;
+    else if (upper === "END") depth -= 1;
+    else if (upper === "END CASE") depth -= 1;
+    if ((upper === "EXCEPTION" && depth === 1) || depth === 0) {
+      return { text: body.slice(start, index), offset: start };
+    }
+    index += word[0].length;
+  }
+  return { text: body.slice(start), offset: start };
+}
+
+/** Reads the `VALUES` tuples starting at `start`; `null` when any tuple cannot be read. */
+function readTuples(
+  sql: string,
+  start: number,
+  dialect: SqlDialect,
+): { tuples: { values: string[]; offset: number }[]; end: number } | null {
+  const tuples: { values: string[]; offset: number }[] = [];
+  let index = start;
+  while (true) {
+    while (/\s/.test(sql[index] ?? "")) index += 1;
+    if (sql[index] !== "(") return null;
+    const close = findTupleClose(sql, index, dialect);
+    if (close === -1) return null;
+    tuples.push({
+      values: splitTopLevel(sql.slice(index + 1, close), dialect).map((value) =>
+        normalizeSql(value, dialect),
+      ),
+      offset: index,
+    });
+    index = close + 1;
+    while (/\s/.test(sql[index] ?? "")) index += 1;
+    if (sql[index] !== ",") return { tuples, end: index };
+    index += 1;
+  }
+}
+
+function sameColumn(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/** Positions of `keyColumns` in `columns`; position 0 when the key cannot be found. */
+function getKeyIndexes(columns: string[], keyColumns: string[]): number[] {
+  const indexes = keyColumns.map((key) => columns.findIndex((column) => sameColumn(column, key)));
+  return indexes.length > 0 && indexes.every((index) => index !== -1) ? indexes : [0];
+}
+
+function buildRows(
+  piece: Piece,
+  tuples: { values: string[]; offset: number }[],
+  keyIndexes: number[],
+): SeedRow[] {
+  return tuples.map(({ values, offset }) => ({
+    key: keyIndexes.map((index) => values[index] ?? "").join(", "),
+    values: values.join(", "),
+    line: piece.line + countNewlines(piece.sql.slice(0, offset)),
+  }));
+}
+
+function readColumns(sql: string, start: number, dialect: SqlDialect): { columns: string[]; end: number } {
+  let index = start;
+  while (/\s/.test(sql[index] ?? "")) index += 1;
+  if (sql[index] !== "(") return { columns: [], end: start };
+  const close = findClosingParen(sql, index, dialect);
+  if (close === -1) return { columns: [], end: start };
+  return {
+    columns: splitTopLevel(sql.slice(index + 1, close), dialect).map(unquoteIdentifier),
+    end: close + 1,
+  };
+}
+
+function readInsert(
+  piece: Piece,
+  match: RegExpExecArray,
+  guard: string | null,
+  dialect: SqlDialect,
+): SeedStatement {
+  const { sql, line } = piece;
+  const table = parseName(match[1] as string, dialect);
+  const { columns, end: columnsEnd } = readColumns(sql, match[0].length, dialect);
+  const afterColumns = sql
+    .slice(columnsEnd)
+    .replace(/^\s*OVERRIDING\s+(?:SYSTEM|USER)\s+VALUE\b/i, "")
+    .trimStart();
+  const sourceStart = sql.length - afterColumns.length;
+  const values = /^VALUES\b/i.exec(afterColumns);
+  const tuples = values ? readTuples(sql, sourceStart + values[0].length, dialect) : null;
+  const tail = tuples ? sql.slice(tuples.end) : afterColumns;
+  const conflict = ON_CONFLICT.exec(tail);
+  let mode: ConflictMode = "none";
+  if (conflict) mode = (conflict[2] as string).toUpperCase() === "UPDATE" ? "update" : "ignore";
+  else if (guard !== null || (!tuples && WHERE_NOT_EXISTS.test(afterColumns))) mode = "ignore";
+  if (!tuples) {
+    const text = normalizeSql(sql, dialect);
+    return {
+      kind: "insert-query",
+      table,
+      mode,
+      text: guard === null ? text : `IF NOT EXISTS ${guard} ${text}`,
+      line,
+    };
+  }
+  const target = conflict ? /^\s*\(([^)]*)\)/.exec(conflict[1] as string) : null;
+  const conflictColumns = target ? splitTopLevel(target[1] as string, dialect).map(unquoteIdentifier) : [];
+  const keyIndexes = getKeyIndexes(columns, conflictColumns);
+  return {
+    kind: "rows",
+    table,
+    columns,
+    keyColumns: columns.length === 0 ? [] : keyIndexes.map((index) => columns[index] as string),
+    rows: buildRows(piece, tuples.tuples, keyIndexes),
+    mode,
+    deletesMissing: false,
+    guard: conflict ? null : guard,
+    action: normalizeSql(tail, dialect),
+    line,
+  };
+}
+
+function readMerge(piece: Piece, match: RegExpExecArray, dialect: SqlDialect): SeedStatement {
+  const { sql, line } = piece;
+  const table = parseName(match[1] as string, dialect);
+  const clauses = [...sql.matchAll(MERGE_CLAUSE)].map((clause) => ({
+    matched: !/^NOT\b/i.test(clause[1] as string),
+    bySource: (clause[2] ?? "").toUpperCase() === "SOURCE",
+    action: (clause[3] as string).toUpperCase().replace(/\s+/g, " "),
+  }));
+  const updates = clauses.some((clause) => clause.action === "UPDATE");
+  const deletesMatched = clauses.some((clause) => clause.matched && clause.action === "DELETE");
+  const deletesMissing = clauses.some((clause) => clause.bySource && clause.action === "DELETE");
+  const inserts = clauses.some((clause) => !clause.matched && !clause.bySource && clause.action === "INSERT");
+  const query: SeedStatement = {
+    kind: "merge-query",
+    table,
+    updates,
+    deletes: deletesMatched || deletesMissing,
+    inserts,
+    text: normalizeSql(sql, dialect),
+    line,
+  };
+  const sourceOpen = match[0].length;
+  if (sql[sourceOpen] !== "(" || deletesMatched || (!updates && !inserts)) return query;
+  const sourceClose = findClosingParen(sql, sourceOpen, dialect);
+  if (sourceClose === -1) return query;
+  const inner = sql.slice(sourceOpen + 1, sourceClose);
+  const values = /^\s*VALUES\b/i.exec(inner);
+  if (!values) return query;
+  const tuples = readTuples(sql, sourceOpen + 1 + values[0].length, dialect);
+  if (!tuples || sql.slice(tuples.end, sourceClose).trim() !== "") return query;
+  const alias = pattern(`^\\s*(?:AS\\s+)?(${IDENT})`).exec(sql.slice(sourceClose + 1));
+  if (!alias) return query;
+  const sourceAlias = unquoteIdentifier(alias[1] as string);
+  const { columns, end: columnsEnd } = readColumns(sql, sourceClose + 1 + alias[0].length, dialect);
+  const whenIndex = sql.search(/\bWHEN\b/i);
+  const condition = sql.slice(sourceClose + 1, whenIndex === -1 ? sql.length : whenIndex);
+  const keyColumns: string[] = [];
+  for (const pair of condition.matchAll(ON_PAIR)) {
+    const [left, leftColumn, right, rightColumn] = [pair[1], pair[2], pair[3], pair[4]].map((part) =>
+      unquoteIdentifier(part as string),
+    ) as [string, string, string, string];
+    if (sameColumn(left, sourceAlias)) keyColumns.push(leftColumn);
+    else if (sameColumn(right, sourceAlias)) keyColumns.push(rightColumn);
+  }
+  const keyIndexes = getKeyIndexes(columns, keyColumns);
+  return {
+    kind: "rows",
+    table,
+    columns,
+    keyColumns: columns.length === 0 ? [] : keyIndexes.map((index) => columns[index] as string),
+    rows: buildRows(piece, tuples.tuples, keyIndexes),
+    mode: updates ? "update" : "ignore",
+    deletesMissing,
+    guard: null,
+    action: normalizeSql(sql.slice(Math.max(columnsEnd, sourceClose + 1 + alias[0].length)), dialect),
+    line,
+  };
+}
+
+/** Reads one statement without block keywords; `null` when it writes no rows the layer tracks. */
+function readWrite(piece: Piece, guard: string | null, dialect: SqlDialect): SeedStatement | null {
+  const { sql, line } = piece;
+  const insert = INSERT.exec(sql);
+  if (insert) return readInsert(piece, insert, guard, dialect);
+  const merge = MERGE.exec(sql);
+  if (merge) return readMerge(piece, merge, dialect);
+  const simple: [RegExp, "update" | "delete" | "truncate"][] = [
+    [UPDATE, "update"],
+    [DELETE, "delete"],
+    [TRUNCATE, "truncate"],
+  ];
+  for (const [regex, kind] of simple) {
+    const found = regex.exec(sql);
+    if (found) {
+      const table = parseName(found[1] as string, dialect);
+      return { kind, table, text: normalizeSql(sql, dialect), line };
+    }
+  }
+  return null;
+}
+
+/** State shared by the statements of one sequence (a script, or one `DO` body). */
+type Reader = { dialect: SqlDialect; depth: number; blocks: Block[]; out: SeedStatement[] };
+
+/** The condition of the innermost open guarding block, or `null`. */
+function getGuard(reader: Reader): string | null {
+  for (let index = reader.blocks.length - 1; index >= 0; index -= 1) {
+    const guard = reader.blocks[index]?.guard;
+    if (guard) return guard;
+  }
+  return null;
+}
+
+/**
+ * Reads one piece of a statement: strips block keywords (`BEGIN`, `END`, `ELSE`, `IF ... THEN`,
+ * T-SQL `IF <condition>`) and reads what follows them.
+ */
+function readPiece(reader: Reader, piece: Piece, inlineGuard: string | null = null): void {
+  const { dialect } = reader;
+  const { sql } = piece;
+  if (sql === "") return;
+
+  const end = END_BLOCK[dialect].exec(sql);
+  if (end) {
+    reader.blocks.pop();
+    readPiece(reader, getRest(piece, end[0].length));
+    return;
+  }
+  const begin = BEGIN_BLOCK.exec(sql);
+  if (begin) {
+    reader.blocks.push({ guard: inlineGuard });
+    readPiece(reader, getRest(piece, begin[0].length));
+    return;
+  }
+  // In PL/pgSQL the IF block is still open at ELSE/ELSIF; in T-SQL the IF block already ended.
+  if (dialect === "postgres" && ELSIF.test(sql)) {
+    const top = reader.blocks[reader.blocks.length - 1];
+    if (top) top.guard = null;
+    const then = findTopLevelWord(sql, /^THEN\b/i, dialect);
+    if (then !== -1) readPiece(reader, getRest(piece, then + 4));
+    return;
+  }
+  const elseMatch = ELSE.exec(sql);
+  if (elseMatch) {
+    const top = reader.blocks[reader.blocks.length - 1];
+    if (top && dialect === "postgres") top.guard = null;
+    readPiece(reader, getRest(piece, elseMatch[0].length));
+    return;
+  }
+  if (/^IF\b/i.test(sql)) {
+    readIf(reader, piece);
+    return;
+  }
+  if (dialect === "postgres") {
+    const doBlock = DO_BLOCK.exec(sql);
+    if (doBlock) {
+      readDoBlock(reader, piece, doBlock);
+      return;
+    }
+  }
+  const write = readWrite(piece, inlineGuard ?? getGuard(reader), dialect);
+  if (write) reader.out.push(write);
+}
+
+function readIf(reader: Reader, piece: Piece): void {
+  const { dialect } = reader;
+  const { sql } = piece;
+  let conditionEnd: number;
+  let guard: string | null = null;
+  const notExists = IF_NOT_EXISTS.exec(sql);
+  if (notExists) {
+    const open = notExists[0].length - 1;
+    const close = findClosingParen(sql, open, dialect);
+    if (close === -1) return;
+    conditionEnd = close + 1;
+    const after = sql.slice(conditionEnd);
+    // Only a bare `IF NOT EXISTS (...)` guards; `IF NOT EXISTS (...) AND ...` is some other condition.
+    if (/^\s*(?:THEN\b|BEGIN\b|INSERT\b|MERGE\b|$)/i.test(after)) {
+      guard = normalizeSql(sql.slice(open, conditionEnd), dialect);
+    }
+  } else {
+    conditionEnd = 2;
+  }
+  if (dialect === "postgres") {
+    const then = findTopLevelWord(sql.slice(conditionEnd), /^THEN\b/i, dialect);
+    if (then === -1) return;
+    reader.blocks.push({ guard });
+    readPiece(reader, getRest(piece, conditionEnd + then + 4));
+    return;
+  }
+  const start = findTopLevelWord(
+    sql.slice(conditionEnd),
+    /^(?:BEGIN|INSERT|UPDATE|DELETE|MERGE|TRUNCATE|SET|EXEC|EXECUTE|SELECT|PRINT|THROW|RAISERROR|RETURN|DECLARE)\b/i,
+    dialect,
+  );
+  if (start === -1) return;
+  readPiece(reader, getRest(piece, conditionEnd + start), guard);
+}
+
+function readDoBlock(reader: Reader, piece: Piece, doBlock: RegExpExecArray): void {
+  if (reader.depth >= MAX_NESTING) return;
+  const tag = doBlock[1] as string;
+  const bodyStart = piece.sql.indexOf(tag) + tag.length;
+  const body = getDoBody(doBlock[2] as string, reader.dialect);
+  if (!body) return;
+  const offset = bodyStart + body.offset;
+  const bodyLine = piece.line + countNewlines(piece.sql.slice(0, offset));
+  readSequence({ ...reader, depth: reader.depth + 1, blocks: [] }, body.text, bodyLine);
+}
+
+function readSequence(reader: Reader, text: string, firstLine: number): void {
+  for (const statement of splitStatements(text, reader.dialect)) {
+    readPiece(reader, { sql: statement.sql, line: firstLine + statement.line - 1 });
+  }
+}
+
+/** The row-writing statements of a seed script, in order. */
+export function readSeedStatements(text: string, dialect: SqlDialect): SeedStatement[] {
+  const out: SeedStatement[] = [];
+  readSequence({ dialect, depth: 0, blocks: [], out }, text, 1);
+  return out;
+}
