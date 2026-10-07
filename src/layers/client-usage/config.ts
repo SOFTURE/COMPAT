@@ -22,6 +22,8 @@ export const clientSchema = z.strictObject({
   generatedClient: generatedClientSchema,
   /** Globs of the client's own code; when set, an operation counts as called only if its function is referenced there. */
   sources: z.array(z.string().min(1)).min(1).optional(),
+  /** `"revision"` for a client deployed with the server: after the deploy only stale tabs run the `refs` builds. */
+  deployedWith: z.literal("revision").optional(),
 });
 
 export type ClientConfig = z.infer<typeof clientSchema>;

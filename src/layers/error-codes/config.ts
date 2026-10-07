@@ -134,6 +134,8 @@ export const errorCodeClientSchema = z
     flags,
     /** The `client-usage` clients whose calls are this client's; defaults to the one with the same name. */
     usage: z.array(name).min(1).optional(),
+    /** `"revision"` for a client deployed with the server: after the deploy only stale tabs run the `refs` builds. */
+    deployedWith: z.literal("revision").optional(),
   })
   .superRefine(checkPattern);
 

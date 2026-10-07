@@ -30,6 +30,8 @@ export type ClientRefUsage = {
   sources?: SourceFile[];
   /** Branch sites in the client's own sources per enum branch target key; `undefined` without sources. */
   branches?: Map<string, { path: string; line: number }[]>;
+  /** Set for a client deployed with the server: this ref only runs in tabs opened before the deploy. */
+  deployedWith?: "revision";
 };
 
 export type RefineSummary = { revisions: FindingRevision[]; toSafe: number; withEvidence: number };
@@ -142,6 +144,13 @@ function capEvidence(finding: Finding, added: Evidence[]): Evidence[] {
   return [...finding.evidence, ...added.slice(0, MAX_EVIDENCE)];
 }
 
+/** `; stale bundle only` when every calling ref belongs to a client deployed with the server. */
+function describeStaleBundle(calls: readonly Call[]): string {
+  return calls.every((call) => call.usage.deployedWith === "revision")
+    ? "; stale bundle only: the client deploys with the server, so only tabs opened before the deploy run these builds"
+    : "";
+}
+
 function refineFinding(finding: Finding, usages: readonly ClientRefUsage[]): Finding | undefined {
   const operation = parseOperation(finding.subject);
   if (operation === undefined) return undefined;
@@ -197,7 +206,7 @@ function refineFinding(finding: Finding, usages: readonly ClientRefUsage[]): Fin
     const omitters = formatRefs(omitting.map(({ call }) => call.usage));
     return {
       ...finding,
-      message: `${finding.message}; ${omitters} may send it without \`${property}\`${rule === "not-nullable" ? " or with null" : ""} (client-usage)`,
+      message: `${finding.message}; ${omitters} may send it without \`${property}\`${rule === "not-nullable" ? " or with null" : ""} (client-usage)${describeStaleBundle(omitting.map(({ call }) => call))}`,
       evidence: capEvidence(
         finding,
         omitting.flatMap(({ call }) => call.operations.map((item) => toEvidence(call.usage, item.line))),
@@ -207,7 +216,7 @@ function refineFinding(finding: Finding, usages: readonly ClientRefUsage[]): Fin
 
   return {
     ...finding,
-    message: `${finding.message}; called by ${formatRefs(calls.map((call) => call.usage))} (client-usage)`,
+    message: `${finding.message}; called by ${formatRefs(calls.map((call) => call.usage))} (client-usage)${describeStaleBundle(calls)}`,
     evidence: capEvidence(
       finding,
       calls.flatMap((call) => call.operations.map((item) => toEvidence(call.usage, item.line))),

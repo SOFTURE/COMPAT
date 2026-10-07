@@ -246,6 +246,23 @@ function Screen({ petId }: Props) {
     expect(revisions[0]?.finding.evidence.filter((item) => item.side === "client")).toHaveLength(3);
   });
 
+  it("marks a finding called only by clients deployed with the server as a stale bundle gap", () => {
+    const removed = finding({
+      id: "api-path-removed-without-deprecation",
+      subject: "POST /api/pets/{petId}/medications",
+    });
+    const coDeployed = refineFindings([removed], [usage({ deployedWith: "revision" })]).revisions[0]?.finding;
+    expect(coDeployed?.class).toBe("breaking");
+    expect(coDeployed?.message).toBe(
+      `${removed.message}; called by mobile@2.2.4 (client-usage); stale bundle only: the client deploys with the server, so only tabs opened before the deploy run these builds`,
+    );
+    const mixed = refineFindings(
+      [removed],
+      [usage({ deployedWith: "revision" }), usage({ client: "admin", ref: "1.0.0" })],
+    ).revisions[0]?.finding;
+    expect(mixed?.message).not.toContain("stale bundle only");
+  });
+
   it("counts a path without a readable method as called with every method", () => {
     const model = readTypescriptClient('export const ROUTE = "/api/pets/{id}";');
     const { revisions } = refineFindings(

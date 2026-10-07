@@ -192,6 +192,7 @@ async function readClientRef(
     commit: tree.commit,
     clientPath: path,
     model,
+    ...(client.deployedWith === undefined ? {} : { deployedWith: client.deployedWith }),
   };
   if (client.sources !== undefined) {
     const sources = await readSources({ tree, globs: client.sources, clientPath: path, targets });

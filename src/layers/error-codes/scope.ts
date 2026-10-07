@@ -53,7 +53,7 @@ export function scopeErrorCodes(
   const unscoped = new Set<string>();
   let toSafe = 0;
   const scoped = findings.map((finding) => {
-    if (finding.id !== "error-code-unknown-to-client") return finding;
+    if (finding.id !== "error-code-unknown-to-client" || finding.class === "safe") return finding;
     const entries = options.returnedBy.filter((entry) =>
       entry.codes.some((glob) => matchesGlob(finding.subject, glob)),
     );

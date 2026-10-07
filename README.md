@@ -400,6 +400,7 @@ of them enabled; it adds no findings of its own. What each live ref calls also s
 | `clients[].refs` | the live client builds: a list of entries, or one selector on its own (see below) |
 | `clients[].generatedClient` | `{ kind: "typescript", path }`: the generated client, read at every client ref |
 | `clients[].sources` | optional globs of the client's own code; an operation then counts as called only when its client function is referenced there |
+| `clients[].deployedWith` | optional `"revision"` for a web client deployed with the server: `refs` then only run in tabs opened before the deploy, so a finding every calling ref of which is such a client keeps its class and its message adds `stale bundle only` |
 
 An entry of `refs` is one of:
 
@@ -499,6 +500,7 @@ both refs and each client's translation map at the client's live refs.
 | `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags` and `workflowRuns` selectors) |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
 | `clients[].usage` | the [`client-usage`](#client-usage) clients whose calls are this client's, for `returnedBy`; defaults to the one with the same name |
+| `clients[].deployedWith` | optional `"revision"` for a web client deployed with the server: its map files are also read at the revision, and a new code the revision build translates is `safe`, reason `only web@2.2.4 tabs opened before the deploy; web@<revision> translates it` |
 | `returnedBy[]` | `{ codes, api, operations }`: codes (or globs such as `Shop.*`) that only these operations of the `openapi` API return; `operations` are `METHOD /path/glob`, the method may be `*` (`* /api/shop/**`); both take one string or a list |
 | `accept[]` | `{ code, client?, reason }`: accepts `error-code-unknown-to-client` for that code (and client); `code` may be a glob such as `Shop.*` |
 
