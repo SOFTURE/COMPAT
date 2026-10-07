@@ -292,6 +292,28 @@ export const ping = () => axios.request({ url: "/api/ping", method: "GET" });
     });
   });
 
+  it("merges the members of an intersection type (allOf)", () => {
+    const model = readTypescriptClient(`
+export type AddMedication = MedicationBase & Audit & { daysOfWeek: DayOfWeek[]; notes?: string };
+export interface MedicationBase { name: string }
+export type Audit = { by: string | null };
+export type Either = MedicationBase | Audit;
+`);
+    expect([...(model.types.get("AddMedication")?.keys() ?? [])]).toEqual([
+      "name",
+      "by",
+      "daysOfWeek",
+      "notes",
+    ]);
+    expect(model.types.get("AddMedication")?.get("daysOfWeek")).toEqual({
+      isOptional: false,
+      isNullable: false,
+      typeName: "DayOfWeek",
+      line: 2,
+    });
+    expect(model.types.has("Either")).toBe(false);
+  });
+
   it("reads the method from an axios-style callee", () => {
     const model = readTypescriptClient(AXIOS);
     expect(model.operations.map(({ method, path, functionName }) => [method, path, functionName])).toEqual([

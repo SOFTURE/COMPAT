@@ -33,7 +33,8 @@ export type RefineSummary = { revisions: FindingRevision[]; toSafe: number; with
 
 type Call = { usage: ClientRefUsage; operations: ClientOperation[] };
 
-function isCalled(usage: ClientRefUsage, operation: ClientOperation): boolean {
+/** Whether the ref's own code calls the operation; without sources every client operation counts. */
+export function isCalled(usage: ClientRefUsage, operation: ClientOperation): boolean {
   if (usage.sourceIdentifiers === undefined || operation.functionName === undefined) return true;
   return usage.sourceIdentifiers.has(operation.functionName);
 }
@@ -48,7 +49,7 @@ function findCalls(usage: ClientRefUsage, method: string, path: string): ClientO
 }
 
 /** `mobile@2.0.1, 2.1.1; admin@1.0.0`: refs grouped by client in the order given. */
-export function formatRefs(usages: readonly ClientRefUsage[]): string {
+export function formatRefs(usages: readonly { client: string; ref: string }[]): string {
   const byClient = new Map<string, string[]>();
   for (const usage of usages) byClient.set(usage.client, [...(byClient.get(usage.client) ?? []), usage.ref]);
   return [...byClient].map(([client, refs]) => `${client}@${refs.join(", ")}`).join("; ");
@@ -68,6 +69,16 @@ export function readPropertyPath(message: string): string[] | undefined {
   return segments.length > 0 ? segments : undefined;
 }
 
+/**
+ * The property path as members of the client types: `allOf[...]` segments are dropped, since a
+ * generated client flattens allOf into one type or an intersection. `undefined` under `oneOf[...]`
+ * or `anyOf[...]`, where no single client type proves the property is always sent.
+ */
+function toMemberPath(propertyPath: string[]): string[] | undefined {
+  if (propertyPath.some((segment) => /^(oneOf|anyOf)\[/.test(segment))) return undefined;
+  return propertyPath.filter((segment) => !segment.startsWith("allOf["));
+}
+
 /** The declaration of the property if the call always sends it under `rule`, else `undefined`. */
 function findAlwaysSent(
   model: ClientModel,
@@ -76,16 +87,19 @@ function findAlwaysSent(
   rule: "required" | "not-nullable",
 ): TypeMember | undefined {
   if (operation.body === undefined || operation.body.isOptional) return undefined;
+  const memberPath = toMemberPath(propertyPath);
+  if (memberPath === undefined) return undefined;
   let typeName: string | undefined = operation.body.typeName;
   let member: TypeMember | undefined;
-  for (const segment of propertyPath) {
+  for (const segment of memberPath) {
     if (typeName === undefined) return undefined;
     member = model.types.get(typeName)?.get(segment);
     if (member === undefined) return undefined;
     typeName = member.typeName;
   }
   if (member === undefined) return undefined;
-  if (rule === "required" && member.isOptional) return undefined;
+  // An omitted property can reach the server as null, so the not-nullable rule needs it always sent too.
+  if (member.isOptional) return undefined;
   if (rule === "not-nullable" && member.isNullable) return undefined;
   return member;
 }

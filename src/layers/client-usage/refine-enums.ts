@@ -10,10 +10,17 @@ const MAX_EVIDENCE = 10;
 /** A source line of a client ref that branches on an exposed enum. */
 export type BranchSite = { path: string; line: number };
 
-/** The enum branch targets of one exposure: one per enum, with the property names its fields end in. */
-export function toBranchTarget(enumName: string, exposure: Exposure): BranchTarget {
+/**
+ * The enum branch target of one exposure: the enum, the property names its fields end in and, when the
+ * finding carries them, the names and values of its members.
+ */
+export function toBranchTarget(enumName: string, exposure: Exposure, values?: string[]): BranchTarget {
   const properties = exposure.fields.map((field) => (field.split(".").at(-1) as string).toLowerCase());
-  return { enumName, properties: [...new Set(properties)].sort() };
+  return {
+    enumName,
+    properties: [...new Set(properties)].sort(),
+    ...(values === undefined ? {} : { values }),
+  };
 }
 
 export function getBranchKey(target: BranchTarget): string {

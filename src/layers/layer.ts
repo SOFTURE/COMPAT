@@ -16,13 +16,26 @@ export type LayerContext<C> = {
   log(message: string): void;
   /** Results of the layers that ran before this one, in registry order; absent when run on its own. */
   results?: readonly LayerResult[];
+  /** What live client refs call, shared by `client-usage` when it ran before this layer. */
+  calls?: readonly ClientRefCalls[];
+};
+
+/** The operations one live client ref calls: method lower-case or `*` when unknown, path normalized. */
+export type ClientRefCalls = {
+  client: string;
+  api: string;
+  ref: string;
+  operations: { method: string; path: string }[];
 };
 
 /** Replaces finding `index` of the earlier layer `layer`; only class, message, evidence and `reclassified` may change. */
 export type FindingRevision = { layer: string; index: number; finding: Finding };
 
-/** A layer's own result plus, for a layer that refines earlier ones, the findings it revised. */
-export type LayerOutput = LayerResult & { revisions?: FindingRevision[] };
+/**
+ * A layer's own result plus, for a layer that refines earlier ones, the findings it revised, and the
+ * client calls it read for the layers after it. Neither reaches the report.
+ */
+export type LayerOutput = LayerResult & { revisions?: FindingRevision[]; calls?: ClientRefCalls[] };
 
 /**
  * A layer compares one aspect of the two refs. Its config schema must be built with

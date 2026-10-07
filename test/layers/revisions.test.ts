@@ -55,6 +55,10 @@ describe("applyRevisions", () => {
       },
       "revision of openapi finding #0 changes exposure",
     ],
+    [
+      { layer: "openapi", index: 0, finding: { ...finding, literals: ["TermsChange"] } },
+      "revision of openapi finding #0 changes literals",
+    ],
   ])("rejects %j", (revision, error) => {
     expect(applyRevisions(results, [revision])).toEqual({ ok: false, error });
   });

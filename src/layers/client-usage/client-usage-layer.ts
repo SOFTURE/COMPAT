@@ -13,7 +13,7 @@ import {
 } from "./config.js";
 import { type BranchTarget, findEnumBranches } from "./find-enum-branches.js";
 import { readIdentifiers, readTypescriptClient } from "./read-typescript-client.js";
-import { type ClientRefUsage, formatRefs, refineFindings } from "./refine.js";
+import { type ClientRefUsage, formatRefs, isCalled, refineFindings } from "./refine.js";
 import { findExposedFindings, getBranchKey, refineExposedFindings, toBranchTarget } from "./refine-enums.js";
 
 type ClientOutcome = { usages: ClientRefUsage[]; notes: string[] };
@@ -88,7 +88,15 @@ export const clientUsageLayer = defineLayer({
         `reclassified ${summary.toSafe} exposed enum finding(s) to safe; ${summary.withEvidence} keep their class with client evidence`,
       );
     }
-    return { layer: CLIENT_USAGE_LAYER, status: "ran", findings: [], notes, revisions };
+    const calls = usages.map((usage) => ({
+      client: usage.client,
+      api: usage.api,
+      ref: usage.ref,
+      operations: usage.model.operations
+        .filter((operation) => isCalled(usage, operation))
+        .map(({ method, path }) => ({ method, path })),
+    }));
+    return { layer: CLIENT_USAGE_LAYER, status: "ran", findings: [], notes, revisions, calls };
   },
 });
 
@@ -98,7 +106,7 @@ function getBranchTargets(exposed: { finding: Finding }[], api: string): BranchT
   for (const { finding } of exposed) {
     for (const exposure of finding.exposure ?? []) {
       if (exposure.api !== api) continue;
-      const target = toBranchTarget(finding.scope, exposure);
+      const target = toBranchTarget(finding.scope, exposure, finding.enumValues);
       targets.set(getBranchKey(target), target);
     }
   }

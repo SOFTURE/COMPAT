@@ -376,7 +376,8 @@ library), every executable project is kept. Two or more APIs listed by one `*.sl
 oasdiff judges the contract, not what deployed clients do. This layer reads what the live builds of each client
 call and send, and re-classifies the `openapi` findings of that client's API and the
 [`enum-member-exposed-added`](#exposed-enums) findings of `persisted-enums`. It runs after both and needs at least one
-of them enabled; it adds no findings of its own.
+of them enabled; it adds no findings of its own. What each live ref calls also scopes
+[`error-codes`](#error-codes) `returnedBy`.
 
 ```json
 {
@@ -421,7 +422,9 @@ What changes, per `openapi` finding of the client's API that is not accepted and
 - No client ref calls the operation → `safe`, reason `not called by mobile@2.0.1, 2.1.1, 2.2.4`.
 - `request-property-became-required`, `new-required-request-property` or `request-property-became-not-nullable`, and
   every calling ref always sends the property (the typed body parameter is not optional and the property is declared
-  without `?`, or without `null` for the not-nullable rule) → `safe`, with the declarations as evidence.
+  without `?`, and also without `null` for the not-nullable rule) → `safe`, with the declarations as evidence.
+  `allOf[...]` segments of the property path are skipped (a generated client flattens allOf into one type or an
+  intersection `A & B`, whose members the reader merges); under `oneOf[...]` or `anyOf[...]` the class stays.
 - Otherwise the class stays, the message names the refs that call the operation (or may omit the property), and the
   calls are added as evidence.
 
@@ -450,6 +453,13 @@ an equality (`===`, `!==`, `==`, `!=`) with an operand ending in the property or
 line that looks like a branch and holds the property or enum name where the scanner read no code (inside a template
 literal, after a literal it lost) counts as a branch too, so a scanner miss never reads as "does not branch".
 
+Common property names (`type`, `status`) also appear on unrelated objects, so a comparison with a string literal
+that names no member of the enum (by name or string value, case-insensitively, at either ref) is not a branch:
+`event.type === "set"` is ignored, `n.type === "TermsChange"` counts. The same holds for a `switch` over the
+property whose `case` labels are all such literals. A string literal is never read as the property itself
+(`key === "content-type"`). Comparisons with identifiers, template literals with holes, or expressions
+(`"a" + b`) still count.
+
 ### error-codes
 
 A server that returns typed error codes (`new Error("Shop.Cart.NotFound", ...)`) that each client translates in its
@@ -468,17 +478,21 @@ both refs and each client's translation map at the client's live refs.
       "pattern": "\"(?<code>[\\w.]+)\"\\s*:"
     }
   ],
-  "accept": [{ "code": "Shop.Cart.NotFound", "client": "mobile", "reason": "the cart is web only" }]
+  "returnedBy": [{ "codes": "ServiceVendor.Location.*", "api": "b2b", "operations": ["POST /api/service-vendors"] }],
+  "accept": [{ "code": "Shop.*", "client": "mobile", "reason": "the shop is web only" }]
 }
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `codes[]` | `{ name, files, pattern, flags? }`: server files read at the base and the revision; the named group `code` of `pattern` captures one code |
+| `codes[]` | `{ kind?: "regex", name, files, pattern, flags?, report? }`: server files read at the base and the revision; the named group `code` of `pattern` captures one code; `report: false` for a source that only feeds a `composed` one |
+| `codes[]` | `{ kind: "composed", name, template, parts }`: codes built at runtime, see below |
 | `clients[]` | `{ name, refs, files, pattern, flags? }`: the client's translation map files, read at every live ref; the named group `code` captures one translated code |
 | `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags` and `workflowRuns` selectors) |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
-| `accept[]` | `{ code, client?, reason }`: accepts `error-code-unknown-to-client` for that code (and client) |
+| `clients[].usage` | the [`client-usage`](#client-usage) clients whose calls are this client's, for `returnedBy`; defaults to the one with the same name |
+| `returnedBy[]` | `{ codes, api, operations }`: codes (or globs such as `Shop.*`) that only these operations of the `openapi` API return; `operations` are `METHOD /path/glob`, the method may be `*` (`* /api/shop/**`); both take one string or a list |
+| `accept[]` | `{ code, client?, reason }`: accepts `error-code-unknown-to-client` for that code (and client); `code` may be a glob such as `Shop.*` |
 
 | Class | Finding ids |
 | --- | --- |
@@ -488,8 +502,35 @@ both refs and each client's translation map at the client's live refs.
 A code the base already returns is live today, so only codes new in the revision count against clients, and a client
 whose every live ref already translates a new code gets no finding. The layer fails closed: a code source that matches
 no file or captures no code at the revision, a client ref missing from the clone, or a map file that is absent or
-yields no code at a client ref fails the layer. Which operations return a code is not checked yet, so a code counts
-for every client even when only operations that client never calls return it.
+yields no code at a client ref fails the layer.
+
+A code counts for every client unless a `returnedBy` entry covers it. With one, and with `client-usage` enabled, the
+finding becomes `safe` for a client whose live refs call none of the matching operations, or call them only as
+operations `openapi` reports as `endpoint-added`; the reason names the operations and refs, for example
+`returned only by POST /api/service-vendors (b2b), which mobile@2.0.1 does not call`. A client's calls are what its
+`client-usage` clients' generated clients call, so an API none of them targets counts as not called. A client
+without `client-usage` calls keeps its findings, and a note says so. Every accept entry is noted with the number of
+findings it accepted, or as unused when it matched none; a finding `returnedBy` already made `safe` is not counted,
+so an entry it made redundant reads as unused.
+
+Some codes are built at runtime, for example a generic `RepositoryErrors<TEntity>.NotFound` declared as
+`$"{typeof(TEntity).Name}Repository.NotFound"`. A `composed` source builds those codes from what `regex` sources
+capture, and they count like literal ones:
+
+```json
+{
+  "codes": [
+    { "name": "literal", "files": ["src/**/*.cs"], "pattern": "static readonly Error \\w+ = new\\(\\s*\"(?<code>[\\w.]+)\"" },
+    { "kind": "regex", "name": "repository-entities", "files": ["src/**/*.cs"], "pattern": "RepositoryErrors<\\s*(?<code>(?!TEntity)\\w+)\\s*>", "report": false },
+    { "kind": "composed", "name": "repository-not-found", "template": "{entity}Repository.NotFound", "parts": { "entity": "repository-entities" } }
+  ]
+}
+```
+
+Every `{part}` of the template names a `regex` code source in `parts`; the source gives one code per combination of
+the codes its parts capture at that ref, and fails above 1000 of them. Its evidence points at the usage that supplied
+the last part in template order (`RepositoryErrors<FeatureFlag>`). A `report: false` source gives no finding and may
+capture nothing at a ref; the `composed` source fails when it builds no code at the revision.
 
 ### sql-migrations
 
@@ -567,6 +608,11 @@ is unwrapped and its statements are compared like any other, with the lines of t
 literal body (`EXEC(@sql)`, `EXECUTE format(...)`, concatenation), `COPY ... FROM` and `BULK INSERT` are reported as
 `unreadable-write`. psql's `\copy` is a client command and is not read.
 
+When [`persisted-enums`](#persisted-enums) runs too, a `row-added` or `row-changed` finding whose rows write a string
+literal equal to a member that `persisted-enums` reports as `enum-member-added` (string storage) becomes
+`rollback-risk`, with the enum declaration as evidence: a base build that reads the table fails on those rows after a
+rollback.
+
 ### persisted-enums
 
 Enum members stored in the database must stay readable by both builds. The layer parses C# and TypeScript enums
@@ -593,7 +639,7 @@ Enum members stored in the database must stay readable by both builds. The layer
 
 | Finding id | Class |
 | --- | --- |
-| `enum-member-added` | `rollback-risk`: once a row holds it, the base build cannot read that row |
+| `enum-member-added` | `rollback-risk`: once a row holds it, the base build cannot read that row; when a [`seed`](#seed) row writes it (string storage), the message says so and the seed row is evidence |
 | `enum-member-removed` | `breaking` |
 | `enum-member-renamed` | `breaking` for string storage; `needs-action` for int storage (the number is unchanged) |
 | `enum-member-renumbered` | `breaking` (int storage: existing rows change meaning) |
@@ -922,8 +968,8 @@ Known gaps in 0.3.0:
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions
   give different values stays unresolved and is reported conservatively (see [dependencies](#dependencies)).
-- A new error code counts against every live client whose map lacks it, whether or not that client calls an
-  operation that returns it.
+- A new error code counts against every live client whose map lacks it unless an [`error-codes`](#error-codes)
+  `returnedBy` entry names the operations that return it; which handler returns a code is not read from the server.
 
 Open ideas live in [`context/backlog/later-layers.md`](context/backlog/later-layers.md); ideas weighed and rejected,
 with the reason, are in the "Rejected" table of [`context/foundation/roadmap.md`](context/foundation/roadmap.md).

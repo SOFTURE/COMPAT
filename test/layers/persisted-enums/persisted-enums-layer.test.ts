@@ -147,6 +147,7 @@ describe("persisted-enums layer", () => {
           'old clients receive the unknown value "Blue" in NotificationDto.type (API "b2c"); check that they tolerate it',
         evidence: findings[0]?.evidence,
         exposure: exposed,
+        enumValues: ["Blue", "Green", "Red"],
       });
     });
 
@@ -165,6 +166,7 @@ describe("persisted-enums layer", () => {
       expect(finding?.message).toBe(
         'old clients receive the unknown value "live" in NotificationDto.type (API "b2c"); StatusDto.status, Row.state (API "admin"); check that they tolerate it',
       );
+      expect(finding?.enumValues).toEqual(["Draft", "Live", "draft", "live"]);
     });
 
     it("reports nothing extra for removed or renumbered members", async () => {

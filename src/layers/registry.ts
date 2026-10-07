@@ -15,6 +15,7 @@ export const LAYERS: Layer[] = [
   openapiLayer,
   sqlMigrationsLayer,
   seedLayer,
+  // Refines seed findings whose rows write an added member, so it runs after seed.
   persistedEnumsLayer,
   // Refines openapi and persisted-enums findings, so it runs after both.
   clientUsageLayer,

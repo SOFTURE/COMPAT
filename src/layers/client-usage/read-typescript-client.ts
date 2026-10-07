@@ -530,9 +530,60 @@ function readMembers(s: Scan, open: number): Map<string, TypeMember> {
   return members;
 }
 
-/** `interface X ... {`, `class X ... {`, `type X = {`: the type name and the index of its `{`. */
+/** A part of an intersection: the members of an inline `{ ... }` or the name of another type. */
+type IntersectionPart = Map<string, TypeMember> | string;
+
+/** `A & B & { ... }` starting at `start`: its parts, or `undefined` when the type is anything else. */
+function readIntersection(s: Scan, start: number): IntersectionPart[] | undefined {
+  const parts: IntersectionPart[] = [];
+  let cursor = start;
+  for (;;) {
+    const token = s.tokens[cursor];
+    if (isPunctuation(token, "{") && (s.match[cursor] ?? -1) > cursor) {
+      parts.push(readMembers(s, cursor));
+      cursor = (s.match[cursor] as number) + 1;
+    } else if (token?.kind === "identifier") {
+      parts.push(token.text);
+      cursor++;
+    } else return undefined;
+    if (!isPunctuation(s.tokens[cursor], "&")) break;
+    cursor++;
+  }
+  const next = s.tokens[cursor];
+  const isEnd =
+    next === undefined || isPunctuation(next, ";") || next.line > (s.tokens[cursor - 1] as Token).line;
+  return parts.length > 1 && isEnd ? parts : undefined;
+}
+
+/** Merges the parts of every intersection into one member map; a part naming an unknown type adds nothing. */
+function resolveIntersections(
+  types: Map<string, Map<string, TypeMember>>,
+  intersections: Map<string, IntersectionPart[]>,
+): void {
+  const resolve = (name: string, visiting: Set<string>): Map<string, TypeMember> | undefined => {
+    const parts = intersections.get(name);
+    if (parts === undefined || visiting.has(name)) return types.get(name);
+    visiting.add(name);
+    const members = new Map<string, TypeMember>();
+    for (const part of parts) {
+      for (const [key, member] of typeof part === "string" ? (resolve(part, visiting) ?? []) : part) {
+        members.set(key, member);
+      }
+    }
+    intersections.delete(name);
+    types.set(name, members);
+    return members;
+  };
+  for (const name of [...intersections.keys()]) resolve(name, new Set());
+}
+
+/**
+ * `interface X ... {`, `class X ... {`, `type X = {`: the members by type name. `type X = A & { ... }`
+ * (how a generated client writes an allOf) gets the members of every part.
+ */
 function readTypes(s: Scan): Map<string, Map<string, TypeMember>> {
   const types = new Map<string, Map<string, TypeMember>>();
+  const intersections = new Map<string, IntersectionPart[]>();
   for (let index = 0; index < s.tokens.length; index++) {
     const keyword = s.tokens[index] as Token;
     const name = s.tokens[index + 1];
@@ -541,7 +592,10 @@ function readTypes(s: Scan): Map<string, Map<string, TypeMember>> {
     if (keyword.text === "type") {
       let cursor = index + 2;
       if (isPunctuation(s.tokens[cursor], "<")) cursor = findGenericEnd(s.tokens, cursor) + 1;
-      if (isPunctuation(s.tokens[cursor], "=") && isPunctuation(s.tokens[cursor + 1], "{")) open = cursor + 1;
+      if (!isPunctuation(s.tokens[cursor], "=")) continue;
+      const parts = readIntersection(s, cursor + 1);
+      if (parts !== undefined && !types.has(name.text)) intersections.set(name.text, parts);
+      else if (isPunctuation(s.tokens[cursor + 1], "{")) open = cursor + 1;
     } else if (keyword.text === "interface" || keyword.text === "class") {
       for (let cursor = index + 2; cursor < s.tokens.length; cursor++) {
         const token = s.tokens[cursor] as Token;
@@ -555,6 +609,7 @@ function readTypes(s: Scan): Map<string, Map<string, TypeMember>> {
     if (open < 0 || (s.match[open] ?? -1) < 0 || types.has(name.text)) continue;
     types.set(name.text, readMembers(s, open));
   }
+  resolveIntersections(types, intersections);
   return types;
 }
 

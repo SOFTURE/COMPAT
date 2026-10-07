@@ -93,3 +93,38 @@ describe("applyErrorCodeAccept", () => {
     ]);
   });
 });
+
+describe("applyErrorCodeAccept with globs", () => {
+  const findings = classifyErrorCodes({
+    base: new Map(),
+    revision: new Map([
+      ["Shop.Cart.NotFound", declare("revision", 1)],
+      ["Shop.Order.Paid", declare("revision", 2)],
+      ["FeatureFlag.General.Disabled", declare("revision", 3)],
+    ]),
+    clients: [{ client: "mobile", refs: [ref("2.0.1", [])] }],
+  }).filter((finding) => finding.id === "error-code-unknown-to-client");
+
+  it("accepts every code a glob matches, counts them and reports a glob that matched nothing", () => {
+    const { findings: accepted, notes } = applyErrorCodeAccept(findings, [
+      { code: "Shop.*", reason: "shop is new" },
+      { code: "Notification*.*", client: "mobile", reason: "admin only" },
+    ]);
+    expect(accepted.map((finding) => [finding.subject, finding.accepted?.reason])).toEqual([
+      ["FeatureFlag.General.Disabled", undefined],
+      ["Shop.Cart.NotFound", "shop is new"],
+      ["Shop.Order.Paid", "shop is new"],
+    ]);
+    expect(notes).toEqual([
+      "accept entry Shop.* accepted 2 finding(s)",
+      "accept entry Notification*.* for mobile matched nothing; remove it if the code is translated now",
+    ]);
+  });
+
+  it("leaves findings that are already safe alone, so an entry they made redundant reads as unused", () => {
+    const scoped = findings.map((finding) => ({ ...finding, class: "safe" as const }));
+    const { findings: accepted, notes } = applyErrorCodeAccept(scoped, [{ code: "Shop.*", reason: "x" }]);
+    expect(accepted.every((finding) => finding.accepted === undefined)).toBe(true);
+    expect(notes).toEqual(["accept entry Shop.* matched nothing; remove it if the code is translated now"]);
+  });
+});

@@ -24,6 +24,12 @@ export const SEED_RULE_CLASSES = {
 
 export type SeedRuleId = keyof typeof SEED_RULE_CLASSES;
 
+/** Why a `row-added` finding is safe; a refinement that finds it unsafe drops this clause. */
+export const ROW_ADDED_SAFE_CLAUSE = "; old builds ignore rows they do not know";
+
+/** Rules whose findings carry the string literals their rows write. */
+const LITERAL_RULES: ReadonlySet<SeedRuleId> = new Set(["row-added", "row-changed"]);
+
 /** Keys and evidence lines listed in one finding at most. */
 const MAX_LISTED = 5;
 
@@ -158,7 +164,7 @@ function getRowMessage(id: SeedRuleId, table: TableRows, rows: KeyedRow[], byCon
   const count = `${rows.length} row(s)`;
   switch (id) {
     case "row-added":
-      return `adds ${count} to ${name} (${keys}) under ${MODE_TEXT[rows[0]?.mode ?? "update"]}; old builds ignore rows they do not know`;
+      return `adds ${count} to ${name} (${keys}) under ${MODE_TEXT[rows[0]?.mode ?? "update"]}${ROW_ADDED_SAFE_CLAUSE}`;
     case "row-removed":
       return `no longer seeds ${count} of ${name} (${keys}); the rows stay in databases that have them`;
     case "row-added-skipped":
@@ -188,11 +194,26 @@ function buildEvidence(tree: TreeRef, locations: Location[]): Evidence[] {
   return evidence.slice(0, MAX_LISTED);
 }
 
-type FindingInput = { id: SeedRuleId; object: string; path: string; message: string; evidence: Evidence[] };
+/** The distinct string literals of normalised row values, unescaped: `'It''s', 1` gives `It's`. */
+function getLiterals(rows: KeyedRow[]): string[] {
+  const literals = rows.flatMap((row) =>
+    [...row.values.matchAll(/'((?:[^']|'')*)'/g)].map((match) => (match[1] as string).replaceAll("''", "'")),
+  );
+  return [...new Set(literals)];
+}
+
+type FindingInput = {
+  id: SeedRuleId;
+  object: string;
+  path: string;
+  message: string;
+  evidence: Evidence[];
+  literals?: string[];
+};
 
 function buildFinding(
   options: ClassifySeedSourceOptions,
-  { id, object, path, message, evidence }: FindingInput,
+  { id, object, path, message, evidence, literals }: FindingInput,
 ): ClassifiedFinding {
   return {
     object,
@@ -204,6 +225,7 @@ function buildFinding(
       class: SEED_RULE_CLASSES[id],
       message,
       evidence,
+      ...(literals !== undefined && literals.length > 0 ? { literals } : {}),
     },
   };
 }
@@ -281,6 +303,7 @@ function compareRows(options: ClassifySeedSourceOptions, base: Located[], revisi
           path: (locations[0] as Location).path,
           message: getRowMessage(group.id, table, group.rows, byContent),
           evidence: buildEvidence(group.tree, locations),
+          ...(LITERAL_RULES.has(group.id) ? { literals: getLiterals(group.rows) } : {}),
         }),
       );
     }
