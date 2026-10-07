@@ -28,7 +28,7 @@ function usage(api: string, ref: string, sites?: { path: string; line: number }[
     ref,
     commit: "c".repeat(40),
     clientPath: "client.ts",
-    model: { operations: [], types: new Map() },
+    model: { operations: [], unreadUrls: [], types: new Map() },
   };
   if (sites !== undefined) {
     const target = toBranchTarget("NotificationType", api === "b2c" ? b2c : admin);

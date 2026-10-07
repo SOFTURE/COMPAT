@@ -86,7 +86,9 @@ async function runCheck(config: string) {
   const args = ["check", "--base", "2.2.4", "--revision", "2.3.4", "--config", config, "--format", "json"];
   const exitCode = await main(args, run.io);
   const report = JSON.parse(run.stdout());
-  const layers = report.layers.map((layer: { layer: string }) => layer.layer);
+  const layers = report.layers
+    .filter((layer: { status: string }) => layer.status === "ran")
+    .map((layer: { layer: string }) => layer.layer);
   const enums = report.layers.find((layer: { layer: string }) => layer.layer === "persisted-enums");
   const find = (id: string): ReportFinding =>
     enums.findings.find((finding: ReportFinding) => finding.id === id);

@@ -89,6 +89,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--output <file>` | check | write the report to a file instead of stdout |
 | `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `breaking`) |
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
+| `--require <layer,...>` | check | fail the gate unless these layers ran: disabled, not configured, skipped or failed all fail it, even with `--allow-incomplete` |
 | `--no-download` | check | never download oasdiff; the `openapi` layer is skipped when it is missing |
 | `--force` | init | overwrite an existing config file |
 | `-h`, `--help` | both | show the help |
@@ -127,9 +128,16 @@ Every finding has one class, from least to most severe:
 | `breaking` | existing clients or the base build break as soon as the revision is deployed |
 
 The gate fails when an unaccepted finding is at or above `--fail-on`, or when a layer was `skipped` or `failed`
-(unless `--allow-incomplete`). A failed layer still reports the findings it produced. Each layer accepts known
-findings with an `accept` list: every entry needs a `reason`, accepted findings stay in the report under
-"Accepted", and an entry that matched nothing is reported as a note so stale entries get cleaned up.
+(unless `--allow-incomplete`). A failed layer still reports the findings it produced.
+
+A layer that is `"enabled": false` (`disabled`) or missing from the config (`not configured`) does not fail the gate,
+but the report never hides it: it gets a row in the summary table, a `Not checked: openapi (disabled), ...` line under
+the gate, and an entry with `status` `disabled` or `not-configured` in the JSON `layers`. A pass without `openapi` says
+nothing about the HTTP contract, so a pipeline that relies on a layer names it with `--require` (e.g.
+`--require openapi,sql-migrations`).
+
+Each layer accepts known findings with an `accept` list: every entry needs a `reason`, accepted findings stay in the
+report under "Accepted", and an entry that matched nothing is reported as a note so stale entries get cleaned up.
 
 ### In CI
 
@@ -390,9 +398,11 @@ A re-classified finding keeps its rule id and shows `reclassified from <class> b
 report carries `reclassified: { from, by, reason }` and evidence with `side: "client"`.
 
 The TypeScript reader understands NSwag, swaggie, orval, axios or fetch style clients (a path literal plus
-`method: "POST"`, `.post(...)` or `request("post", ...)`) and openapi-typescript `paths`. It fails closed: a client
-ref missing from the clone (fetch tags, `fetch-depth: 0`), a generated client that is absent or yields no operation,
-or `sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
+`method: "POST"`, `.post(...)` or `request("post", ...)`) and openapi-typescript `paths`. Template holes, nested
+template literals included (`` `/api/pets/${encodeURIComponent(`${petId}`)}` ``), read as path parameters. It fails
+closed: a client ref missing from the clone (fetch tags, `fetch-depth: 0`), a generated client that is absent or
+yields no operation, a URL string (`const url = ...`, `url: ...`) the reader could not turn into an operation, or
+`sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
 called with every method.
 
 For an `enum-member-exposed-added` finding of an enum exposed through an API with clients, the layer scans the
@@ -695,8 +705,41 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 | Key | Meaning |
 | --- | --- |
 | `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
-| `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none` |
+| `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments?, report? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none`; `report: false` for a source that only feeds a `composed` one |
+| `queues[]` | `{ kind: "composed", name, template, parts }`: names built at runtime, see below |
 | `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
+
+Some brokers build queue names at runtime, for example `SOFTURE.MessageBroker.Rabbit` 1.x names a consumer group
+queue `{Rabbit:Name}{GroupSeparator}{group}`. A `composed` source builds those names from what `regex` sources find
+and compares them like any other queue source:
+
+```json
+{
+  "queues": [
+    { "kind": "regex", "name": "rabbit-endpoint", "files": "**/appsettings.json", "pattern": "\"Name\":\\s*\"(?<queue>[^\"]+)\"", "report": false },
+    { "kind": "regex", "name": "group-separator", "files": "**/appsettings.json", "pattern": "\"GroupSeparator\":\\s*\"(?<queue>[^\"]+)\"", "report": false },
+    { "kind": "regex", "name": "consumer-groups", "files": "**/ConsumerGroups.cs", "pattern": "const string \\w+ = \"(?<queue>\\w+)\"", "report": false },
+    {
+      "kind": "composed",
+      "name": "group-queues",
+      "template": "{endpoint}{separator}{group}",
+      "parts": {
+        "endpoint": "rabbit-endpoint",
+        "group": "consumer-groups",
+        "separator": { "source": "group-separator", "default": "." }
+      }
+    }
+  ]
+}
+```
+
+Every `{part}` of the template has an entry in `parts`: the name of a `regex` queue source, or `{ source?, default? }`.
+A part takes every name its source finds at that ref, its `default` when the source finds none, or only `default`
+without a source. The source gives one queue per combination of part values, and fails above 1000 of them. Its
+evidence points at the last part, in template order, that came from a source. A `report: false` source gives no
+finding and may find nothing at a ref; the `composed` source fails when it builds no name at either ref. A separator
+that only lives inside a library (not in your configuration) is a `default`, so a library upgrade that changes it is
+reported by [`dependencies`](#dependencies), not here.
 
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire

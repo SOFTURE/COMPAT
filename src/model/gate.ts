@@ -4,7 +4,13 @@ export const FAIL_ON_VALUES = ["breaking", "rollback-risk", "needs-action", "nev
 
 export type FailOn = (typeof FAIL_ON_VALUES)[number];
 
-export type GateOptions = { failOn: FailOn; allowIncomplete: boolean };
+/** `required` names layers that must have run; anything else about them fails the gate. */
+export type GateOptions = { failOn: FailOn; allowIncomplete: boolean; required?: readonly string[] };
+
+export const INACTIVE_STATUSES = ["disabled", "not-configured"] as const;
+
+/** A known layer that did not run: `enabled: false` in the config, or missing from it. */
+export type InactiveLayer = { layer: string; status: (typeof INACTIVE_STATUSES)[number] };
 
 export type Gate = { passed: boolean; exitCode: 0 | 1; reasons: string[] };
 
@@ -20,7 +26,12 @@ export function getLayerVerdict(result: LayerResult): LayerVerdict {
   return highest ?? "no-findings";
 }
 
-export function evaluateGate(results: LayerResult[], options: GateOptions): Gate {
+export function evaluateGate(
+  results: LayerResult[],
+  options: GateOptions,
+  inactive: readonly InactiveLayer[] = [],
+): Gate {
+  const required = new Set(options.required ?? []);
   const reasons: string[] = [];
   for (const result of results) {
     if (result.status !== "skipped" && options.failOn !== "never") {
@@ -31,8 +42,17 @@ export function evaluateGate(results: LayerResult[], options: GateOptions): Gate
         reasons.push(`${result.layer}: ${failing.length} finding(s) at or above ${options.failOn}`);
       }
     }
-    if (result.status === "ran" || options.allowIncomplete) continue;
-    reasons.push(`${result.layer}: layer ${result.status}, so the check is incomplete`);
+    if (result.status === "ran") continue;
+    if (required.has(result.layer)) {
+      reasons.push(`${result.layer}: layer ${result.status}, but --require names it`);
+    } else if (!options.allowIncomplete) {
+      reasons.push(`${result.layer}: layer ${result.status}, so the check is incomplete`);
+    }
+  }
+  for (const layer of inactive) {
+    if (!required.has(layer.layer)) continue;
+    const status = layer.status === "disabled" ? "disabled" : "not configured";
+    reasons.push(`${layer.layer}: layer ${status}, but --require names it`);
   }
   const passed = reasons.length === 0;
   return { passed, exitCode: passed ? 0 : 1, reasons };

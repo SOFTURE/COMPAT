@@ -21,8 +21,13 @@ export type TypeMember = {
   line: number;
 };
 
+/** A string assigned to a URL variable or key that no operation was read from. */
+export type UnreadUrl = { text: string; line: number };
+
 export type ClientModel = {
   operations: ClientOperation[];
+  /** URL strings the reader could not turn into operations: proof that operations are missing. */
+  unreadUrls: UnreadUrl[];
   /** Members of every `interface`, `class` and `type X = { ... }`, by type name. */
   types: Map<string, Map<string, TypeMember>>;
 };
@@ -41,6 +46,10 @@ const MEMBER_MODIFIERS = new Set([
 const NOT_A_DECLARATION = new Set(["if", "for", "while", "switch", "catch", "with", "return", "constructor"]);
 const BODY_KEYS = new Set(["body", "data", "json"]);
 const PATH_LITERAL = /^\/[A-Za-z0-9_\-.~/{}$?=&%:@]+$/;
+/** Template holes in front of a path, such as `` `${baseUrl}/api/pets` ``. */
+const LEADING_HOLES = /^(\$\{\})+(?=\/)/;
+/** Variables and keys that hold a request URL: `const url = ...`, `let url_ = ...`, `{ url: ... }`. */
+const URL_NAME = /^(url|uri|path|endpoint)_?$/i;
 
 type Scan = {
   tokens: Token[];
@@ -106,7 +115,7 @@ function skipGenericBackwards(tokens: Token[], close: number): number {
 
 /** Reads `"/a/" + id + "/b"` starting at a path literal; returns the joined path and the index after it. */
 function readConcatenatedPath(s: Scan, start: number): { path: string; end: number } {
-  let path = s.tokens[start]?.text ?? "";
+  let path = readPathText(s.tokens[start]) ?? "";
   let index = start + 1;
   while (isPunctuation(s.tokens[index], "+")) {
     index++;
@@ -199,7 +208,14 @@ function countPathLiterals(s: Scan, open: number): number {
 }
 
 function isPathLiteral(token: Token | undefined): boolean {
-  return token?.kind === "string" && token.text.length > 1 && PATH_LITERAL.test(token.text);
+  return readPathText(token) !== undefined;
+}
+
+/** The path a string token holds, without leading template holes, or `undefined` when it is not a path. */
+function readPathText(token: Token | undefined): string | undefined {
+  if (token?.kind !== "string") return undefined;
+  const text = token.text.replace(LEADING_HOLES, "");
+  return text.length > 1 && PATH_LITERAL.test(text) ? text : undefined;
 }
 
 /**
@@ -348,8 +364,10 @@ function readBody(s: Scan, declaration: Declaration): ClientOperation["body"] {
   };
 }
 
-function readOperations(s: Scan): ClientOperation[] {
+/** Operations, and the indexes of the string tokens they were read from. */
+function readOperations(s: Scan): { operations: ClientOperation[]; read: Set<number> } {
   const operations: ClientOperation[] = [];
+  const read = new Set<number>();
   // Literals inside a concatenation already read are not operations of their own.
   let consumedUntil = 0;
   for (let index = 0; index < s.tokens.length; index++) {
@@ -357,6 +375,7 @@ function readOperations(s: Scan): ClientOperation[] {
     if (index < consumedUntil || !isPathLiteral(token)) continue;
     const concatenated = readConcatenatedPath(s, index);
     consumedUntil = concatenated.end;
+    for (let part = index; part < concatenated.end; part++) read.add(part);
     const path = normalizePath(concatenated.path);
     const keyed = readPathsKeyMethods(s, index);
     if (keyed !== undefined) {
@@ -374,7 +393,54 @@ function readOperations(s: Scan): ClientOperation[] {
     }
     operations.push(operation);
   }
-  return operations;
+  return { operations, read };
+}
+
+/**
+ * Strings with a `/` assigned to a URL variable or key (`const url = ...`, `url: ...`) that no operation
+ * was read from. Such a string is a request the reader missed, so the caller must not treat its
+ * operation as "not called".
+ */
+function findUnreadUrls(s: Scan, read: Set<number>): UnreadUrl[] {
+  const unread: UnreadUrl[] = [];
+  for (let index = 0; index < s.tokens.length; index++) {
+    const name = s.tokens[index] as Token;
+    if (name.kind !== "identifier" || !URL_NAME.test(name.text)) continue;
+    const operator = s.tokens[index + 1];
+    const isAssigned = isPunctuation(operator, "=") && !isPunctuation(s.tokens[index + 2], "=");
+    if (!isAssigned && !isPunctuation(operator, ":")) continue;
+    const end = findExpressionEnd(s, index + 2);
+    for (let value = index + 2; value < end; value++) {
+      const token = s.tokens[value] as Token;
+      if (token.kind === "string" && token.text.includes("/") && !read.has(value)) {
+        unread.push({ text: token.text, line: token.line });
+      }
+    }
+    index = end - 1;
+  }
+  return unread;
+}
+
+/** Index after an expression starting at `start`: a `,` or `;` at its depth, an unmatched closer, or a new statement line. */
+function findExpressionEnd(s: Scan, start: number): number {
+  for (let index = start; index < s.tokens.length; index++) {
+    const token = s.tokens[index] as Token;
+    const previous = s.tokens[index - 1] as Token;
+    if (index > start && token.line > previous.line) {
+      const continues = previous.kind === "punctuation" && !["}", ")", "]"].includes(previous.text);
+      const isContinued = token.kind === "punctuation" && ["+", ".", "?."].includes(token.text);
+      if (!continues && !isContinued) return index;
+    }
+    if (token.kind !== "punctuation") continue;
+    if (OPENERS[token.text] !== undefined) {
+      const close = s.match[index] ?? -1;
+      if (close < 0) return index;
+      index = close;
+      continue;
+    }
+    if ([",", ";", ")", "}", "]"].includes(token.text)) return index;
+  }
+  return s.tokens.length;
 }
 
 /** Index after the member that starts at `start` inside a type body closing at `close`. */
@@ -504,11 +570,13 @@ function findGenericEnd(tokens: Token[], open: number): number {
 /**
  * Reads a generated TypeScript client (NSwag, swaggie, orval, axios or fetch style, openapi-typescript
  * `paths`). Every path literal becomes an operation; one whose method cannot be read gets `*`, so a
- * reader miss counts as "called", never as "not called".
+ * reader miss counts as "called", never as "not called". Template holes read as path parameters,
+ * nested template literals included. A URL string no operation was read from lands in `unreadUrls`.
  */
 export function readTypescriptClient(text: string): ClientModel {
   const s = scan(text);
-  return { operations: readOperations(s), types: readTypes(s) };
+  const { operations, read } = readOperations(s);
+  return { operations, unreadUrls: findUnreadUrls(s, read), types: readTypes(s) };
 }
 
 /** Every identifier in a TypeScript source, for finding which client functions it references. */
@@ -516,6 +584,10 @@ export function readIdentifiers(text: string): Set<string> {
   const identifiers = new Set<string>();
   for (const token of tokenize(text, "typescript")) {
     if (token.kind === "identifier") identifiers.add(token.text);
+    // A call inside a template hole, such as `` `${petsClient.getPet(id)}` ``, still references the client.
+    for (const hole of token.holes ?? []) {
+      for (const identifier of readIdentifiers(hole)) identifiers.add(identifier);
+    }
   }
   return identifiers;
 }
