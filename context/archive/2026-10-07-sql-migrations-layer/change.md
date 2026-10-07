@@ -1,12 +1,12 @@
 ---
 change_id: sql-migrations-layer
 title: "Migrations new in the revision are classified for Postgres and SQL Server, with evidence per statement"
-status: implemented
+status: archived
 roadmap_item: CMP-2
 branch: claude/project-thread-balvwr
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -39,3 +39,4 @@ Sources to support: a folder of plain SQL scripts (drizzle folders with `--> sta
 
 ## Notes
 - 2026-10-07: opened from roadmap v1.
+- Archived 2026-10-07: the `sql-migrations` layer classifies new migrations of folder and EF Core idempotent sources for Postgres and SQL Server, reproduces F4 (`safe`) and F5 (`needs-action` with the `max(Id) < 418` precondition), and ships the shared SQL scanner for CMP-3.
