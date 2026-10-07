@@ -8,13 +8,17 @@ export type Ecosystem = (typeof ECOSYSTEMS)[number];
  */
 export type Resolution = "lockfile" | "transitive";
 
-/** One package version a file declares or a lockfile resolves at one ref; `resolution` is absent for a manifest. */
+/**
+ * One package version a file declares or a lockfile resolves at one ref; `resolution` is absent for a
+ * manifest. `unresolved` says why a version still holds an MSBuild `$(Property)`.
+ */
 export type Declaration = {
   ecosystem: Ecosystem;
   name: string;
   version: string;
   path: string;
   line: number;
+  unresolved?: string;
   resolution?: Resolution;
 };
 

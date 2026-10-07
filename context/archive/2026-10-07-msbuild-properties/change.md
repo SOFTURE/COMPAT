@@ -1,12 +1,12 @@
 ---
 change_id: msbuild-properties
 title: "Package versions held in MSBuild properties of imported props files are compared"
-status: new
+status: archived
 roadmap_item: CMP-9
 branch: null
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -22,3 +22,4 @@ Roadmap v2 item CMP-9. Backlog dependencies-layer entry. Checked on 2026-10-07: 
 
 ## Notes
 - 2026-10-07: opened from roadmap v2.
+- Archived 2026-10-07: NuGet `$(Property)` versions resolve through the nearest Directory.Build.props, Directory.Packages.props, in-repository imports and Directory.Build.targets; unresolved or condition-dependent ones stay `dependency-changed` with the reason.

@@ -68,10 +68,12 @@ function compareDeclarations(before: Declaration[], after: Declaration[]): Verdi
   const parsedBefore = beforeVersions.map(parseVersion);
   const parsedAfter = afterVersions.map(parseVersion);
   if (parsedBefore.includes(null) || parsedAfter.includes(null)) {
+    const unresolved = [...after, ...before].find((declaration) => declaration.unresolved !== undefined);
+    const reason = unresolved?.unresolved ?? "the declared version is not a version number at one ref";
     return {
       id: "dependency-changed",
       class: "needs-action",
-      message: `${transition}: the declared version is not a version number at one ref; compare by hand`,
+      message: `${transition}: ${reason}; compare by hand`,
     };
   }
   const base = getExtremes(parsedBefore as Version[]);
