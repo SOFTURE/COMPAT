@@ -1,0 +1,198 @@
+import { describe, expect, it } from "vitest";
+import { isSamePath } from "../../../src/layers/client-usage/paths.js";
+import { readTypescriptClient } from "../../../src/layers/client-usage/read-typescript-client.js";
+import {
+  type ClientRefUsage,
+  readPropertyPath,
+  refineFindings,
+} from "../../../src/layers/client-usage/refine.js";
+import type { Finding } from "../../../src/model/finding.js";
+import { createFinding } from "../../helpers/stub-layer.js";
+
+const CLIENT = `
+export const client = {
+  addMedication(petId: string, body: AddMedication): Promise<void> {
+    return fetch(\`/api/pets/\${petId}/medications\`, { method: "POST", body: JSON.stringify(body) });
+  },
+  updateMedication(petId: string, body?: AddMedication): Promise<void> {
+    return fetch(\`/api/pets/\${petId}/medications\`, { method: "PUT", body: JSON.stringify(body) });
+  },
+};
+export interface AddMedication {
+  daysOfWeek: number[];
+  notes: string | null;
+  schedule: Schedule;
+}
+export interface Schedule {
+  times: string[];
+  zone?: string;
+}
+`;
+
+function usage(overrides: Partial<ClientRefUsage> = {}): ClientRefUsage {
+  return {
+    client: "mobile",
+    api: "b2c",
+    ref: "2.2.4",
+    commit: "c".repeat(40),
+    clientPath: "app/client.ts",
+    model: readTypescriptClient(CLIENT),
+    ...overrides,
+  };
+}
+
+const finding = (overrides: Partial<Finding>): Finding =>
+  createFinding("breaking", { layer: "openapi", scope: "b2c", ...overrides });
+
+const notNullable = (property: string, subject = "POST /api/pets/{PetId}/medications") =>
+  finding({
+    id: "request-property-became-not-nullable",
+    subject,
+    message: `the request property \`${property}\` became not nullable`,
+  });
+
+describe("refineFindings", () => {
+  it("drops a not-nullable finding to safe when the typed body never allows null", () => {
+    const { revisions, toSafe } = refineFindings([notNullable("daysOfWeek")], [usage()]);
+    expect(toSafe).toBe(1);
+    expect(revisions[0]?.finding).toMatchObject({
+      class: "safe",
+      reclassified: {
+        from: "breaking",
+        by: "client-usage",
+        reason: "`daysOfWeek` is always sent non-null by mobile@2.2.4",
+      },
+    });
+    expect(revisions[0]?.finding.evidence.at(-1)).toEqual({
+      side: "client",
+      ref: "2.2.4",
+      commit: "c".repeat(40),
+      path: "app/client.ts",
+      line: 11,
+    });
+  });
+
+  it("keeps a not-nullable finding when the property type allows null", () => {
+    const { revisions, withEvidence } = refineFindings([notNullable("notes")], [usage()]);
+    expect(withEvidence).toBe(1);
+    expect(revisions[0]?.finding.class).toBe("breaking");
+    expect(revisions[0]?.finding.message).toBe(
+      "the request property `notes` became not nullable; mobile@2.2.4 may send it without `notes` or with null (client-usage)",
+    );
+  });
+
+  it("walks nested properties through named types", () => {
+    const required = (property: string) =>
+      finding({
+        id: "request-property-became-required",
+        subject: "POST /api/pets/{petId}/medications",
+        message: `the request property \`${property}\` became required`,
+      });
+    const [times, zone] = refineFindings(
+      [required("schedule/times"), required("schedule/zone")],
+      [usage()],
+    ).revisions;
+    expect(times?.finding.class).toBe("safe");
+    expect(zone?.finding.class).toBe("breaking");
+  });
+
+  it("keeps a property finding when the body parameter is optional", () => {
+    const { revisions } = refineFindings(
+      [notNullable("daysOfWeek", "PUT /api/pets/{petId}/medications")],
+      [usage()],
+    );
+    expect(revisions[0]?.finding.class).toBe("breaking");
+  });
+
+  it("needs every calling ref of every client of the API to send the property", () => {
+    const old = usage({
+      ref: "2.0.1",
+      model: readTypescriptClient(CLIENT.replace("daysOfWeek:", "daysOfWeek?:")),
+    });
+    const { revisions } = refineFindings(
+      [
+        finding({
+          id: "request-property-became-required",
+          subject: "POST /api/pets/{petId}/medications",
+          message: "the request property `daysOfWeek` became required",
+        }),
+      ],
+      [old, usage(), usage({ client: "admin", ref: "1.0.0" })],
+    );
+    expect(revisions[0]?.finding.class).toBe("breaking");
+    expect(revisions[0]?.finding.message).toContain(
+      "; mobile@2.0.1 may send it without `daysOfWeek` (client-usage)",
+    );
+  });
+
+  it("drops an operation no client ref calls to safe and lists every ref", () => {
+    const { revisions } = refineFindings(
+      [finding({ id: "api-path-removed-without-deprecation", subject: "DELETE /api/pets/{petId}" })],
+      [usage({ ref: "2.0.1" }), usage(), usage({ client: "admin", ref: "1.0.0" })],
+    );
+    expect(revisions[0]?.finding.reclassified?.reason).toBe("not called by mobile@2.0.1, 2.2.4; admin@1.0.0");
+    expect(revisions[0]?.finding.evidence.filter((item) => item.side === "client")).toHaveLength(3);
+  });
+
+  it("counts a path without a readable method as called with every method", () => {
+    const model = readTypescriptClient('export const ROUTE = "/api/pets/{id}";');
+    const { revisions } = refineFindings(
+      [finding({ id: "api-path-removed-without-deprecation", subject: "DELETE /api/pets/{petId}" })],
+      [usage({ model })],
+    );
+    expect(revisions[0]?.finding.class).toBe("breaking");
+    expect(revisions[0]?.finding.message).toContain("called by mobile@2.2.4");
+  });
+
+  it("uses sources to tell called functions from generated ones", () => {
+    const subject = "POST /api/pets/{petId}/medications";
+    const removed = finding({ id: "api-path-removed-without-deprecation", subject });
+    expect(
+      refineFindings([removed], [usage({ sourceIdentifiers: new Set(["other"]) })]).revisions[0]?.finding
+        .class,
+    ).toBe("safe");
+    expect(
+      refineFindings([removed], [usage({ sourceIdentifiers: new Set(["addMedication"]) })]).revisions[0]
+        ?.finding.class,
+    ).toBe("breaking");
+  });
+
+  it("leaves accepted, safe, other-API, other-layer and non-operation findings alone", () => {
+    const findings = [
+      finding({ subject: "DELETE /x", accepted: { reason: "reviewed" } }),
+      finding({ subject: "DELETE /x", class: "safe" }),
+      finding({ subject: "DELETE /x", scope: "admin" }),
+      finding({ subject: "DELETE /x", layer: "seed" }),
+      finding({ id: "api-removed", subject: "api/b2c.yaml" }),
+    ];
+    expect(refineFindings(findings, [usage()])).toEqual({ revisions: [], toSafe: 0, withEvidence: 0 });
+  });
+
+  it("keeps the index of the finding it revises", () => {
+    const findings = [finding({ subject: "DELETE /x", class: "safe" }), finding({ subject: "DELETE /x" })];
+    expect(refineFindings(findings, [usage()]).revisions.map((revision) => revision.index)).toEqual([1]);
+  });
+});
+
+describe("readPropertyPath", () => {
+  it.each([
+    ["the request property `a/b` became required", ["a", "b"]],
+    ["the request property `daysOfWeek` became not nullable", ["daysOfWeek"]],
+    ["api path removed without deprecation", undefined],
+  ])("%s", (message, expected) => {
+    expect(readPropertyPath(message)).toEqual(expected);
+  });
+});
+
+describe("isSamePath", () => {
+  it.each([
+    ["/api/pets/{}", "/api/pets/{}", true],
+    ["/pets/{}", "/api/pets/{}", true],
+    ["/api/pets/{}", "/pets/{}", true],
+    ["/api/pets", "/api/pets/{}", false],
+    ["/{}", "/api/pets/{}", false],
+    ["/apipets", "/api/pets", false],
+  ])("%s against %s is %s", (client, spec, expected) => {
+    expect(isSamePath(client, spec)).toBe(expected);
+  });
+});

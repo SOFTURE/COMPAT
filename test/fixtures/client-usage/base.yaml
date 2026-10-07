@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info:
+  title: Pets (client-usage fixture)
+  version: "1"
+paths:
+  /api/pets:
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPet"
+      responses:
+        "200":
+          description: ok
+  /api/pets/{petId}:
+    delete:
+      operationId: deletePet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: deleted
+  /api/legacy/report:
+    get:
+      operationId: getLegacyReport
+      responses:
+        "200":
+          description: ok
+components:
+  schemas:
+    NewPet:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        nickname:
+          type: string
