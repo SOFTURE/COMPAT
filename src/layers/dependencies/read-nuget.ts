@@ -1,29 +1,15 @@
 import { type Declaration, getLineAt } from "./declaration.js";
+import {
+  blankComments,
+  decodeEntities,
+  type EvaluatedProperties,
+  readAttributes,
+  readOwnProperties,
+} from "./msbuild-properties.js";
 
 const ITEM =
   /<(PackageVersion|PackageReference|GlobalPackageReference)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1\s*>)/g;
-const ATTRIBUTE = /([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-const PROPERTY_GROUP = /<PropertyGroup\b[^>]*>([\s\S]*?)<\/PropertyGroup\s*>/g;
-const PROPERTY = /<([\w.-]+)\b[^>]*>([^<]*)<\/\1\s*>/g;
 const PROPERTY_REFERENCE = /\$\(([\w.-]+)\)/g;
-const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-
-/** Replaces XML comments with spaces, so offsets and line numbers stay where they were. */
-function blankComments(text: string): string {
-  return text.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "));
-}
-
-function decodeEntities(text: string): string {
-  return text.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => XML_ENTITIES[name] as string);
-}
-
-function readAttributes(text: string): Map<string, string> {
-  const attributes = new Map<string, string>();
-  for (const match of text.matchAll(ATTRIBUTE)) {
-    attributes.set((match[1] as string).toLowerCase(), decodeEntities(match[2] ?? match[3] ?? "").trim());
-  }
-  return attributes;
-}
 
 function readChild(body: string | undefined, name: string): string | undefined {
   if (body === undefined) return undefined;
@@ -31,18 +17,7 @@ function readChild(body: string | undefined, name: string): string | undefined {
   return match === null ? undefined : decodeEntities(match[1] as string).trim();
 }
 
-/** Properties defined in the file; a later definition wins, as in MSBuild evaluation order. */
-function readProperties(text: string): Map<string, string> {
-  const properties = new Map<string, string>();
-  for (const group of text.matchAll(PROPERTY_GROUP)) {
-    for (const property of (group[1] as string).matchAll(PROPERTY)) {
-      properties.set((property[1] as string).toLowerCase(), decodeEntities(property[2] as string).trim());
-    }
-  }
-  return properties;
-}
-
-/** Expands `$(Name)` from the file's own properties; unknown properties stay as written. */
+/** Expands `$(Name)` from the evaluated properties; unknown properties stay as written. */
 function expandProperties(value: string, properties: Map<string, string>): string {
   let expanded = value;
   // A property may refer to another one; a few rounds cover real files without looping on cycles.
@@ -55,14 +30,24 @@ function expandProperties(value: string, properties: Map<string, string>): strin
   return expanded;
 }
 
+/** Why a version still holds `$(...)` after expansion. */
+function describeUnresolved(version: string, path: string, skippedImports: string[]): string {
+  const names = [...new Set([...version.matchAll(PROPERTY_REFERENCE)].map((match) => `$(${match[1]})`))];
+  const subject = names.length === 0 ? "a property function" : names.join(", ");
+  const skipped = skippedImports.length === 0 ? "" : `; imports not followed: ${skippedImports.join("; ")}`;
+  return `${subject} is not defined in ${path}, its Directory.Build.props, Directory.Packages.props, Directory.Build.targets or in-repository imports${skipped}`;
+}
+
 /**
  * Reads the package versions an MSBuild file declares: central `PackageVersion` entries,
  * `PackageReference` and `GlobalPackageReference` with a version. A reference without a version
- * takes it from the central file, which is read on its own.
+ * takes it from the central file, which is read on its own. `$(Name)` expands from `evaluated`
+ * (see `evaluateMsbuildProperties`), or from the file's own properties without it.
  */
-export function readNuget(text: string, path: string): Declaration[] {
+export function readNuget(text: string, path: string, evaluated?: EvaluatedProperties): Declaration[] {
   const source = blankComments(text);
-  const properties = readProperties(source);
+  const properties = evaluated?.properties ?? readOwnProperties(source);
+  const skippedImports = evaluated?.skippedImports ?? [];
   const declarations: Declaration[] = [];
   for (const match of source.matchAll(ITEM)) {
     const attributes = readAttributes(match[2] as string);
@@ -74,13 +59,16 @@ export function readNuget(text: string, path: string): Declaration[] {
       attributes.get("version") ??
       readChild(match[3], "Version");
     if (version === undefined || version === "") continue;
-    declarations.push({
+    const expanded = expandProperties(version, properties);
+    const declaration: Declaration = {
       ecosystem: "nuget",
       name,
-      version: expandProperties(version, properties),
+      version: expanded,
       path,
       line: getLineAt(source, match.index),
-    });
+    };
+    if (expanded.includes("$(")) declaration.unresolved = describeUnresolved(expanded, path, skippedImports);
+    declarations.push(declaration);
   }
   return declarations;
 }

@@ -95,6 +95,16 @@ describe("classifyPackages", () => {
     ]);
   });
 
+  it("names the undefined property of an unresolved version in dependency-changed", () => {
+    const revision = index(["MassTransit", "$(MassTransitVersion)", "Api.csproj"]);
+    const declaration = revision.get("nuget:masstransit")?.declarations[0] as Declaration;
+    declaration.unresolved = "$(MassTransitVersion) is not defined in Api.csproj";
+    const { findings } = classify(index(["MassTransit", "8.1.0", "Api.csproj"]), revision);
+    expect(findings.map((f) => f.message)).toEqual([
+      "8.1.0 → $(MassTransitVersion): $(MassTransitVersion) is not defined in Api.csproj; compare by hand",
+    ]);
+  });
+
   it("matches NuGet names case-insensitively and npm names exactly", () => {
     expect(summary(classify(index(["npgsql", "3.1.0"]), index(["Npgsql", "3.1.0"])).findings)).toEqual([]);
     const npm = classify(

@@ -2,8 +2,18 @@ export const ECOSYSTEMS = ["nuget", "npm"] as const;
 
 export type Ecosystem = (typeof ECOSYSTEMS)[number];
 
-/** One package version a file declares at one ref. */
-export type Declaration = { ecosystem: Ecosystem; name: string; version: string; path: string; line: number };
+/**
+ * One package version a file declares at one ref. `unresolved` says why a version still holds an
+ * MSBuild `$(Property)`.
+ */
+export type Declaration = {
+  ecosystem: Ecosystem;
+  name: string;
+  version: string;
+  path: string;
+  line: number;
+  unresolved?: string;
+};
 
 /** NuGet package ids are case-insensitive; npm names are compared as written. */
 export function getPackageKey(ecosystem: Ecosystem, name: string): string {

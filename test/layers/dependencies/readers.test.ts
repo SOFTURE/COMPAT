@@ -50,6 +50,49 @@ describe("readNuget", () => {
   });
 });
 
+describe("readNuget with evaluated properties", () => {
+  const text = [
+    "<Project>",
+    "  <PropertyGroup><Polly>8.4.0</Polly></PropertyGroup>",
+    "  <ItemGroup>",
+    '    <PackageReference Include="MassTransit" Version="$(MassTransitVersion)" />',
+    '    <PackageReference Include="Polly" Version="$(Polly)" />',
+    '    <PackageReference Include="Npgsql" Version="$(NpgsqlVersion)" />',
+    "  </ItemGroup>",
+    "</Project>",
+  ].join("\n");
+
+  it("expands from the evaluated map and explains what stays unresolved", () => {
+    const declarations = readNuget(text, "src/Api/Api.csproj", {
+      properties: new Map([
+        ["masstransitversion", "8.2.0"],
+        ["polly", "8.5.0"],
+      ]),
+      skippedImports: ["src/Api/Api.csproj: $(RepoRoot)eng/Versions.props (a property in the path)"],
+    });
+    expect(summary(declarations)).toEqual([
+      "MassTransit@8.2.0:4",
+      "Polly@8.5.0:5",
+      "Npgsql@$(NpgsqlVersion):6",
+    ]);
+    expect(declarations.map((declaration) => declaration.unresolved)).toEqual([
+      undefined,
+      undefined,
+      "$(NpgsqlVersion) is not defined in src/Api/Api.csproj, its Directory.Build.props, Directory.Packages.props, " +
+        "Directory.Build.targets or in-repository imports; imports not followed: " +
+        "src/Api/Api.csproj: $(RepoRoot)eng/Versions.props (a property in the path)",
+    ]);
+  });
+
+  it("falls back to the file's own properties without an evaluated map", () => {
+    expect(summary(readNuget(text, "Api.csproj"))).toEqual([
+      "MassTransit@$(MassTransitVersion):4",
+      "Polly@8.4.0:5",
+      "Npgsql@$(NpgsqlVersion):6",
+    ]);
+  });
+});
+
 describe("readNpm", () => {
   const text = [
     "{",
