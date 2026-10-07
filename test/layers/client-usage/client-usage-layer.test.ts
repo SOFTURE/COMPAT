@@ -81,6 +81,7 @@ describe("client-usage layer", () => {
 
   it("reads the refs a resolver chose and names them in a note", async () => {
     const output = await run({ refs: ["latest-tag:app-*"] });
+    expect(output).toMatchObject({ status: "ran" });
     expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
       'client "mobile" (API "b2c"): mobile@app-3; 1 operation(s) read',
       'client "mobile": latest-tag:app-* → app-3',
@@ -100,6 +101,7 @@ describe("client-usage layer", () => {
       env: GITHUB_ENV,
       fetch: github.fetch,
     });
+    expect(output).toMatchObject({ status: "ran" });
     expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
       'client "mobile" (API "b2c"): mobile@mobile-2.0, mobile-2.2; 1/1 operation(s) read',
       'client "mobile": workflowRuns:build.yml since 2.0 → mobile-2.0, mobile-2.2',
