@@ -273,11 +273,11 @@ skipped when the binary is absent, unless `COMPAT_REQUIRE_OASDIFF=1`, which make
 ### Phase 1: Core command with the finding model, refs, reports and exit codes
 
 #### Automated
-- [ ] 1.1 Named phase 1 tests pass (finding, gate, config, ref-tree, markdown, json, check, main)
-- [ ] 1.2 `runCheck` with a stub `breaking` finding returns 1, and 0 with `--fail-on never`
-- [ ] 1.3 An unknown ref returns 2 and stderr names the ref; a config with no enabled layer returns 2
-- [ ] 1.4 `context/workflow.json` gates are `npm run typecheck`, `npm run lint`, `npm test`
-- [ ] 1.5 Gates green (typecheck, lint, test)
+- [x] 1.1 Named phase 1 tests pass (finding, gate, config, ref-tree, markdown, json, check, main)
+- [x] 1.2 `runCheck` with a stub `breaking` finding returns 1, and 0 with `--fail-on never`
+- [x] 1.3 An unknown ref returns 2 and stderr names the ref; a config with no enabled layer returns 2
+- [x] 1.4 `context/workflow.json` gates are `npm run typecheck`, `npm run lint`, `npm test`
+- [x] 1.5 Gates green (typecheck, lint, test)
 
 ### Phase 2: The `openapi` layer with oasdiff, spec sources and the accept allowlist
 

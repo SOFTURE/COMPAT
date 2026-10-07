@@ -1,7 +1,7 @@
 ---
 change_id: backward-compat-checker
 title: "An npm CLI tells, for two git refs, whether the new server release is backward compatible with what runs in production"
-status: plan_reviewed
+status: implementing
 roadmap_item: CMP-1
 branch: null
 created: 2026-10-07

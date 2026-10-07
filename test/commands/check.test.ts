@@ -1,0 +1,110 @@
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type CheckOptions, runCheck } from "../../src/commands/check.js";
+import { createRepo, type TestRepo, writeRepoFile } from "../helpers/git-repo.js";
+import { createIo, createStubLayer } from "../helpers/stub-layer.js";
+
+let repo: TestRepo;
+const options = (overrides: Partial<CheckOptions> = {}): CheckOptions => ({
+  base: "v1",
+  revision: "v2",
+  format: "md",
+  failOn: "breaking",
+  allowIncomplete: false,
+  ...overrides,
+});
+
+beforeAll(() => {
+  repo = createRepo([
+    { files: { "a.txt": "1" }, tag: "v1" },
+    { files: { "a.txt": "2" }, tag: "v2" },
+  ]);
+  writeRepoFile(repo, "compat.config.json", JSON.stringify({ layers: { stub: { level: "breaking" } } }));
+  writeRepoFile(repo, "empty.json", JSON.stringify({ layers: { stub: { enabled: false } } }));
+  writeRepoFile(repo, "safe.json", JSON.stringify({ layers: { stub: { level: "safe" } } }));
+});
+afterAll(() => repo.cleanup());
+
+describe("runCheck", () => {
+  it("returns 1 for a breaking finding and prints the Markdown report", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options(), run.io)).toBe(1);
+    expect(run.stdout()).toContain("**Gate: FAIL**");
+    expect(run.stdout()).toContain("## breaking (1)");
+    expect(run.stderr()).toContain("softure-compat: gate failed");
+  });
+
+  it("returns 0 for the same finding with fail-on never", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ failOn: "never" }), run.io)).toBe(0);
+  });
+
+  it("returns 0 when findings stay below the threshold", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ configPath: "safe.json" }), run.io)).toBe(0);
+    expect(run.stdout()).toContain("**Gate: PASS**");
+  });
+
+  it("returns 2 and names the ref when a ref is unknown", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ revision: "v9" }), run.io)).toBe(2);
+    expect(run.stderr()).toContain('git ref "v9" does not resolve to a commit');
+  });
+
+  it("returns 2 when no layer is enabled", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ configPath: "empty.json" }), run.io)).toBe(2);
+    expect(run.stderr()).toContain("no layer is enabled");
+  });
+
+  it("returns 2 when the config is missing", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ configPath: "nope.json" }), run.io)).toBe(2);
+    expect(run.stderr()).toContain(`config file not found: ${join(repo.dir, "nope.json")}`);
+  });
+
+  it("writes the JSON report to --output", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ format: "json", outputPath: "report.json" }), run.io)).toBe(1);
+    const document = JSON.parse(readFileSync(join(repo.dir, "report.json"), "utf8"));
+    expect(document.revision.ref).toBe("v2");
+    expect(run.stdout()).toBe("");
+  });
+
+  it("returns 2 when the report cannot be written", async () => {
+    mkdirSync(join(repo.dir, "a-directory"), { recursive: true });
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ outputPath: "a-directory" }), run.io)).toBe(2);
+    expect(run.stderr()).toContain(`cannot write the report to ${join(repo.dir, "a-directory")}`);
+  });
+
+  it("turns a throwing layer into a failed layer", async () => {
+    const throwing = createStubLayer("stub", () => {
+      throw new Error("kaboom");
+    });
+    const run = createIo(repo.dir, [throwing]);
+    expect(await runCheck(options(), run.io)).toBe(1);
+    expect(run.stdout()).toContain("- **stub** failed: unexpected error: kaboom");
+    expect(await runCheck(options({ allowIncomplete: true }), createIo(repo.dir, [throwing]).io)).toBe(0);
+  });
+
+  it("gives each layer a temporary directory and removes it after the run", async () => {
+    let layerTempDir = "";
+    const recording = createStubLayer("stub", () => ({
+      layer: "stub",
+      status: "ran",
+      findings: [],
+      notes: [],
+    }));
+    const run = recording.run;
+    recording.run = async (context) => {
+      layerTempDir = context.tempDir;
+      expect(existsSync(layerTempDir)).toBe(true);
+      return run(context);
+    };
+    expect(await runCheck(options(), createIo(repo.dir, [recording]).io)).toBe(0);
+    expect(layerTempDir).not.toBe("");
+    expect(existsSync(layerTempDir)).toBe(false);
+  });
+});
