@@ -186,6 +186,12 @@ describe("parseContracts", () => {
     ]);
   });
 
+  it("skips a property whose getter is not public (impl review F5)", () => {
+    const text =
+      "public class C { public int A { private get; set; } public int B { protected internal get; set; } public int D { get; private set; } }";
+    expect(parseClean(text).types[0]?.properties.map((property) => property.name)).toEqual(["D"]);
+  });
+
   it("reads [MessageUrn], [EntityName] and partial types", () => {
     const text = [
       "namespace N;",
@@ -284,6 +290,28 @@ describe("parseContracts", () => {
       expect(failuresOf("[MessageUrn(Urns.A)] public record A(int X);")).toEqual([
         expect.stringContaining("[MessageUrn] without a string literal"),
       ]);
+    });
+
+    it("fails an interpolated attribute argument, which may depend on a constant declared elsewhere (impl review F1)", () => {
+      expect(failuresOf('[MessageUrn($"{Urns.Prefix}:x")] public record A(int X);')).toEqual([
+        expect.stringContaining("[MessageUrn] without a string literal"),
+      ]);
+      expect(failuresOf('public class A { [JsonPropertyName($"x")] public int X { get; set; } }')).toEqual([
+        expect.stringContaining("[JsonPropertyName] without a string literal"),
+      ]);
+    });
+
+    it("ignores commented-out declarations but flags one inside a multi-line string (impl review F3)", () => {
+      const text = [
+        "/*",
+        "public class Legacy { }",
+        "*/",
+        "// public record Old(int X);",
+        'public class A { public string S { get; } = @"',
+        'public record InString(int X);";',
+        "}",
+      ].join("\n");
+      expect(parseContracts(text).failures.map((failure) => failure.name)).toEqual(["InString"]);
     });
 
     it("fails an unclosed body and every declaration after it", () => {

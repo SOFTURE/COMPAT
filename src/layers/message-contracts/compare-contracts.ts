@@ -30,6 +30,7 @@ export type ContractChangeId =
   | "message-property-removed"
   | "message-property-type-changed"
   | "message-property-nullability-changed"
+  | "message-property-required"
   | "queue-added"
   | "queue-removed"
   | EnumChangeId;
@@ -324,8 +325,19 @@ function compareType(old: LocatedType, current: LocatedType): ContractChange[] {
       });
       continue;
     }
-    if (property.type === next.type) continue;
     const revisionSite = { path: current.path, line: next.line };
+    if (!property.isRequired && next.isRequired) {
+      changes.push({
+        id: "message-property-required",
+        class: "breaking",
+        scope,
+        subject: `${name}.${next.name}`,
+        message: `"${next.wireName}" became required: base-build messages that leave it out (null values are omitted) fail to deserialize in the revision`,
+        base: site,
+        revision: revisionSite,
+      });
+    }
+    if (property.type === next.type) continue;
     const isNullabilityOnly = stripNullable(property.type) === stripNullable(next.type);
     changes.push({
       id: isNullabilityOnly ? "message-property-nullability-changed" : "message-property-type-changed",

@@ -39,6 +39,7 @@ const ENUM_DISCOVERY = {
 
 const CONTRACT_GLOBS = ["**/*Contract*/**/*.cs", "**/*Messages/**/*.cs"];
 const CONTRACT_FOLDER = /Contract|Messages$/;
+const TEST_FOLDER = /(?:^|\.)Tests?$/i;
 
 const isIgnored = (path: string) => path.split("/").some((segment) => IGNORED_SEGMENTS.has(segment));
 
@@ -241,7 +242,8 @@ async function detectMessageContracts(tree: RefTree): Promise<Result<StarterLaye
     const position = segments.findIndex(
       (segment, index) => index < segments.length - 1 && CONTRACT_FOLDER.test(segment),
     );
-    if (position !== -1) folders.add(segments.slice(0, position + 1).join("/"));
+    if (position !== -1 && !segments.some((segment) => TEST_FOLDER.test(segment)))
+      folders.add(segments.slice(0, position + 1).join("/"));
   }
   const globs = [...folders].sort().map((folder) => `${folder}/**/*.cs`);
   if (globs.length === 0) {

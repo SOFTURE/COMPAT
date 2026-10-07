@@ -131,6 +131,24 @@ describe("compareContracts", () => {
     ]);
   });
 
+  it("reports an existing property that became required (impl review F2)", () => {
+    expect(
+      compare(
+        {
+          "a.cs":
+            "namespace N; public class C { public string? Note { get; set; } public int A { get; set; } }",
+        },
+        {
+          "a.cs":
+            "namespace N; public class C { public required string? Note { get; set; } [JsonRequired] public int A { get; set; } }",
+        },
+      ),
+    ).toEqual([
+      ["message-property-required", "breaking", "N.C.Note"],
+      ["message-property-required", "breaking", "N.C.A"],
+    ]);
+  });
+
   it("flattens base types of the sources and compares base lists and entity names", () => {
     const changes = compare(
       {

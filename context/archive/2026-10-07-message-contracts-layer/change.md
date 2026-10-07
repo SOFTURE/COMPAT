@@ -1,12 +1,13 @@
 ---
 change_id: message-contracts-layer
 title: "Message contract and queue changes are reported before they break in-flight messages"
-status: implementing
+status: archived
 roadmap_item: null
 issue: 16
 branch: claude/project-thread-nwghre
 created: 2026-10-07
 updated: 2026-10-07
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -31,3 +32,4 @@ MassTransit message URN and must be `message-renamed`, `breaking`.
 
 ## Notes
 - 2026-10-07: opened from issue #16.
+- 2026-10-07: implemented on branch claude/project-thread-nwghre; plan and impl reviews resolved; archived.

@@ -14,6 +14,7 @@ export const MESSAGE_CHANGE_IDS = [
   "message-property-removed",
   "message-property-type-changed",
   "message-property-nullability-changed",
+  "message-property-required",
   "queue-added",
   "queue-removed",
 ] as const;

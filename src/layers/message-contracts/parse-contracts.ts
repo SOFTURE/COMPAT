@@ -110,7 +110,9 @@ const DECLARATION_LINE =
 
 /** Finds the contract types and enums declared in one C# file. Pure; never throws. */
 export function parseContracts(text: string): ParsedContracts {
-  const tokens = tokenize(text, "csharp");
+  const comments: [number, number][] = [];
+  const tokens = tokenize(text, "csharp", (start, end) => comments.push([start, end]));
+  const isInComment = (offset: number) => comments.some(([start, end]) => offset >= start && offset < end);
   const enums = parseEnums(text, "csharp");
   const result: ParsedContracts = { types: [], enums: [], failures: [] };
   /** Every declared name the walk reached, public or not, for the safety net. */
@@ -120,8 +122,10 @@ export function parseContracts(text: string): ParsedContracts {
     result.failures.push({ name, line, error: `"${name}" at line ${line} ${error}` });
 
   walkMembers(0, tokens.length, { namespace: "", outer: null }, null);
+  // A commented-out declaration is none; one inside a string or after a lost literal still counts (fail closed).
   for (const match of text.matchAll(DECLARATION_LINE)) {
     const name = match[1] as string;
+    if (isInComment(match.index + match[0].length - 1)) continue;
     if (walked.has(name)) continue;
     walked.add(name);
     const line = getLineAt(text, match.index + match[0].length - name.length);
@@ -308,8 +312,11 @@ export function parseContracts(text: string): ParsedContracts {
     const close = findClose(typeEnd + 1, end);
     if (close === null) return unreadable();
     const accessors = tokens.slice(typeEnd + 2, close);
-    // A set-only property is never serialized.
-    if (!accessors.some((token) => token.kind === "identifier" && token.text === "get")) return false;
+    // A set-only property, or one whose getter is not public, is never serialized.
+    const getter = accessors.findIndex((token) => token.kind === "identifier" && token.text === "get");
+    const getterModifier = accessors[getter - 1];
+    if (getter === -1) return false;
+    if (getterModifier?.kind === "identifier" && MODIFIERS.has(getterModifier.text)) return false;
     const wire = readWireAttributes(attributes, false);
     if (wire.error !== null) {
       sink.errors.push(`property "${nameToken.text}" at line ${nameToken.line} ${wire.error}`);
@@ -612,6 +619,11 @@ export function parseContracts(text: string): ParsedContracts {
 
 type TypeHead = { start: number; end: number; scope: Scope; modifiers: Set<string>; attributes: Token[][] };
 
+/** A constant string literal; an interpolated string may depend on constants declared elsewhere. */
+function isLiteral(token: Token | undefined): token is Token {
+  return token?.kind === "string" && token.isInterpolated !== true;
+}
+
 type WireAttributes = { name: string | null; isIgnored: boolean; isRequired: boolean; error: string | null };
 
 /**
@@ -636,7 +648,7 @@ function readAttributeString(lists: Token[][], name: string): string | null | un
       if (token.text.replace(/Attribute$/, "") !== name) continue;
       const argument = list[position + 2];
       const closing = list[position + 3];
-      return list[position + 1]?.text === "(" && argument?.kind === "string" && closing?.text === ")"
+      return list[position + 1]?.text === "(" && isLiteral(argument) && closing?.text === ")"
         ? argument.text
         : null;
     }
@@ -676,11 +688,7 @@ function readWireAttributes(lists: Token[][], isPositional: boolean): WireAttrib
       if (list[position + 1]?.text === ".") continue;
       if (name === "JsonPropertyName") {
         const argument = list[position + 2];
-        if (
-          list[position + 1]?.text === "(" &&
-          argument?.kind === "string" &&
-          list[position + 3]?.text === ")"
-        )
+        if (list[position + 1]?.text === "(" && isLiteral(argument) && list[position + 3]?.text === ")")
           wire.name = argument.text;
         else wire.error = "has a [JsonPropertyName] without a string literal";
       }

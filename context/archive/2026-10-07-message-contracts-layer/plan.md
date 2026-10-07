@@ -68,14 +68,23 @@ Implementation note: the persisted-enums tokenizer lost the rest of a line after
 inside an interpolation hole); `readInterpolated` now reads holes with nested strings, chars and braces, with a
 regression test in `parse-enums.test.ts`.
 
+## Impl review outcome
+`reviews/impl-review.md` (approve with changes). Fixed: F1 interpolated attribute arguments fail the type (the
+tokenizer marks interpolated strings); F2 `message-property-required` (`breaking`) for a property that became
+`required` or `[JsonRequired]`; F3 the safety net skips matches inside comments, using comment ranges reported by the
+tokenizer; F5 a getter with an access modifier is not on the wire; F7 init skips test folders; F8 plan text. Kept:
+F4 (`\u` escapes in regular strings, a pre-existing tokenizer limit that can only produce a false `breaking`), F6
+(shape pairing stays, documented in the README; the issue asks for it and it errs on `breaking`), F8 concurrency
+helper duplication (two small copies; extract when a third layer needs it).
+
 ## Phases
 1. Parser: `parse-contracts.ts` + tests (every literal form, records, classes, interfaces, nested, generic, partial,
    inheritance, attributes, directives, safety net).
-2. Comparison and layer: `config.ts`, `compare-contracts.ts`, `scan-queues.ts`, `message-contracts-layer.ts`, registry
+2. Comparison and layer: `config.ts`, `compare-contracts.ts`, `message-contracts-layer.ts` (queue scanning included), registry
    line, init detector, README section, unit tests and the PETSEO F8 e2e test.
 3. Gates and review: typecheck, lint, test, build + pack test; impl review; archive.
 
 ## Progress
 - [x] Phase 1: parser
 - [x] Phase 2: comparison, layer, registry, init, README
-- [ ] Phase 3: gates, impl review, archive
+- [x] Phase 3: gates, impl review, archive

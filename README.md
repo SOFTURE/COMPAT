@@ -363,7 +363,7 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire
-properties are the public instance properties with a getter and the positional parameters of a record; fields,
+properties are the public instance properties with a public getter and the positional parameters of a record; fields,
 static and computed (`=>`) properties, methods and `[JsonIgnore]` members are not. `[JsonPropertyName]` sets the wire
 name; names are compared case-insensitively. Properties of base types declared in the sources are inherited. Public
 enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`.
@@ -380,6 +380,7 @@ enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`
 | `message-property-removed` | `breaking` |
 | `message-property-type-changed` | `breaking` (`System.` qualifiers, `global::`, `Nullable<T>` and type aliases are normalized first) |
 | `message-property-nullability-changed` | `rollback-risk`: only `?` changed |
+| `message-property-required` | `breaking`: an existing property became `required` or `[JsonRequired]` |
 | `queue-added` | `safe` |
 | `queue-removed` | `needs-action`: drain it before the deploy |
 | `enum-member-added`, `enum-member-removed`, `enum-member-renamed`, `enum-member-renumbered`, `enum-member-unresolved`, `enum-added`, `enum-removed` | as in `persisted-enums` |
@@ -387,9 +388,12 @@ enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`
 The layer fails, keeping its findings, when a source or queue source matches no file at either ref or loses all its
 files in the revision, when a source declares no public type or a queue source finds no queue, and when a
 declaration cannot be read: a `#if` in a type body, unbalanced brackets, an unrecognised public member, a
-`[JsonPropertyName]` or `[MessageUrn]` without a string literal, a type declared twice without `partial`, or a
-declaration-looking line the parser did not reach. It does not follow base types outside the sources, custom
-`[JsonConverter]`s, or serializer settings other than MassTransit's defaults.
+`[JsonPropertyName]`, `[MessageUrn]` or `[EntityName]` without a constant string literal (an interpolated string
+does not count), a type declared twice without `partial`, or a declaration-looking line outside comments that the
+parser did not reach (a line inside a multi-line string counts too). It does not follow base types outside the
+sources, custom `[JsonConverter]`s, or serializer settings other than MassTransit's defaults. A removed type and an
+added one with the same unique wire shape are paired as a rename, reported as `breaking` even when the two messages
+are unrelated.
 
 ## What it does not check yet
 

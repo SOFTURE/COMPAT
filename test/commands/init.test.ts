@@ -174,6 +174,7 @@ describe("softure-compat init", () => {
       "src/PETSEO.Contract.Internal.Messages/Broadcasts/Started.cs": "public record Started(int X);\n",
       "src/PETSEO.Contract.Internal.Messages/bin/Debug/Gen.cs": "public record Gen(int X);\n",
       "src/Worker/Messages/Done.cs": "public record Done(int X);\n",
+      "tests/Orders.Contracts.Tests/Fixtures.cs": "public class Fixtures { }\n",
     });
     const { written } = await init(repo);
     expect(written?.layers["message-contracts"]).toEqual({
