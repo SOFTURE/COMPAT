@@ -30,6 +30,12 @@ const IGNORED_SEGMENTS = new Set(["node_modules", "bin", "obj", "dist"]);
 const OPENAPI_GLOBS = ["**/{openapi,swagger}*.{json,yaml,yml}"];
 /** Packages that serve an OpenAPI spec from a running ASP.NET app. */
 const RUNTIME_SPEC_PACKAGE = /Include="(FastEndpoints\.Swagger|NSwag\.AspNetCore|Swashbuckle\.AspNetCore)"/i;
+/** An SDK-style project that `dotnet run` can start. */
+const WEB_SDK = /(?:Sdk="|<Sdk\s+Name=")[^"]*Microsoft\.NET\.Sdk\.Web/i;
+const EXE_OUTPUT = /<OutputType>\s*Exe\s*<\/OutputType>/i;
+/** Calls that register an OpenAPI document, so the running app actually serves one. */
+const SPEC_REGISTRATION_CALLS = ["SwaggerDocument(", "AddSwaggerGen(", "AddOpenApiDocument(", "MapOpenApi("];
+const SOLUTION_GLOBS = ["**/*.sln", "**/*.slnx"];
 const EF_HISTORY_TABLE = "__EFMigrationsHistory";
 const DRIZZLE_POSTGRES_DIALECTS = ["postgresql", "pg"];
 const ENUM_CONVENTION = "ConfigureEnum<";
@@ -86,19 +92,92 @@ async function detectOpenapi(tree: RefTree): Promise<Result<StarterLayer>> {
   return ok({ name: "openapi", config: { apis }, summary: specs.value.join(", "), enabled: true });
 }
 
+const folderOf = (path: string) => posix.dirname(path);
+const isInside = (path: string, folder: string) => folder === "." || path.startsWith(`${folder}/`);
+
+/** Reads each path; a path missing at the ref is skipped. */
+async function readFiles(tree: RefTree, paths: string[]): Promise<Result<Map<string, string>>> {
+  const texts = new Map<string, string>();
+  for (const path of paths) {
+    const text = await tree.readFile(path);
+    if (!text.ok) return text;
+    if (text.value !== null) texts.set(path, text.value);
+  }
+  return ok(texts);
+}
+
 /**
- * No committed spec: ASP.NET projects that serve their spec at runtime get a disabled `serve`
- * source each, since the command line and URL usually need a review.
+ * The projects among `candidates` whose own C# files call a spec registration method. A file belongs
+ * to the project in its nearest enclosing folder, so a nested project's files are not counted twice.
+ */
+async function findRegisteringProjects(
+  tree: RefTree,
+  candidates: string[],
+  allProjects: string[],
+): Promise<Result<Set<string>>> {
+  const sources = await listSourceFiles(tree, ["**/*.cs"]);
+  if (!sources.ok) return sources;
+  const projectFolders = [...new Set(allProjects.map(folderOf))].sort((a, b) => b.length - a.length);
+  const candidateByFolder = new Map(candidates.map((path) => [folderOf(path), path]));
+  const owned = sources.value.filter((path) => {
+    const owner = projectFolders.find((folder) => isInside(path, folder));
+    return owner !== undefined && candidateByFolder.has(owner);
+  });
+  const texts = await readFiles(tree, owned);
+  if (!texts.ok) return texts;
+  const registering = new Set<string>();
+  for (const [path, text] of texts.value) {
+    if (!SPEC_REGISTRATION_CALLS.some((call) => text.includes(call))) continue;
+    const owner = projectFolders.find((folder) => isInside(path, folder));
+    const project = owner === undefined ? undefined : candidateByFolder.get(owner);
+    if (project !== undefined) registering.add(project);
+  }
+  return ok(registering);
+}
+
+/** The deepest solution whose folder holds every project and whose text names every project file. */
+async function findSharedSolution(tree: RefTree, projects: string[]): Promise<Result<string | null>> {
+  const solutions = await listSourceFiles(tree, SOLUTION_GLOBS);
+  if (!solutions.ok) return solutions;
+  const texts = await readFiles(tree, solutions.value);
+  if (!texts.ok) return texts;
+  const matching = [...texts.value.entries()]
+    .filter(([path, text]) =>
+      projects.every((project) => isInside(project, folderOf(path)) && text.includes(basename(project))),
+    )
+    .map(([path]) => path)
+    .sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
+  return ok(matching[0] ?? null);
+}
+
+/**
+ * No committed spec: executable ASP.NET projects that serve their spec at runtime get a disabled
+ * `serve` source each, since the command line and URL usually need a review. Several APIs from one
+ * solution share one build per side.
  */
 async function detectServedOpenapi(tree: RefTree): Promise<Result<StarterLayer>> {
   const projects = await listSourceFiles(tree, ["**/*.csproj"]);
   if (!projects.ok) return projects;
-  const served: string[] = [];
-  for (const path of projects.value) {
-    const text = await tree.readFile(path);
-    if (!text.ok) return text;
-    if (text.value !== null && RUNTIME_SPEC_PACKAGE.test(text.value)) served.push(path);
-  }
+  const texts = await readFiles(tree, projects.value);
+  if (!texts.ok) return texts;
+  const referencing = [...texts.value.entries()].filter(([, text]) => RUNTIME_SPEC_PACKAGE.test(text));
+  const executable = referencing
+    .filter(([, text]) => WEB_SDK.test(text) || EXE_OUTPUT.test(text))
+    .map(([path]) => path);
+  const leftOut = referencing
+    .filter(([path]) => !executable.includes(path))
+    .map(([path]) => `${path} (class library)`);
+  const registering = await findRegisteringProjects(tree, executable, projects.value);
+  if (!registering.ok) return registering;
+  // No candidate registers a spec in its own files: the call likely sits in a shared library, so keep them all.
+  const served =
+    registering.value.size > 0 ? executable.filter((path) => registering.value.has(path)) : executable;
+  leftOut.push(
+    ...executable
+      .filter((path) => !served.includes(path))
+      .map((path) => `${path} (no ${SPEC_REGISTRATION_CALLS.map((call) => `${call})`).join("/")} call)`),
+  );
+  const notes = leftOut.length > 0 ? `; left out: ${leftOut.join(", ")}` : "";
   if (served.length === 0) {
     return ok(
       disabled(
@@ -111,26 +190,34 @@ async function detectServedOpenapi(tree: RefTree): Promise<Result<StarterLayer>>
             },
           ],
         },
-        "no committed openapi*/swagger* spec; set a command that exports the spec at each ref",
+        `no committed openapi*/swagger* spec; set a command that exports the spec at each ref${notes}`,
       ),
     );
   }
+  const solution = served.length > 1 ? await findSharedSolution(tree, served) : ok(null);
+  if (!solution.ok) return solution;
+  const build = solution.value === null ? "" : " --no-build";
   const used = new Set<string>();
   const apis = served.map((path) => ({
     name: takeUniqueName(stripExtension(path), used),
     source: {
       kind: "serve",
-      run: `dotnet run --no-launch-profile --project ${path}`,
+      run: `dotnet run${build} --no-launch-profile --project ${path}`,
       url: "http://127.0.0.1:{port}/swagger/v1/swagger.json",
       env: { ASPNETCORE_URLS: "http://127.0.0.1:{port}", ASPNETCORE_ENVIRONMENT: "Development" },
       timeoutSeconds: 300,
     },
   }));
+  const setup = solution.value === null ? {} : { setup: { run: `dotnet build ${solution.value} -c Debug` } };
+  const fallback =
+    registering.value.size === 0
+      ? "; none registers a spec in its own files, so all executable ones are kept"
+      : "";
   return ok(
     disabled(
       "openapi",
-      { apis },
-      `${served.join(", ")} serve the spec at runtime; check the serve sources (URL, headers), then enable the layer`,
+      { ...setup, apis },
+      `${served.join(", ")} serve the spec at runtime${fallback}${notes}; check the serve sources (URL, headers), then enable the layer`,
     ),
   );
 }

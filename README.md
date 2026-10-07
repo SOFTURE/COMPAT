@@ -292,8 +292,13 @@ and revision apps run in parallel without clashing; the app also gets it as `COM
 `COMPAT_REF` and `COMPAT_COMMIT`. The report names the spec by its `url` with `{port}` kept and any query redacted.
 When the spec never arrives, the error names the last answer of the URL (`HTTP 401`, `connection refused`, ...)
 and the end of the app output; an app that exits early is reported with its exit code. Each API with a `serve`
-source starts its own app. `init` proposes a disabled `serve` source for every `*.csproj` that references
-`FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` when the repository has no committed spec.
+source starts its own app. When the repository has no committed spec, `init` proposes a disabled `serve` source for
+every executable `*.csproj` (`Sdk="Microsoft.NET.Sdk.Web"` or `<OutputType>Exe</OutputType>`) that references
+`FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` and whose own C# files call
+`SwaggerDocument(`, `AddSwaggerGen(`, `AddOpenApiDocument(` or `MapOpenApi(`. Class libraries and projects without
+such a call are left out and named on stderr; when no project calls one (the registration sits in a shared
+library), every executable project is kept. Two or more APIs listed by one `*.sln`/`*.slnx` get
+`"setup": { "run": "dotnet build <solution> -c Debug" }` and `dotnet run --no-build`, so each side builds once.
 
 ### client-usage
 

@@ -56,32 +56,142 @@ describe("softure-compat init", () => {
     expect(written?.layers.dependencies).toEqual({ sources: [{ kind: "nuget" }] });
   });
 
-  it("proposes a disabled serve source for ASP.NET projects that serve their spec at runtime", async () => {
+  const WEB = (packages: string) =>
+    `<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup>${packages}</ItemGroup></Project>\n`;
+  const SWAGGER = '<PackageReference Include="Swashbuckle.AspNetCore" />';
+  const FAST_SWAGGER = '<PackageReference Include="FastEndpoints.Swagger" Version="6.0.0" />';
+  const serve = (path: string, build = "") => ({
+    kind: "serve",
+    run: `dotnet run${build} --no-launch-profile --project ${path}`,
+    url: "http://127.0.0.1:{port}/swagger/v1/swagger.json",
+    env: { ASPNETCORE_URLS: "http://127.0.0.1:{port}", ASPNETCORE_ENVIRONMENT: "Development" },
+    timeoutSeconds: 300,
+  });
+  const NO_CALL = "no SwaggerDocument()/AddSwaggerGen()/AddOpenApiDocument()/MapOpenApi() call";
+
+  it("proposes a disabled serve source for executable projects that register a spec, and builds them once per solution", async () => {
     const repo = repoWith({
-      "src/Api/Api.csproj":
-        '<Project><ItemGroup><PackageReference Include="Swashbuckle.AspNetCore" /></ItemGroup></Project>\n',
-      "src/Admin/Admin.csproj": '<PackageReference Include="FastEndpoints.Swagger" Version="6.0.0" />\n',
+      "App.slnx":
+        '<Solution><Project Path="src/Api/Api.csproj" /><Project Path="src/Admin/Admin.csproj" /></Solution>\n',
+      "src/Api/Api.csproj": WEB(SWAGGER),
+      "src/Api/Program.cs": "builder.Services.AddSwaggerGen();\n",
+      "src/Admin/Admin.csproj": `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>${FAST_SWAGGER}</Project>\n`,
+      "src/Admin/Startup/Swagger.cs": "services.SwaggerDocument(o => {});\n",
       "src/Domain/Domain.csproj": "<Project />\n",
     });
     const { written, stderr } = await init(repo);
-    const serve = (path: string) => ({
-      kind: "serve",
-      run: `dotnet run --no-launch-profile --project ${path}`,
-      url: "http://127.0.0.1:{port}/swagger/v1/swagger.json",
-      env: { ASPNETCORE_URLS: "http://127.0.0.1:{port}", ASPNETCORE_ENVIRONMENT: "Development" },
-      timeoutSeconds: 300,
-    });
     expect(written?.layers.openapi).toEqual({
       enabled: false,
+      setup: { run: "dotnet build App.slnx -c Debug" },
       apis: [
-        { name: "Admin", source: serve("src/Admin/Admin.csproj") },
-        { name: "Api", source: serve("src/Api/Api.csproj") },
+        { name: "Admin", source: serve("src/Admin/Admin.csproj", " --no-build") },
+        { name: "Api", source: serve("src/Api/Api.csproj", " --no-build") },
       ],
     });
     expect(parseConfig(written, LAYERS, "compat.config.json").ok).toBe(true);
     expect(stderr).toContain(
       "openapi disabled: src/Admin/Admin.csproj, src/Api/Api.csproj serve the spec at runtime; check the serve sources (URL, headers), then enable the layer",
     );
+  });
+
+  it("leaves out class libraries and executables without a spec registration, naming each", async () => {
+    const repo = repoWith({
+      "SHARED/Common/Common.csproj": `<Project Sdk="Microsoft.NET.Sdk">${FAST_SWAGGER}</Project>\n`,
+      "SHARED/Common/SwaggerSetup.cs": "services.SwaggerDocument();\n",
+      "src/Public/Public.csproj": `<Project><Sdk Name="Microsoft.NET.Sdk.Web" />${FAST_SWAGGER}</Project>\n`,
+      "src/Public/Program.cs": "builder.Services.SwaggerDocument();\n",
+      "src/Internal/Internal.csproj": WEB(FAST_SWAGGER),
+      "src/Internal/Program.cs": "builder.Services.AddFastEndpoints();\n",
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.openapi).toEqual({
+      enabled: false,
+      apis: [{ name: "Public", source: serve("src/Public/Public.csproj") }],
+    });
+    expect(stderr).toContain(
+      `openapi disabled: src/Public/Public.csproj serve the spec at runtime; left out: SHARED/Common/Common.csproj (class library), src/Internal/Internal.csproj (${NO_CALL}); check the serve sources`,
+    );
+  });
+
+  it("does not count a nested project's files as the outer project's spec registration", async () => {
+    const repo = repoWith({
+      "Api.csproj": WEB(SWAGGER),
+      "Program.cs": "app.Run();\n",
+      "tools/Gen/Gen.csproj": WEB(SWAGGER),
+      "tools/Gen/Program.cs": "builder.Services.AddOpenApiDocument();\n",
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.openapi).toEqual({
+      enabled: false,
+      apis: [{ name: "Gen", source: serve("tools/Gen/Gen.csproj") }],
+    });
+    expect(stderr).toContain(`left out: Api.csproj (${NO_CALL})`);
+  });
+
+  it("keeps every executable candidate when none registers a spec in its own files", async () => {
+    const repo = repoWith({
+      "src/A/A.csproj": WEB(SWAGGER),
+      "src/B/B.csproj": WEB(SWAGGER),
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.openapi).toEqual({
+      enabled: false,
+      apis: [
+        { name: "A", source: serve("src/A/A.csproj") },
+        { name: "B", source: serve("src/B/B.csproj") },
+      ],
+    });
+    expect(stderr).toContain(
+      "src/A/A.csproj, src/B/B.csproj serve the spec at runtime; none registers a spec in its own files, so all executable ones are kept;",
+    );
+  });
+
+  it("picks the deepest solution that lists every API and skips solutions that miss one", async () => {
+    const repo = repoWith({
+      "All.sln":
+        'Project("{X}") = "A", "APP\\src\\A\\A.csproj"\nProject("{X}") = "B", "APP\\src\\B\\B.csproj"\n',
+      "APP/App.sln": 'Project("{X}") = "A", "src\\A\\A.csproj"\nProject("{X}") = "B", "src\\B\\B.csproj"\n',
+      "APP/Only.slnx": '<Solution><Project Path="src/A/A.csproj" /></Solution>\n',
+      "APP/src/A/A.csproj": WEB(SWAGGER),
+      "APP/src/A/Program.cs": "MapOpenApi();\n",
+      "APP/src/B/B.csproj": WEB(SWAGGER),
+      "APP/src/B/Program.cs": "MapOpenApi();\n",
+    });
+    const { written } = await init(repo);
+    expect(written?.layers.openapi).toHaveProperty("setup", { run: "dotnet build APP/App.sln -c Debug" });
+  });
+
+  it("writes no setup for several APIs when no solution lists them all, nor for a single API", async () => {
+    const several = repoWith({
+      "App.slnx": '<Solution><Project Path="src/A/A.csproj" /></Solution>\n',
+      "src/A/A.csproj": WEB(SWAGGER),
+      "src/B/B.csproj": WEB(SWAGGER),
+    });
+    const single = repoWith({
+      "App.slnx": '<Solution><Project Path="src/A/A.csproj" /></Solution>\n',
+      "src/A/A.csproj": WEB(SWAGGER),
+    });
+    const { written: severalWritten } = await init(several);
+    const { written: singleWritten } = await init(single);
+    expect(severalWritten?.layers.openapi).not.toHaveProperty("setup");
+    expect(singleWritten?.layers.openapi).toEqual({
+      enabled: false,
+      apis: [{ name: "A", source: serve("src/A/A.csproj") }],
+    });
+  });
+
+  it("falls back to the command example when every referencing project is a class library", async () => {
+    const repo = repoWith({
+      "src/Common/Common.csproj": `<Project Sdk="Microsoft.NET.Sdk">${SWAGGER}</Project>\n`,
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.openapi).toEqual({
+      enabled: false,
+      apis: [
+        { name: "api", source: { kind: "command", run: "npm run export:openapi", output: "openapi.json" } },
+      ],
+    });
+    expect(stderr).toContain("; left out: src/Common/Common.csproj (class library)\n");
   });
 
   it("detects OpenAPI specs and names them after the file or its folder, uniquely", async () => {
