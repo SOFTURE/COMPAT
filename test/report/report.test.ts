@@ -90,6 +90,14 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain("## needs-action (1)\n\n- **config / api** `key-added` Shop__ApiKey");
   });
 
+  it("names the resolver and what it resolved to in the header", () => {
+    const report = buildReport([]);
+    report.base = { ref: "2.2.4", commit: "a".repeat(40), resolver: "github-deployment:prod" };
+    expect(renderMarkdown(report).split("\n")[2]).toBe(
+      "Base github-deployment:prod → 2.2.4 `aaaaaaaaaaaa`, revision `bbbbbbbbbbbb`, fail on `breaking`.",
+    );
+  });
+
   it("escapes table and code characters", () => {
     expect(escapeMarkdown("a|b`c\\d\ne")).toBe("a\\|b\\`c\\\\d e");
     expect(escapeMarkdown("<!-- @team/owners -->")).toBe("&lt;!-- @\u200bteam/owners --&gt;");
@@ -110,6 +118,18 @@ describe("renderJson", () => {
       ["config", "failed"],
     ]);
     expect(document.layers[0].findings[2].accepted).toEqual({ reason: "unused since 2.0" });
+  });
+
+  it("includes the resolver of a resolved ref", () => {
+    const report = buildReport([]);
+    report.base = { ref: "2.2.4", commit: "a".repeat(40), resolver: "github-deployment:prod" };
+    const document = JSON.parse(renderJson(report));
+    expect(document.base).toEqual({
+      ref: "2.2.4",
+      commit: "a".repeat(40),
+      resolver: "github-deployment:prod",
+    });
+    expect(document.revision).toEqual({ ref: "2.3.4", commit: "b".repeat(40) });
   });
 
   it("renders an empty report", () => {
