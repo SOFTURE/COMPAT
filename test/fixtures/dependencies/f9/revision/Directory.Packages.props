@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <EfVersion>9.0.1</EfVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="SOFTURE.MessageBroker.Rabbit" Version="1.2.0" />
+    <PackageVersion Include="Npgsql" Version="3.2.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="$(EfVersion)" />
+    <!-- <PackageVersion Include="Legacy.Client" Version="1.0.0" /> -->
+    <PackageVersion Include="xunit" Version="2.9.3" />
+  </ItemGroup>
+</Project>
