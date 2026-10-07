@@ -1,7 +1,7 @@
 ---
 change_id: sql-migrations-layer
 title: "Migrations new in the revision are classified for Postgres and SQL Server, with evidence per statement"
-status: implementing
+status: implemented
 roadmap_item: CMP-2
 branch: claude/project-thread-balvwr
 created: 2026-10-07
