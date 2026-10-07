@@ -133,7 +133,8 @@ const ACCEPTANCE: Row[] = [
     subject: "20261005073152_AddMissingPetBreeds: Breeds",
     class: "needs-action",
   },
-  { finding: "F6", layer: "seed", id: "row-added", subject: "db/seed.sql: EmailTemplates", class: "safe" },
+  // #71: the rows write NotificationType.TermsChange, new in the revision, so a rollback breaks base builds.
+  { finding: "F6", layer: "seed", id: "row-added", subject: "db/seed.sql: EmailTemplates", class: "rollback-risk" },
   {
     finding: "F7",
     layer: "persisted-enums",
@@ -224,14 +225,15 @@ describe.skipIf(shouldSkipRealOasdiff(oasdiff))("PETSEO acceptance table, all v1
     ]);
   });
 
-  it("F1 and F6 leave nothing but safe findings next to F2 in their layers", async () => {
+  it("F1 adds only safe findings; F2 and F6 are the only non-safe ones in their layers", async () => {
     const { report } = await check("plain.json");
-    expect(findLayer(report, "seed").findings.filter((finding) => finding.class !== "safe")).toEqual([]);
+    const seed = findLayer(report, "seed").findings.filter((finding) => finding.class !== "safe");
+    expect(seed.map((finding) => finding.subject)).toEqual(["db/seed.sql: EmailTemplates"]);
     const openapi = findLayer(report, "openapi").findings.filter((finding) => finding.class !== "safe");
     expect(openapi.map((finding) => finding.id)).toEqual([F2_ACCEPT.id]);
   });
 
-  it("passes the default gate once F2 is accepted, and still fails at rollback-risk on F7", async () => {
+  it("passes the default gate once F2 is accepted, and still fails at rollback-risk on F6 and F7", async () => {
     const accepted = await check("accepted.json");
     expect(accepted.exitCode).toBe(0);
     const f2 = findLayer(accepted.report, "openapi").findings.find((finding) => finding.id === F2_ACCEPT.id);
@@ -239,6 +241,9 @@ describe.skipIf(shouldSkipRealOasdiff(oasdiff))("PETSEO acceptance table, all v1
 
     const strict = await check("accepted.json", "--fail-on", "rollback-risk");
     expect(strict.exitCode).toBe(1);
-    expect(strict.report.gate.reasons).toEqual(["persisted-enums: 1 finding(s) at or above rollback-risk"]);
+    expect(strict.report.gate.reasons).toEqual([
+      "seed: 1 finding(s) at or above rollback-risk",
+      "persisted-enums: 1 finding(s) at or above rollback-risk",
+    ]);
   });
 });
