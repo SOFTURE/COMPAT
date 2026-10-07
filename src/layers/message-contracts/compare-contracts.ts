@@ -183,6 +183,7 @@ export function compareContracts(base: ContractIndex, revision: ContractIndex): 
     added.map(([, located]) => located),
   );
   const paired = new Set(pairs.values());
+  const kinds = collectTypeKinds(base, revision);
 
   for (const [identity, old] of base.types) {
     const current = revision.types.get(identity) ?? pairs.get(old);
@@ -210,7 +211,7 @@ export function compareContracts(base: ContractIndex, revision: ContractIndex): 
         revision: { path: current.path, line: current.type.line },
       });
     }
-    changes.push(...compareType(old, current));
+    changes.push(...compareType(old, current, kinds));
   }
   for (const [, located] of added) {
     if (paired.has(located)) continue;
@@ -264,7 +265,86 @@ function pairRenames(removed: LocatedType[], added: LocatedType[]): Map<LocatedT
 
 const stripNullable = (type: string) => type.replace(/\?$/, "");
 
-function compareType(old: LocatedType, current: LocatedType): ContractChange[] {
+type TypeKind = "value" | "reference";
+
+/** Value types by normalized name: the C# keywords and the BCL structs a message usually carries. */
+const VALUE_TYPES = new Set([
+  "bool",
+  "byte",
+  "sbyte",
+  "char",
+  "short",
+  "ushort",
+  "int",
+  "uint",
+  "long",
+  "ulong",
+  "nint",
+  "nuint",
+  "float",
+  "double",
+  "decimal",
+  "DateTime",
+  "DateTimeOffset",
+  "DateOnly",
+  "TimeOnly",
+  "TimeSpan",
+  "Guid",
+  "Half",
+  "Int128",
+  "UInt128",
+]);
+
+const REFERENCE_TYPES = new Set(["string", "object", "dynamic", "Uri", "Version"]);
+
+/** Generic types that are structs; any other generic type is read as a class or interface. */
+const GENERIC_VALUE_TYPES = new Set(["ValueTuple", "KeyValuePair", "Nullable", "Memory", "ReadOnlyMemory"]);
+
+/**
+ * Kinds of the types declared in the sources of both refs, by simple name without arity.
+ * A name declared with both kinds is left out, so it reads as unknown.
+ */
+function collectTypeKinds(base: ContractIndex, revision: ContractIndex): Map<string, TypeKind | null> {
+  const kinds = new Map<string, TypeKind | null>();
+  const add = (fullName: string, kind: TypeKind) => {
+    const name = fullName.split(/[.+]/).at(-1)?.replace(/`\d+$/, "") ?? fullName;
+    const known = kinds.get(name);
+    kinds.set(name, known === undefined || known === kind ? kind : null);
+  };
+  for (const index of [base, revision]) {
+    for (const { type } of index.types.values()) {
+      add(type.fullName, type.kind === "struct" || type.kind === "record struct" ? "value" : "reference");
+    }
+    for (const fullName of index.enums.keys()) add(fullName, "value");
+  }
+  return kinds;
+}
+
+/** Whether a normalized type (without its trailing `?`) is a value or reference type; `null` when unknown. */
+function getTypeKind(type: string, declared: Map<string, TypeKind | null>): TypeKind | null {
+  if (type.startsWith("(")) return "value";
+  if (type.endsWith("]")) return "reference";
+  const genericStart = type.indexOf("<");
+  const name = (genericStart === -1 ? type : type.slice(0, genericStart)).split(".").at(-1) ?? type;
+  if (genericStart !== -1) return GENERIC_VALUE_TYPES.has(name) ? "value" : "reference";
+  if (VALUE_TYPES.has(name)) return "value";
+  if (REFERENCE_TYPES.has(name)) return "reference";
+  return declared.get(name) ?? null;
+}
+
+const NULLABILITY_RISKS: Record<TypeKind | "unknown", string> = {
+  value: "a null sent by one build fails to deserialize or reads as a default in the other",
+  reference:
+    "a null sent by one build still deserializes in the other (nullable reference annotations are not enforced); code there that dereferences it throws",
+  unknown:
+    "a null sent by one build fails to deserialize or reads as a default in the other for a value type, and for a reference type deserializes but throws where code dereferences it",
+};
+
+function compareType(
+  old: LocatedType,
+  current: LocatedType,
+  kinds: Map<string, TypeKind | null>,
+): ContractChange[] {
   const changes: ContractChange[] = [];
   const name = current.type.fullName;
   const scope = current.source;
@@ -345,7 +425,7 @@ function compareType(old: LocatedType, current: LocatedType): ContractChange[] {
       scope,
       subject: `${name}.${next.name}`,
       message: isNullabilityOnly
-        ? `${property.type} -> ${next.type}: a null sent by one build fails or reads as a default in the other when the type is a value type`
+        ? `${property.type} -> ${next.type}: ${NULLABILITY_RISKS[getTypeKind(stripNullable(next.type), kinds) ?? "unknown"]}`
         : `${property.type} -> ${next.type}: messages of one build may not deserialize in the other`,
       base: site,
       revision: revisionSite,

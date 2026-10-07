@@ -22,6 +22,7 @@ Options:
   --output <file>         check: write the report to a file instead of stdout
   --fail-on <class>       check: breaking | rollback-risk | needs-action | never (default: breaking)
   --allow-incomplete      check: do not fail when a layer was skipped or failed
+  --require <layer,...>   check: fail unless these layers ran (not disabled, unconfigured, skipped or failed)
   --no-download           check: never download oasdiff; skip the openapi layer when it is missing
   --force                 init: overwrite an existing config file
   -h, --help              show this help
@@ -37,6 +38,7 @@ const CHECK_ONLY_FLAGS = [
   "output",
   "fail-on",
   "allow-incomplete",
+  "require",
   "no-download",
 ] as const;
 
@@ -65,6 +67,7 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       output: { type: "string" },
       "fail-on": { type: "string" },
       "allow-incomplete": { type: "boolean" },
+      require: { type: "string" },
       "no-download": { type: "boolean" },
       force: { type: "boolean" },
       help: { type: "boolean", short: "h", default: false },
@@ -103,6 +106,10 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
   if (!isOneOf(FAIL_ON_VALUES, failOn)) {
     return usageError(io, `--fail-on must be one of ${FAIL_ON_VALUES.join(", ")}`);
   }
+  const required = parseLayerList(values.require);
+  if (required !== undefined && required.length === 0) {
+    return usageError(io, "--require needs at least one layer name");
+  }
   return runCheck(
     {
       base: values.base,
@@ -113,10 +120,21 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       outputPath: values.output,
       failOn,
       allowIncomplete: values["allow-incomplete"] ?? false,
+      required,
     },
     // Layers read the opt-out from the environment, the same switch CI can set without the flag.
     values["no-download"] ? { ...io, env: { ...io.env, [NO_DOWNLOAD_ENV_VAR]: "1" } } : io,
   );
+}
+
+/** `"openapi, seed,"` becomes `["openapi", "seed"]`; duplicates are dropped. */
+function parseLayerList(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const names = value
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  return [...new Set(names)];
 }
 
 function usageError(io: CheckIo, message: string): number {
