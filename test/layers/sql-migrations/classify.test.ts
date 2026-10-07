@@ -48,8 +48,35 @@ describe("classifyMigrations", () => {
       "add-constraint safe 0002: Flags",
       "add-unique-index needs-action 0002: Owners",
     ]);
-    expect(items[1]?.finding.message).toMatch(/^on a table created by these migrations/);
+    expect(items[1]?.finding.message).toBe(
+      "adds a unique index on Flags; the table is created by these migrations, so no old build uses it",
+    );
     expect(items[3]?.finding.evidence).toEqual([{ ...REVISION, path: "db/0002.sql", line: 4 }]);
+  });
+
+  it("describes safe follow-ups on a new table without the original rule's risk text", () => {
+    const items = classify([
+      migration(
+        "0002",
+        [
+          'CREATE TABLE "Flags" ("Id" int NOT NULL, "Key" text NOT NULL);',
+          'CREATE UNIQUE INDEX "IX_Flags_Key" ON "Flags" ("Key");',
+          'INSERT INTO "Flags" ("Id", "Key") VALUES (1, \'a\');',
+          'INSERT INTO "Flags" ("Id", "Key") VALUES (2, \'b\');',
+        ].join("\n"),
+      ),
+    ]);
+    expect(summary(items)).toEqual([
+      "create-table safe 0002: Flags",
+      "add-unique-index safe 0002: Flags",
+      "insert-explicit-id safe 0002: Flags",
+    ]);
+    expect(items[2]?.finding.message).toBe(
+      "inserts rows with explicit ids into Flags; the table is created by these migrations, so no old build uses it",
+    );
+    for (const { finding } of items.slice(1)) {
+      expect(finding.message).not.toMatch(/start failing|precondition/);
+    }
   });
 
   it("keeps a drop and recreate of an existing table breaking", () => {
