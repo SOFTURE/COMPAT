@@ -42,3 +42,62 @@ jobs:
           COMPAT_REQUIRE_OASDIFF: "1"
       - run: npm run build
       - run: npm run test:pack
+
+  # Runs action.yml from this commit against a throwaway repository whose seed truncates a table (a needs-action
+  # finding), with the CLI packed from this commit, so the action and the CLI it runs are tested together.
+  action:
+    name: action (self-test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pack the CLI
+        id: pack
+        run: |
+          npm pack --pack-destination "${RUNNER_TEMP}"
+          echo "tarball=$(ls "${RUNNER_TEMP}"/softure-ai-compat-*.tgz)" >> "$GITHUB_OUTPUT"
+      - name: Create the fixture repository
+        id: fixture
+        run: |
+          FIXTURE="${RUNNER_TEMP}/fixture"
+          mkdir -p "${FIXTURE}/db"
+          cp test/fixtures/seed/f6-postgres/base.sql "${FIXTURE}/db/seed.sql"
+          echo '{ "layers": { "seed": { "sources": [{ "name": "db", "dialect": "postgres", "files": ["db/seed.sql"] }] } } }' \
+            > "${FIXTURE}/compat.config.json"
+          cd "${FIXTURE}"
+          git init -q -b main
+          git config user.name ci
+          git config user.email ci@example.com
+          git add -A && git commit -qm base && git tag production
+          printf 'TRUNCATE "EmailTemplates";\n' >> db/seed.sql
+          git commit -qam revision
+          echo "path=${FIXTURE}" >> "$GITHUB_OUTPUT"
+      - name: Run the action (the gate must fail)
+        id: compat
+        continue-on-error: true
+        uses: ./
+        with:
+          base: production
+          fail-on: needs-action
+          working-directory: ${{ steps.fixture.outputs.path }}
+          package: ${{ steps.pack.outputs.tarball }}
+          comment-key: self-test
+          node-version: ""
+      - name: Check the outcome
+        env:
+          OUTCOME: ${{ steps.compat.outcome }}
+          EXIT_CODE: ${{ steps.compat.outputs.exit-code }}
+          REPORT: ${{ steps.compat.outputs.report }}
+        run: |
+          test "${OUTCOME}" = "failure" || { echo "::error::expected the step to fail, got ${OUTCOME}"; exit 1; }
+          test "${EXIT_CODE}" = "1" || { echo "::error::expected exit code 1, got ${EXIT_CODE}"; exit 1; }
+          grep -q '`truncate`' "${REPORT}" || { echo "::error::the report has no truncate finding"; cat "${REPORT}"; exit 1; }
+          echo "The action failed the gate on the truncate finding, as expected."

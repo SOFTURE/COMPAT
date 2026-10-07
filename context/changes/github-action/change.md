@@ -1,9 +1,9 @@
 ---
 change_id: github-action
 title: "A GitHub Action runs the check and puts the report where reviewers look"
-status: new
+status: implementing
 roadmap_item: CMP-11
-branch: null
+branch: claude/github-action-g1szvu
 created: 2026-10-07
 updated: 2026-10-07
 archived_at: null
