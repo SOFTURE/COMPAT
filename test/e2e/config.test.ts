@@ -48,7 +48,7 @@ beforeAll(() => {
         config: {
           sources,
           accept: [
-            ...["Shop__BaseUrl", "Shop__ApiKey", "ShopBaseUrl", "ShopApiKey"].map((key) => ({
+            ...["Shop__BaseUrl", "SHOP_API_KEY"].map((key) => ({
               key,
               id: "config-key-added-required",
               reason: "set in the production vault on 2026-10-06",
@@ -63,6 +63,17 @@ beforeAll(() => {
       },
     }),
   );
+  for (const [name, script, timeoutSeconds] of [
+    ["presence.json", "printf 'SHOP_API_KEY\\n'", undefined],
+    ["presence-values.json", "printf 'SHOP_API_KEY=abc\\nLogging__Level=abc\\n'", undefined],
+    ["presence-failing.json", "echo SHOP_API_KEY=abc; exit 2", undefined],
+  ] as const) {
+    writeRepoFile(
+      repo,
+      name,
+      JSON.stringify({ layers: { config: { sources, presence: { run: script, timeoutSeconds } } } }),
+    );
+  }
 });
 afterAll(() => repo.cleanup());
 
@@ -99,20 +110,16 @@ describe("config layer end to end (research F10)", () => {
     expect(layer?.status).toBe("ran");
     const summary = layer?.findings.map((f) => `${f.subject} ${f.id} ${f.class}`);
     expect(summary).toEqual([
-      "Logging__Level config-key-default-removed needs-action",
-      "ShopApiKey config-key-added-required needs-action",
-      "ShopBaseUrl config-key-added-required needs-action",
-      "Shop__ApiKey config-key-added-required needs-action",
-      "Shop__BaseUrl config-key-added-required needs-action",
-      "Shop__TimeoutSeconds config-key-added-optional safe",
+      "LOGGING_LEVEL config-key-default-removed needs-action",
+      "SHOP_API_KEY config-key-added-required needs-action",
+      "SHOP_BASE_URL config-key-added-required needs-action",
+      "SHOP_TIMEOUT_SECONDS config-key-added-optional safe",
     ]);
-    const baseUrl = layer?.findings.find((f) => f.subject === "Shop__BaseUrl");
+    // The .NET member `ShopBaseUrl` and the `Shop__BaseUrl` of compose and Ansible are one setting.
+    const baseUrl = layer?.findings.find((f) => f.subject === "SHOP_BASE_URL");
     expect(baseUrl?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
       "VPS/ANSIBLE/roles/app/tasks/main.yml:5",
       "deploy/docker-compose.yml:7",
-    ]);
-    const dotnet = layer?.findings.find((f) => f.subject === "ShopBaseUrl");
-    expect(dotnet?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
       "src/Petseo.Api/Settings/ApiSettings.cs:10",
     ]);
   });
@@ -142,12 +149,45 @@ describe("config layer end to end (research F10)", () => {
     const { code, layer } = await runJson(...check("accepted.json", "--fail-on", "needs-action"));
     expect(code).toBe(0);
     const accepted = layer?.findings.filter((f) => f.accepted).map((f) => f.subject);
-    expect(accepted).toEqual([
-      "Logging__Level",
-      "ShopApiKey",
-      "ShopBaseUrl",
-      "Shop__ApiKey",
-      "Shop__BaseUrl",
+    expect(accepted).toEqual(["LOGGING_LEVEL", "SHOP_API_KEY", "SHOP_BASE_URL"]);
+  });
+});
+
+describe("config presence end to end (issue #20)", () => {
+  it("makes a key the target environment lists safe and keeps the others needs-action", async () => {
+    const { layer } = await runJson(...check("presence.json"));
+    const summary = layer?.findings
+      .filter((f) => f.class !== "safe" || f.id !== "config-key-added-optional")
+      .map((f) => `${f.subject} ${f.class}`);
+    expect(summary).toEqual([
+      "LOGGING_LEVEL needs-action",
+      "SHOP_API_KEY safe",
+      "SHOP_BASE_URL needs-action",
     ]);
+  });
+
+  it("never puts a value the presence command printed into the report", async () => {
+    for (const format of ["md", "json"]) {
+      const run = createIo(repo.dir);
+      await main([...check("presence-values.json"), "--format", format], run.io);
+      expect(run.stdout()).toContain("present in the target environment");
+      expect(run.stdout()).not.toContain("abc");
+      expect(run.stderr()).not.toContain("abc");
+    }
+  });
+
+  it("keeps the classes and adds a note when the presence command fails", async () => {
+    const run = createIo(repo.dir);
+    await main([...check("presence-failing.json"), "--format", "json"], run.io);
+    expect(run.stdout()).not.toContain("abc");
+    const report = JSON.parse(run.stdout()) as {
+      layers: { status: string; notes: string[]; findings: JsonFinding[] }[];
+    };
+    const layer = report.layers[0];
+    expect(layer?.status).toBe("ran");
+    expect(layer?.findings.find((f) => f.subject === "SHOP_API_KEY")?.class).toBe("needs-action");
+    expect(layer?.notes).toContain(
+      "presence command exited 2; keys that need a value in production stay unresolved",
+    );
   });
 });

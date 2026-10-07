@@ -145,14 +145,14 @@ const ACCEPTANCE: Row[] = [
     finding: "F10",
     layer: "config",
     id: "config-key-added-required",
-    subject: "Shop__BaseUrl",
+    subject: "SHOP_BASE_URL",
     class: "needs-action",
   },
   {
     finding: "F10",
     layer: "config",
     id: "config-key-added-required",
-    subject: "Shop__ApiKey",
+    subject: "SHOP_API_KEY",
     class: "needs-action",
   },
 ];

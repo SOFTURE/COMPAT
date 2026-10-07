@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileKeyPattern } from "../../../src/layers/config/config.js";
+import { compilePattern } from "../../../src/layers/config/config.js";
 import { scanRegex } from "../../../src/layers/config/scan-regex.js";
 
 describe("scanRegex", () => {
@@ -30,7 +30,7 @@ describe("scanRegex", () => {
   });
 
   it("reports the line of the key when the match starts on an earlier line", () => {
-    const compiled = compileKeyPattern("^\\s*-\\s*app_env\\.(?<key>\\w+) is defined", "m");
+    const compiled = compilePattern("^\\s*-\\s*app_env\\.(?<key>\\w+) is defined", "m");
     if (!("regex" in compiled)) throw new Error(compiled.error);
     const text = "that:\n\n  - app_env.A is defined\n";
     expect(scanRegex(text, { regex: compiled.regex, comments: "none" })).toEqual([
@@ -46,5 +46,41 @@ describe("scanRegex", () => {
 
   it("does not hang on a pattern that matches the empty string", () => {
     expect(scanRegex("abc", { regex: /(?<key>x*)/g, comments: "none" })).toEqual([]);
+  });
+
+  it("builds a key from a template over several groups of one match", () => {
+    const regex = /Get\("(?<section>\w+)", "(?<member>\w+)"\)/dg;
+    const text = 'x;\nGet("Shop", "BaseUrl")';
+    expect(scanRegex(text, { regex, comments: "none", key: "{section}__{member}" })).toEqual([
+      { key: "Shop__BaseUrl", line: 2, default: null },
+    ]);
+  });
+
+  it("takes a template group from the nearest enclosing match before the key", () => {
+    const regex = /public required \w+ (?<member>\w+) \{/dg;
+    const enclosing = /class (?<section>\w+?)Settings\b/dg;
+    const text = [
+      "public required string Orphan { get; }",
+      "class ShopSettings {",
+      "  public required string BaseUrl { get; }",
+      "}",
+      "class PaymentSettings {",
+      "  public required string BaseUrl { get; }",
+      "}",
+    ].join("\n");
+    expect(scanRegex(text, { regex, enclosing, comments: "none", key: "{section}__{member}" })).toEqual([
+      { key: "__Orphan", line: 1, default: null },
+      { key: "Shop__BaseUrl", line: 3, default: null },
+      { key: "Payment__BaseUrl", line: 6, default: null },
+    ]);
+  });
+
+  it("prefers a group of the match itself over the same group of the enclosing match", () => {
+    const regex = /(?:(?<section>\w+):)?(?<member>\w+)=/dg;
+    const enclosing = /\[(?<section>\w+)\]/dg;
+    const text = "[Shop]\nBaseUrl=\nPayment:Key=";
+    expect(
+      scanRegex(text, { regex, enclosing, comments: "none", key: "{section}__{member}" }).map((d) => d.key),
+    ).toEqual(["Shop__BaseUrl", "Payment__Key"]);
   });
 });

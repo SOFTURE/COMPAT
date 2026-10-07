@@ -191,11 +191,25 @@ Compares the OpenAPI spec of each API at both refs with `oasdiff changelog`. oas
 }
 ```
 
+Several APIs built from one solution can share one build per side:
+
+```json
+{
+  "setup": { "run": "dotnet build App.slnx -c Debug", "timeoutSeconds": 900 },
+  "apis": [
+    { "name": "b2c", "source": { "kind": "command", "run": "dotnet run --no-build --project src/B2C -- export openapi.json", "output": "openapi.json" } },
+    { "name": "admin", "source": { "kind": "command", "run": "dotnet run --no-build --project src/Admin -- export admin.json", "output": "admin.json" } }
+  ]
+}
+```
+
 | Key | Meaning |
 | --- | --- |
 | `apis[].name` | unique name (letters, digits, `.`, `_`, `-`) |
 | `apis[].source` | where the spec comes from at each ref, see below |
 | `apis[].accept[]` | `{ id, operation?, reason }`; `operation` is `METHOD /path` as oasdiff reports it |
+| `setup` | `{ run, timeoutSeconds? }`: a command run once per side, before any spec source of that side; see below |
+| `concurrency` | `2` (default) prepares the base and revision sides in parallel; `1` prepares them one after the other |
 | `oasdiff.path` | oasdiff binary; a relative path is resolved against the repository root |
 | `oasdiff.args` | extra arguments for `oasdiff changelog` (not `--format`, `-f`, `--fail-on`, `-o`) |
 
@@ -212,6 +226,13 @@ Spec sources:
   Swashbuckle, FastEndpoints), and make sure the command works on a clean checkout (restore dependencies inside it).
 - `{ "kind": "url", "base": "https://dev.example.com/swagger.json", "revision": "https://..." }`: fetched over
   HTTP(S), for example from a DEV environment.
+
+`setup` runs **once in each materialised ref**, whatever the number of APIs, before their spec sources, with the
+same working directory and environment (`COMPAT_SIDE`, `COMPAT_REF`, `COMPAT_COMMIT`) as a `command` source. Use it
+for a build that every export command shares; the export commands then skip the build (`dotnet run --no-build`).
+The default timeout is 600 seconds (maximum 7200). A failing setup fails the layer with the side, the ref and the
+end of its stderr. The base and revision checkouts are separate, so both sides (setup, then the spec of each API in
+order) run in parallel; set `"concurrency": 1` when one build at a time is all the machine can take.
 
 ### client-usage
 
@@ -380,11 +401,13 @@ Reports configuration keys the revision needs that production may not have.
       "kind": "regex",
       "name": "dotnet-required",
       "files": ["src/**/*Settings.cs"],
-      "pattern": "public required [\\w<>?]+ (?<key>\\w+) \\{",
+      "pattern": "public required [\\w<>?]+ (?<member>\\w+) \\{",
+      "enclosing": "class (?<section>\\w+?)Settings\\b",
+      "key": "{section}__{member}",
       "comments": "slash"
     }
   ],
-  "accept": [{ "key": "Shop__ApiKey", "id": "config-key-added-required", "reason": "set in the production vault" }]
+  "accept": [{ "key": "SHOP_API_KEY", "id": "config-key-added-required", "reason": "set in the production vault" }]
 }
 ```
 
@@ -392,12 +415,36 @@ Reports configuration keys the revision needs that production may not have.
 | --- | --- |
 | `compose` | `${VAR}` interpolation in compose files (default `files`: `**/{docker-compose,compose}{,.*}.{yml,yaml}`); `${VAR:-x}` has a default, `${VAR}` and `${VAR:?msg}` are required |
 | `dotenv` | keys of `.env` examples (default `files`: `**/.env.{example,sample,template,dist}`, `**/{example,sample}.env`); with `valuesAreDefaults: false` (the default) every key is required, with `true` a key with a value has a default |
-| `regex` | your own pattern over `files`: named group `key` (required) and `default` (optional); `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first |
+| `regex` | your own pattern over `files`: named group `key` and an optional `default`; `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first. `key` builds the key from several named groups instead, e.g. `"{section}__{member}"`; a group can also come from `enclosing`, a pattern whose nearest match before the key lends its groups (the settings class around a member). A placeholder nothing fills stays empty |
 
-Every source has an optional unique `name` (`compose` and `dotenv` default to their kind; `regex` requires one).
+Every source has an optional unique `name` (`compose` and `dotenv` default to their kind; `regex` requires one)
+and an optional `prefix` prepended to each of its keys, for a source that reads one section only (`"prefix": "Shop__"`).
+
+Keys are normalized before they are compared (`"keyMatching": "normalized"`, the default): they are split on
+`:`, `__`, `.`, `_`, `-` and case changes and joined in upper snake case, so `Shop:BaseUrl`, `Shop__BaseUrl`,
+`SHOP_BASE_URL`, `shop.base_url` and the .NET member `ShopBaseUrl` are one key, `SHOP_BASE_URL`. A finding names
+the normalized key, every source that reads it, and the original spellings when they differ.
+`"keyMatching": "exact"` compares keys as written. `accept[].key` may use any spelling.
 Keys are compared file by file for files present at both refs. A source fails the layer when it matches no file,
 loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
 `accept[]` entries are `{ key, id, reason }`.
+
+`presence` (optional) resolves the keys that need a value in production by asking the target environment for its
+key names, never its values. `run` is a shell command that prints the names, one per line; `timeoutSeconds`
+defaults to 60.
+
+```json
+"presence": { "run": "gh secret list --env prod --json name --jq '.[].name'", "timeoutSeconds": 60 }
+```
+
+Other stores work the same way: `op environment read <id> | cut -d= -f1`, `doppler secrets --only-names`,
+`aws ssm get-parameters-by-path --path /prod --query 'Parameters[].Name' --output text | tr '\t' '\n'`.
+The command runs once, in the repository's working directory (not a checked-out ref), and only when a
+`config-key-added-required` or `config-key-default-removed` finding exists. Names are normalized like every
+other key. A listed key turns the finding `safe` ("present in the target environment"); a missing key stays
+`needs-action` and says so. A line `KEY=value` is cut to `KEY` before anything is kept: values are never logged,
+stored or written to the report, and errors never quote the command's output. A failing command adds a note and
+leaves the findings as they were.
 
 | Finding id | Class |
 | --- | --- |

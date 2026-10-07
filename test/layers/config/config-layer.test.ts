@@ -1,4 +1,5 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Compose interpolation syntax is the test input
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,7 +174,7 @@ describe("config layer", () => {
     });
     expect(result.status).toBe("ran");
     if (result.status !== "ran") return;
-    expect(result.findings.find((f) => f.subject === "Shop__ApiKey")).toMatchObject({
+    expect(result.findings.find((f) => f.subject === "SHOP_API_KEY")).toMatchObject({
       id: "config-key-added-required",
       scope: "csharp",
       accepted: { reason: "already in the vault" },
@@ -185,5 +186,150 @@ describe("config layer", () => {
       "accept entry config-key-added-required on Shop__ApiKey accepted 1 finding(s)",
       "accept entry config-key-removed on Gone matched nothing; remove it if the change is gone",
     ]);
+  });
+});
+
+describe("config layer key normalization (issue #18)", () => {
+  let shopRepo: TestRepo;
+  let shopBase: RefTree;
+  let shopRevision: RefTree;
+  const settings = (section: string) =>
+    `public sealed class ${section}Settings\n{\n    public required string BaseUrl { get; init; }\n}\n`;
+  const dotnet = {
+    kind: "regex",
+    name: "dotnet-required",
+    files: ["src/**/*Settings.cs"],
+    pattern: "public required [\\w<>?]+ (?<member>\\w+) \\{",
+    enclosing: "class (?<section>\\w+?)Settings\\b",
+    key: "{section}__{member}",
+    comments: "slash",
+  };
+  const sources = [
+    { kind: "compose" },
+    {
+      kind: "regex",
+      name: "ansible-template",
+      files: ["roles/**/*.j2"],
+      pattern: "^(?<key>\\w+)=",
+      flags: "m",
+    },
+    dotnet,
+  ];
+
+  beforeAll(async () => {
+    shopRepo = createRepo([
+      {
+        files: {
+          "docker-compose.yml": "x: ${KEPT}\n",
+          "roles/app/templates/env.j2": "Kept=1\n",
+          "src/Api/PaymentSettings.cs": settings("Payment"),
+        },
+        tag: "v1",
+      },
+      {
+        files: {
+          "docker-compose.yml": "x: ${KEPT}\ny: ${SHOP_BASE_URL}\n",
+          "roles/app/templates/env.j2": "Kept=1\nShop__BaseUrl={{ shop_base_url }}\n",
+          "src/Api/ShopSettings.cs": settings("Shop"),
+        },
+        tag: "v2",
+      },
+    ]);
+    const opened = await Promise.all([
+      openRefTree({ repoDir: shopRepo.dir, ref: "v1", side: "base", tempRoot }),
+      openRefTree({ repoDir: shopRepo.dir, ref: "v2", side: "revision", tempRoot }),
+    ]);
+    if (!opened[0].ok || !opened[1].ok) throw new Error("cannot open refs");
+    shopBase = opened[0].value;
+    shopRevision = opened[1].value;
+  });
+
+  afterAll(() => shopRepo.cleanup());
+
+  const runShop = (config: unknown) => run(config, { base: shopBase, revision: shopRevision });
+
+  it("reports one setting spelled three ways in three sources as one finding with three evidence entries", async () => {
+    const result = await runShop({ sources });
+    expect(result.status).toBe("ran");
+    if (result.status !== "ran") return;
+    const required = result.findings.filter((f) => f.id === "config-key-added-required");
+    expect(required).toHaveLength(1);
+    expect(required[0]).toMatchObject({
+      subject: "SHOP_BASE_URL",
+      scope: "ansible-template, compose, dotnet-required",
+      message: expect.stringContaining("(spelled SHOP_BASE_URL, Shop__BaseUrl)"),
+    });
+    expect(required[0]?.evidence.map((e) => `${e.side} ${e.path}:${e.line}`)).toEqual([
+      "revision docker-compose.yml:2",
+      "revision roles/app/templates/env.j2:2",
+      "revision src/Api/ShopSettings.cs:3",
+    ]);
+  });
+
+  it("keeps the BaseUrl members of two settings classes as two keys", async () => {
+    // PaymentSettings.BaseUrl exists at both refs; were it the same key as ShopSettings.BaseUrl, nothing would be new.
+    const result = await runShop({ sources });
+    expect(summary(result)).toEqual([
+      "SHOP_BASE_URL config-key-added-required ansible-template, compose, dotnet-required",
+    ]);
+    expect(result.status === "ran" && result.notes).toContain(
+      'source "dotnet-required": 1 key(s) in 1 file(s) at base, 2 key(s) in 2 file(s) at revision (src/Api/PaymentSettings.cs, src/Api/ShopSettings.cs)',
+    );
+  });
+
+  it("compares keys as written in exact mode", async () => {
+    const result = await runShop({ sources, keyMatching: "exact" });
+    expect(summary(result)).toEqual([
+      "SHOP_BASE_URL config-key-added-required compose",
+      "Shop__BaseUrl config-key-added-required ansible-template, dotnet-required",
+    ]);
+  });
+
+  it("prepends a source prefix before keys are compared, and accepts by any spelling", async () => {
+    const result = await runShop({
+      sources: [
+        { kind: "compose" },
+        {
+          ...dotnet,
+          pattern: "public required [\\w<>?]+ (?<key>\\w+) \\{",
+          enclosing: undefined,
+          key: undefined,
+          files: ["src/**/ShopSettings.cs"],
+          prefix: "Shop:",
+        },
+      ],
+      accept: [{ key: "shop.base_url", id: "config-key-added-required", reason: "in the vault" }],
+    });
+    expect(result.status).toBe("ran");
+    if (result.status !== "ran") return;
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject({
+      subject: "SHOP_BASE_URL",
+      scope: "compose, dotnet-required",
+      accepted: { reason: "in the vault" },
+    });
+  });
+
+  it("runs the presence command in the repository only when a finding needs a value in production", async () => {
+    const marker = join(tempRoot, "presence-ran");
+    const optionalOnly = await run({
+      sources: [{ kind: "compose", files: ["deploy/compose.prod.yaml"] }],
+      presence: { run: `touch "${marker}"` },
+    });
+    expect(summary(optionalOnly)).toEqual(["PROD_ONLY config-key-added-optional compose"]);
+    expect(existsSync(marker)).toBe(false);
+    const required = await run({
+      sources: [{ kind: "compose" }],
+      presence: { run: `pwd > "${marker}"; echo new` },
+    });
+    expect(readFileSync(marker, "utf8").trim()).toBe(realpathSync(repo.dir));
+    expect(required.status === "ran" && required.findings.map((f) => `${f.subject} ${f.class}`)).toEqual([
+      "NEW safe",
+      "OLD safe",
+      "PROD_ONLY safe",
+    ]);
+    expect(required.status === "ran" && required.notes).toContain(
+      "presence command listed 1 key(s) in the target environment",
+    );
   });
 });

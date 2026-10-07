@@ -1,5 +1,5 @@
 import type { RefTree } from "../../git/ref-tree.js";
-import type { LayerResult } from "../../model/finding.js";
+import type { Finding, LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer } from "../layer.js";
 import {
@@ -11,7 +11,9 @@ import {
   type KeyDeclaration,
   type KeyIndex,
 } from "./classify.js";
-import { type ConfigSource, compileKeyPattern, configLayerConfigSchema } from "./config.js";
+import { type ConfigSource, compileRegexSource, configLayerConfigSchema } from "./config.js";
+import { getKeyIdentity, type KeyIdentity } from "./keys.js";
+import { applyPresence, hasResolvableFindings, type PresenceSettings, readPresentKeys } from "./presence.js";
 import { scanCompose } from "./scan-compose.js";
 import { scanDotenv } from "./scan-dotenv.js";
 import { scanRegex } from "./scan-regex.js";
@@ -31,9 +33,14 @@ export const configLayer = defineLayer({
     const pairedFiles = new Set<string>();
     const notes: string[] = [];
     const errors: string[] = [];
+    const identify = getKeyIdentity(context.config.keyMatching);
     // A source is used only when both refs were read; one side alone would invent added or removed keys.
     for (const source of context.config.sources) {
-      const scanned = await scanSourceAtBothRefs(source, context.base, context.revision);
+      const scanned = await scanSourceAtBothRefs(source, {
+        base: context.base,
+        revision: context.revision,
+        identify,
+      });
       if (!scanned.ok) {
         errors.push(`source "${source.name}": ${scanned.error}`);
         continue;
@@ -54,7 +61,12 @@ export const configLayer = defineLayer({
       revisionTree: context.revision,
       pairedFiles,
     });
-    const { findings, usage } = applyAccept(classified, context.config.accept ?? []);
+    const resolved = await resolvePresence(classified, {
+      context: { repoDir: context.repoDir, env: context.env, presence: context.config.presence },
+      identify,
+      notes,
+    });
+    const { findings, usage } = applyAccept(resolved, context.config.accept ?? [], identify);
     for (const { entry, count } of usage) {
       notes.push(
         count === 0
@@ -75,6 +87,35 @@ export const configLayer = defineLayer({
   },
 });
 
+type ResolvePresenceOptions = {
+  context: { repoDir: string; env: NodeJS.ProcessEnv; presence: PresenceSettings | undefined };
+  identify: KeyIdentity;
+  notes: string[];
+};
+
+/**
+ * Runs the presence command once, only when a finding needs a value in production. A failing
+ * command is a note: the findings keep their class.
+ */
+async function resolvePresence(
+  findings: Finding[],
+  { context, identify, notes }: ResolvePresenceOptions,
+): Promise<Finding[]> {
+  if (context.presence === undefined || !hasResolvableFindings(findings)) return findings;
+  const present = await readPresentKeys({
+    presence: context.presence,
+    cwd: context.repoDir,
+    env: context.env,
+    identify,
+  });
+  if (!present.ok) {
+    notes.push(`${present.error}; keys that need a value in production stay unresolved`);
+    return findings;
+  }
+  notes.push(`presence command listed ${present.value.size} key(s) in the target environment`);
+  return applyPresence(findings, present.value);
+}
+
 /**
  * Scans one source at both refs. A source that cannot speak for the revision fails instead of
  * returning nothing: no file at either ref, files at the base but none in the revision (moved
@@ -84,14 +125,13 @@ export const configLayer = defineLayer({
  */
 async function scanSourceAtBothRefs(
   source: ConfigSource,
-  baseTree: RefTree,
-  revisionTree: RefTree,
+  { base, revision, identify }: { base: RefTree; revision: RefTree; identify: KeyIdentity },
 ): Promise<Result<[SourceScan, SourceScan]>> {
   const scan = getScanner(source);
   if (!scan.ok) return scan;
-  const atBase = await scanSource(source, baseTree, scan.value);
+  const atBase = await scanSource(source, base, { scan: scan.value, identify });
   if (!atBase.ok) return atBase;
-  const atRevision = await scanSource(source, revisionTree, scan.value);
+  const atRevision = await scanSource(source, revision, { scan: scan.value, identify });
   if (!atRevision.ok) return atRevision;
   const globs = source.files.map((glob) => `"${glob}"`).join(", ");
   if (atRevision.value.files.length === 0) {
@@ -119,7 +159,7 @@ async function scanSourceAtBothRefs(
 async function scanSource(
   source: ConfigSource,
   tree: RefTree,
-  scan: (text: string) => KeyDeclaration[],
+  { scan, identify }: { scan: (text: string) => KeyDeclaration[]; identify: KeyIdentity },
 ): Promise<Result<SourceScan>> {
   const files = await tree.listFiles(source.files);
   if (!files.ok) return err(`cannot list files at ${tree.ref}: ${files.error}`);
@@ -128,7 +168,8 @@ async function scanSource(
     const content = await tree.readFile(path);
     if (!content.ok) return content;
     if (content.value === null) continue;
-    addDeclarations(index, scan(content.value), { source: source.name, path });
+    const declarations = scan(content.value).map((declaration) => withPrefix(declaration, source.prefix));
+    addDeclarations(index, declarations, { source: source.name, path }, identify);
   }
   return ok({ index, files: files.value });
 }
@@ -140,12 +181,17 @@ function getScanner(source: ConfigSource): Result<(text: string) => KeyDeclarati
     case "dotenv":
       return ok((text) => scanDotenv(text, { valuesAreDefaults: source.valuesAreDefaults }));
     case "regex": {
-      // The schema already compiled the pattern; this repeats it only to get the RegExp object.
-      const compiled = compileKeyPattern(source.pattern, source.flags);
-      if ("error" in compiled) return err(`pattern ${compiled.error}`);
-      return ok((text) => scanRegex(text, { regex: compiled.regex, comments: source.comments }));
+      // The schema already compiled the patterns; this repeats it only to get the RegExp objects.
+      const result = compileRegexSource(source);
+      if ("error" in result) return err(`${result.field} ${result.error}`);
+      const { compiled } = result;
+      return ok((text) => scanRegex(text, { ...compiled, comments: source.comments }));
     }
   }
+}
+
+function withPrefix(declaration: KeyDeclaration, prefix: string | undefined): KeyDeclaration {
+  return prefix === undefined ? declaration : { ...declaration, key: `${prefix}${declaration.key}` };
 }
 
 function describeSource(source: ConfigSource, atBase: SourceScan, atRevision: SourceScan): string {
