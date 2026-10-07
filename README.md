@@ -361,6 +361,23 @@ Keys are compared file by file for files present at both refs. A source fails th
 loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
 `accept[]` entries are `{ key, id, reason }`.
 
+`presence` (optional) resolves the keys that need a value in production by asking the target environment for its
+key names, never its values. `run` is a shell command that prints the names, one per line; `timeoutSeconds`
+defaults to 60.
+
+```json
+"presence": { "run": "gh secret list --env prod --json name --jq '.[].name'", "timeoutSeconds": 60 }
+```
+
+Other stores work the same way: `op environment read <id> | cut -d= -f1`, `doppler secrets --only-names`,
+`aws ssm get-parameters-by-path --path /prod --query 'Parameters[].Name' --output text | tr '\t' '\n'`.
+The command runs once, in the repository's working directory (not a checked-out ref), and only when a
+`config-key-added-required` or `config-key-default-removed` finding exists. Names are normalized like every
+other key. A listed key turns the finding `safe` ("present in the target environment"); a missing key stays
+`needs-action` and says so. A line `KEY=value` is cut to `KEY` before anything is kept: values are never logged,
+stored or written to the report, and errors never quote the command's output. A failing command adds a note and
+leaves the findings as they were.
+
 | Finding id | Class |
 | --- | --- |
 | `config-key-added-required` | `needs-action`: the value must exist in production before the deploy |
