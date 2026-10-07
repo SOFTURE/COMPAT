@@ -71,10 +71,13 @@ export type SeedStatement =
       line: number;
     }
   | { kind: "update" | "delete" | "truncate"; table: SqlName; text: string; line: number }
-  /** A statement that writes rows in a shape the reader does not know (a CTE, a loop body it cannot reach). */
+  /**
+   * A statement that writes rows in a shape the reader does not know: a CTE, dynamic SQL without a
+   * literal body, `COPY ... FROM`, `BULK INSERT`, nested SQL beyond the nesting limit.
+   */
   | { kind: "unknown-write"; text: string; line: number };
 
-/** Nested SQL (a `DO` body) is unwrapped at most this deep. */
+/** Nested SQL (a `DO` body, a dynamic-SQL literal) is unwrapped at most this deep. */
 const MAX_NESTING = 3;
 
 const NAME = NAME_PATTERN;
@@ -114,6 +117,25 @@ const TSQL_LINE_STATEMENT =
   /^(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|IF|ELSE|WHILE|BEGIN|END|PRINT|DECLARE|EXEC|EXECUTE|RAISERROR|THROW|RETURN|COMMIT|ROLLBACK|GO|SET\s+(?:@|IDENTITY_INSERT\b|NOCOUNT\b|XACT_ABORT\b|ANSI_\w+|QUOTED_IDENTIFIER\b|ARITHABORT\b|LANGUAGE\b|DATEFORMAT\b|DEADLOCK_PRIORITY\b|LOCK_TIMEOUT\b|TRANSACTION\b))\b/i;
 const WRITE_WORD = /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE)\b/i;
 const NOT_A_WRITE = /^(?:GRANT|REVOKE|CREATE|ALTER|DROP|COMMENT|EXPLAIN)\b/i;
+/** T-SQL `EXEC (...)`: dynamic SQL given as an expression in parentheses. */
+const TSQL_EXEC_EXPRESSION = /^EXEC(?:UTE)?\s*\(/i;
+/** T-SQL `EXEC sp_executesql`, optionally schema-qualified, with an optional `@stmt =` name. */
+const TSQL_SP_EXECUTESQL =
+  /^EXEC(?:UTE)?\s+(?:(?:\[?\w+\]?)?\.){0,2}\[?sp_executesql\]?(?![\w$#@])\s*(?:@stmt\s*=\s*)?/i;
+/** PL/pgSQL `EXECUTE <expression>` inside a `DO` body. */
+const PLPGSQL_EXECUTE = /^EXECUTE\b\s*/i;
+/** What may follow the literal of a PL/pgSQL `EXECUTE` without changing the executed text. */
+const PLPGSQL_EXECUTE_TAIL = /^(?:$|(?:USING|INTO)\b)/i;
+const DOLLAR_QUOTE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/;
+
+/** A string literal: its unescaped text, the offset of its first character of text, and the index after it. */
+type Literal = { text: string; offset: number; end: number };
+
+/**
+ * Dynamic SQL found at the start of a statement: a body given as one literal, or an expression the
+ * reader cannot evaluate (a variable, a concatenation, a `format(...)` call).
+ */
+type DynamicSql = { kind: "literal"; literal: Literal } | { kind: "expression"; firstLiteral: string | null };
 
 /** An open `IF`/`BEGIN` block; `guard` is the normalised `IF NOT EXISTS (...)` condition of a guarding block. */
 type Block = { guard: string | null };
@@ -470,6 +492,69 @@ function readMerge(piece: Piece, match: RegExpExecArray, dialect: SqlDialect): S
   };
 }
 
+/**
+ * Reads the string literal starting at `start` (after whitespace): `'...'`, T-SQL `N'...'` or a
+ * Postgres dollar quote. `null` for anything else, including Postgres `E'...'`, whose backslash
+ * escapes could change the text and its lines.
+ */
+function readLiteral(sql: string, start: number, dialect: SqlDialect): Literal | null {
+  let index = start;
+  while (/\s/.test(sql[index] ?? "")) index += 1;
+  if (dialect === "sqlserver" && /[Nn]/.test(sql[index] ?? "") && sql[index + 1] === "'") index += 1;
+  if (sql[index] === "'") {
+    const end = skipQuoted(sql, index, dialect);
+    if (end > sql.length || sql[end - 1] !== "'" || end - index < 2) return null;
+    return { text: sql.slice(index + 1, end - 1).replaceAll("''", "'"), offset: index + 1, end };
+  }
+  const tag = dialect === "postgres" ? DOLLAR_QUOTE.exec(sql.slice(index))?.[0] : undefined;
+  if (tag === undefined) return null;
+  const close = sql.indexOf(tag, index + tag.length);
+  if (close === -1) return null;
+  return { text: sql.slice(index + tag.length, close), offset: index + tag.length, end: close + tag.length };
+}
+
+/** The text of the first string literal in `text`, or `null`. */
+function findFirstLiteral(text: string, dialect: SqlDialect): string | null {
+  const quote = text.indexOf("'");
+  if (quote === -1) return null;
+  return text.slice(quote + 1, skipQuoted(text, quote, dialect) - 1);
+}
+
+/** Reads `expression` (the text after the dynamic-SQL keyword) as one literal followed by `isTail`, or as an expression. */
+function readDynamicBody(
+  sql: string,
+  start: number,
+  dialect: SqlDialect,
+  isTail: (rest: string) => boolean,
+): DynamicSql {
+  const literal = readLiteral(sql, start, dialect);
+  if (literal && isTail(sql.slice(literal.end).trim())) return { kind: "literal", literal };
+  return { kind: "expression", firstLiteral: findFirstLiteral(sql.slice(start), dialect) };
+}
+
+/**
+ * Dynamic SQL at the start of `piece`: T-SQL `EXEC (...)` and `EXEC sp_executesql`, and PL/pgSQL
+ * `EXECUTE` inside a `DO` body (a top-level Postgres `EXECUTE` runs a prepared statement). `null`
+ * for anything else, including a T-SQL procedure call.
+ */
+function findDynamicSql(sql: string, dialect: SqlDialect, depth: number): DynamicSql | null {
+  if (dialect === "sqlserver") {
+    const expression = TSQL_EXEC_EXPRESSION.exec(sql);
+    if (expression) {
+      const open = expression[0].length - 1;
+      const close = findClosingParen(sql, open, dialect);
+      const inner = close === -1 ? sql.length : close;
+      return readDynamicBody(sql.slice(0, inner), open + 1, dialect, (rest) => rest === "");
+    }
+    const procedure = TSQL_SP_EXECUTESQL.exec(sql);
+    if (!procedure) return null;
+    return readDynamicBody(sql, procedure[0].length, dialect, (rest) => rest === "" || rest.startsWith(","));
+  }
+  const execute = depth > 0 ? PLPGSQL_EXECUTE.exec(sql) : null;
+  if (!execute) return null;
+  return readDynamicBody(sql, execute[0].length, dialect, (rest) => PLPGSQL_EXECUTE_TAIL.test(rest));
+}
+
 /** Reads one statement without block keywords; `null` when it writes no rows the layer tracks. */
 function readWrite(piece: Piece, guard: string | null, dialect: SqlDialect): SeedStatement | null {
   const { sql, line } = piece;
@@ -566,14 +651,49 @@ function readPiece(reader: Reader, piece: Piece, inlineGuard: string | null = nu
       return;
     }
   }
-  const write = readWrite(piece, inlineGuard ?? getGuard(reader), dialect);
+  const guard = inlineGuard ?? getGuard(reader);
+  const dynamic = findDynamicSql(sql, dialect, reader.depth);
+  if (dynamic) {
+    readDynamicSql(reader, piece, dynamic, guard);
+    return;
+  }
+  if (dialect === "postgres" && /^COPY\b/i.test(sql) && findTopLevelWord(sql, /^FROM\b/i, dialect) !== -1) {
+    // `COPY ... FROM` loads rows from a file or the client that the seed layer cannot see.
+    pushUnknownWrite(reader, piece);
+    return;
+  }
+  const write = readWrite(piece, guard, dialect);
   if (write) reader.out.push(write);
   else if (
     !NOT_A_WRITE.test(sql) &&
     WRITE_WORD.test(maskLiterals(sql, dialect).replace(/\bFOR\s+UPDATE\b/gi, ""))
   ) {
-    reader.out.push({ kind: "unknown-write", text: normalizeSql(sql, dialect), line: piece.line });
+    pushUnknownWrite(reader, piece);
   }
+}
+
+function pushUnknownWrite(reader: Reader, piece: Piece): void {
+  reader.out.push({ kind: "unknown-write", text: normalizeSql(piece.sql, reader.dialect), line: piece.line });
+}
+
+/**
+ * Reads the literal body of dynamic SQL as a nested sequence that keeps the outer file's lines and
+ * the current guard. A body the reader cannot evaluate is an unknown write, unless its text starts
+ * with a statement that writes no rows (`EXECUTE format('CREATE INDEX ...')`).
+ */
+function readDynamicSql(reader: Reader, piece: Piece, dynamic: DynamicSql, guard: string | null): void {
+  if (dynamic.kind === "expression") {
+    if (!NOT_A_WRITE.test(dynamic.firstLiteral?.trimStart() ?? "")) pushUnknownWrite(reader, piece);
+    return;
+  }
+  if (reader.depth >= MAX_NESTING) {
+    pushUnknownWrite(reader, piece);
+    return;
+  }
+  const { literal } = dynamic;
+  const line = piece.line + countNewlines(piece.sql.slice(0, literal.offset));
+  const blocks = guard === null ? [] : [{ guard }];
+  readSequence({ ...reader, depth: reader.depth + 1, blocks }, literal.text, line);
 }
 
 /**
@@ -638,7 +758,7 @@ function readIf(reader: Reader, piece: Piece): void {
     conditionEnd = close + 1;
     const after = sql.slice(conditionEnd);
     // Only a bare `IF NOT EXISTS (...)` guards; `IF NOT EXISTS (...) AND ...` is some other condition.
-    if (/^\s*(?:THEN\b|BEGIN\b|INSERT\b|MERGE\b|$)/i.test(after)) {
+    if (/^\s*(?:THEN\b|BEGIN\b|INSERT\b|MERGE\b|EXEC(?:UTE)?\b|$)/i.test(after)) {
       guard = normalizeSql(sql.slice(open, conditionEnd), dialect);
     }
   } else {
@@ -661,7 +781,10 @@ function readIf(reader: Reader, piece: Piece): void {
 }
 
 function readDoBlock(reader: Reader, piece: Piece, doBlock: RegExpExecArray): void {
-  if (reader.depth >= MAX_NESTING) return;
+  if (reader.depth >= MAX_NESTING) {
+    pushUnknownWrite(reader, piece);
+    return;
+  }
   const tag = doBlock[1] as string;
   const bodyStart = piece.sql.indexOf(tag) + tag.length;
   const body = getDoBody(doBlock[2] as string, reader.dialect);

@@ -269,3 +269,20 @@ describe("applySeedAccept", () => {
     ]);
   });
 });
+
+describe("classifySeedFile: dynamic SQL", () => {
+  it("diffs rows inside EXEC literals and points at the outer line", () => {
+    const seed = (name: string) =>
+      `SET NOCOUNT ON;\nEXEC(N'\nMERGE INTO Roles AS t USING (VALUES\n(1, N''Admin''),\n(2, N''${name}'')) AS s (Id, Name) ON t.Id = s.Id\nWHEN MATCHED THEN UPDATE SET Name = s.Name\nWHEN NOT MATCHED THEN INSERT (Id, Name) VALUES (s.Id, s.Name);')`;
+    expect(classify(seed("User"), seed("User"), "sqlserver")).toEqual([]);
+    const findings = classify(seed("User"), seed("Member"), "sqlserver");
+    expect(summary(findings)).toEqual([["row-changed", "needs-action", "db/seed.sql: Roles"]]);
+    expect(findings[0]?.finding.evidence.map((evidence) => evidence.line)).toEqual([5]);
+  });
+
+  it("reports an added COPY as an unreadable write", () => {
+    expect(summary(classify("SELECT 1;", "SELECT 1;\nCOPY roles FROM STDIN;"))).toEqual([
+      ["unreadable-write", "needs-action", "db/seed.sql: statement"],
+    ]);
+  });
+});

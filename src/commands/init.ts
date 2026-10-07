@@ -48,6 +48,13 @@ const ENUM_DISCOVERY = {
 
 const CONTRACT_GLOBS = ["**/*Contract*/**/*.cs", "**/*Messages/**/*.cs"];
 const CONTRACT_FOLDER = /Contract|Messages$/;
+/** Folder names that hold broker messages by convention, without a reference to check. */
+const BROKER_FOLDER = /(?:Messages|Events)$/;
+/** Generic broker APIs whose type arguments name messages: MassTransit's consumers, contexts and clients. */
+const BROKER_GENERIC = /\b(?:IConsumer|ConsumeContext|IRequestClient|Publish|Send)\s*</g;
+/** `Publish(new T ...)` and `Send(new T ...)`: the message type follows `new`. */
+const BROKER_NEW = /\b(?:Publish|Send)\s*\(\s*new\s+([\w.]+)/g;
+const TYPE_DECLARATION = /\b(?:class|record|struct|interface|enum)\s+@?([A-Za-z_]\w*)/g;
 const TEST_FOLDER = /(?:^|\.)Tests?$/i;
 
 const isIgnored = (path: string) => path.split("/").some((segment) => IGNORED_SEGMENTS.has(segment));
@@ -398,21 +405,74 @@ function detectClientUsage(openapi: StarterLayer): StarterLayer {
   );
 }
 
-/** The outermost folder of each C# file under a `*Contract*` or `*Messages` folder. */
+/** The text between the `<` at `open` and its matching `>`; empty when the statement ends first. */
+function readTypeArguments(text: string, open: number): string {
+  let depth = 0;
+  for (let index = open; index < text.length; index++) {
+    if (text[index] === "<") depth++;
+    else if (text[index] === ">" && --depth === 0) return text.slice(open + 1, index);
+    else if (text[index] === ";" || text[index] === "{") break;
+  }
+  return "";
+}
+
+/** Simple names of the types that broker APIs name in the repository's C# files. */
+async function findBrokerTypeNames(tree: RefTree): Promise<Result<Set<string>>> {
+  const files = await listSourceFiles(tree, ["**/*.cs"]);
+  if (!files.ok) return files;
+  const names = new Set<string>();
+  for (const path of files.value) {
+    const text = await tree.readFile(path);
+    if (!text.ok) return text;
+    if (text.value === null) continue;
+    for (const match of text.value.matchAll(BROKER_GENERIC)) {
+      const typeArguments = readTypeArguments(text.value, match.index + match[0].length - 1);
+      for (const name of typeArguments.match(/[A-Za-z_]\w*/g) ?? []) names.add(name);
+    }
+    for (const match of text.value.matchAll(BROKER_NEW)) {
+      names.add(match[1]?.split(".").at(-1) ?? "");
+    }
+  }
+  return ok(names);
+}
+
+/** Whether a contract folder holds broker messages: by its name, or because a broker API names one of its types. */
+async function isBrokerFolder(
+  tree: RefTree,
+  folder: { path: string; files: string[] },
+  brokerTypes: Set<string>,
+): Promise<Result<boolean>> {
+  if (BROKER_FOLDER.test(posix.basename(folder.path))) return ok(true);
+  for (const path of folder.files) {
+    const text = await tree.readFile(path);
+    if (!text.ok) return text;
+    for (const match of text.value?.matchAll(TYPE_DECLARATION) ?? []) {
+      if (brokerTypes.has(match[1] ?? "")) return ok(true);
+    }
+  }
+  return ok(false);
+}
+
+/**
+ * The outermost folder of each C# file under a `*Contract*` or `*Messages` folder, kept when it holds
+ * broker messages; request and response DTO folders are left to `openapi`.
+ */
 async function detectMessageContracts(tree: RefTree): Promise<Result<StarterLayer>> {
   const files = await listSourceFiles(tree, CONTRACT_GLOBS);
   if (!files.ok) return files;
-  const folders = new Set<string>();
+  const folders = new Map<string, string[]>();
   for (const path of files.value) {
     const segments = path.split("/");
     const position = segments.findIndex(
       (segment, index) => index < segments.length - 1 && CONTRACT_FOLDER.test(segment),
     );
-    if (position !== -1 && !segments.some((segment) => TEST_FOLDER.test(segment)))
-      folders.add(segments.slice(0, position + 1).join("/"));
+    if (position === -1 || segments.some((segment) => TEST_FOLDER.test(segment))) continue;
+    const folder = segments.slice(0, position + 1).join("/");
+    folders.set(folder, [...(folders.get(folder) ?? []), path]);
   }
-  const globs = [...folders].sort().map((folder) => `${folder}/**/*.cs`);
-  if (globs.length === 0) {
+  const candidates = [...folders.keys()].sort();
+  const toGlobs = (paths: string[]) => paths.map((folder) => `${folder}/**/*.cs`);
+  if (candidates.length === 0) {
     return ok(
       disabled(
         "message-contracts",
@@ -421,10 +481,29 @@ async function detectMessageContracts(tree: RefTree): Promise<Result<StarterLaye
       ),
     );
   }
+  const brokerTypes = await findBrokerTypeNames(tree);
+  if (!brokerTypes.ok) return brokerTypes;
+  const kept: string[] = [];
+  const skipped: string[] = [];
+  for (const path of candidates) {
+    const isBroker = await isBrokerFolder(tree, { path, files: folders.get(path) ?? [] }, brokerTypes.value);
+    if (!isBroker.ok) return isBroker;
+    (isBroker.value ? kept : skipped).push(path);
+  }
+  const skippedNote = `no IConsumer<T>, ConsumeContext<T>, IRequestClient<T>, Publish or Send names a type of ${skipped.join(", ")} and the folder name does not end with Messages or Events, so it is read as HTTP DTOs that openapi covers`;
+  if (kept.length === 0) {
+    return ok(
+      disabled(
+        "message-contracts",
+        { sources: [{ name: "contracts", language: "csharp", files: toGlobs(skipped) }] },
+        `${skippedNote}; enable the layer if these types travel through a broker`,
+      ),
+    );
+  }
   return ok({
     name: "message-contracts",
-    config: { sources: [{ name: "contracts", language: "csharp", files: globs }] },
-    summary: [...folders].sort().join(", "),
+    config: { sources: [{ name: "contracts", language: "csharp", files: toGlobs(kept) }] },
+    summary: skipped.length === 0 ? kept.join(", ") : `${kept.join(", ")}; skipped: ${skippedNote}`,
     enabled: true,
   });
 }
