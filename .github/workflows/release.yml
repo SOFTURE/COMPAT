@@ -226,20 +226,30 @@ jobs:
   # `uses: SOFTURE/COMPAT@v0` follows the latest stable release: the major tag is moved to the commit of `vX.Y.Z`.
   # Runs on every push, so a re-run also repairs the tag. A prerelease never moves it, and neither does a release whose
   # commit has no action.yml (versions before the action existed).
+  # GitHub refuses GITHUB_TOKEN any ref that creates or changes workflow files ("refusing to allow a GitHub App to
+  # create or update workflow ... without `workflows` permission"), and a new or moved tag counts as one. The tag is
+  # therefore pushed with the MAJOR_TAG_TOKEN secret (a fine-grained token with Contents and Workflows write on this
+  # repository). Without the secret the job warns and leaves the tag alone; `@vX.Y.Z` keeps working.
   move-major-tag:
     needs: [validate, github-release]
     if: ${{ !cancelled() && needs.validate.result == 'success' && needs.github-release.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
+    env:
+      HAS_MAJOR_TAG_TOKEN: ${{ secrets.MAJOR_TAG_TOKEN != '' }}
     steps:
-      # The tag is pushed with git: creating it through the REST refs API answered GITHUB_TOKEN with HTTP 403
-      # ("Resource not accessible by integration") on the 0.3.0 release.
+      - name: ⚠️ No MAJOR_TAG_TOKEN
+        if: ${{ env.HAS_MAJOR_TAG_TOKEN != 'true' }}
+        run: echo "::warning::MAJOR_TAG_TOKEN is not set; the major tag was not moved. Add the secret and re-run this job."
       - uses: actions/checkout@v4
+        if: ${{ env.HAS_MAJOR_TAG_TOKEN == 'true' }}
         with:
           ref: ${{ github.sha }}
+          token: ${{ secrets.MAJOR_TAG_TOKEN }}
       - name: 🏷️ Move the major tag to the released commit
+        if: ${{ env.HAS_MAJOR_TAG_TOKEN == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
