@@ -134,7 +134,13 @@ const ACCEPTANCE: Row[] = [
     class: "needs-action",
   },
   // #71: the rows write NotificationType.TermsChange, new in the revision, so a rollback breaks base builds.
-  { finding: "F6", layer: "seed", id: "row-added", subject: "db/seed.sql: EmailTemplates", class: "rollback-risk" },
+  {
+    finding: "F6",
+    layer: "seed",
+    id: "row-added",
+    subject: "db/seed.sql: EmailTemplates",
+    class: "rollback-risk",
+  },
   {
     finding: "F7",
     layer: "persisted-enums",
