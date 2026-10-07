@@ -234,6 +234,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The tag is pushed with git: creating it through the REST refs API answered GITHUB_TOKEN with HTTP 403
+      # ("Resource not accessible by integration") on the 0.3.0 release.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: 🏷️ Move the major tag to the released commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -255,10 +260,8 @@ jobs:
             --jq ".[] | select(.ref == \"refs/tags/${MAJOR}\") | .object.sha")
           if [ "${CURRENT}" = "${SHA}" ]; then
             echo "${MAJOR} already points at v${VERSION} (${SHA})."
-          elif [ -n "${CURRENT}" ]; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR}" -f sha="${SHA}" -F force=true --silent
-            echo "Moved ${MAJOR} to v${VERSION} (${SHA})."
           else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${MAJOR}" -f sha="${SHA}" --silent
-            echo "Created ${MAJOR} at v${VERSION} (${SHA})."
+            git fetch --no-tags --depth=1 origin "${SHA}"
+            git push --force origin "${SHA}:refs/tags/${MAJOR}"
+            echo "Pointed ${MAJOR} at v${VERSION} (${SHA}); it was ${CURRENT:-missing}."
           fi
