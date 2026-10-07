@@ -148,6 +148,8 @@ a compose-only repository, `main` usage errors.
 - Rollback: each phase is one commit; revert it. Removing `private` is harmless until a tag is pushed.
 
 ## Decisions (auto)
+- Phase 3 drift: `README.md` does not exist until Phase 4, so the pack test asserts `LICENSE` in Phase 3 and
+  `README.md` in Phase 4, and item 3.3 was checked for `dist/cli.js` and `LICENSE` (README re-checked in 4.4).
 - Complexity → medium (four thin phases, no data, one new command).
 - Interactive wizard for `init` → no (non-interactive; agents and CI run it).
 - JSON Schema for `$schema` → out of scope (not in change.md; the README reference and the zod errors cover it).
@@ -167,16 +169,16 @@ a compose-only repository, `main` usage errors.
 ### Phase 2: `softure-compat init`
 
 #### Automated
-- [x] 2.1 `npx vitest run test/commands/init.test.ts test/main.test.ts` passes with detection, overwrite, no-commit and init-then-check cases
-- [x] 2.2 Gates green (typecheck, lint, test)
+- [x] 2.1 `npx vitest run test/commands/init.test.ts test/main.test.ts` passes with detection, overwrite, no-commit and init-then-check cases — 53011bb
+- [x] 2.2 Gates green (typecheck, lint, test) — 53011bb
 
 ### Phase 3: Package, CI and publish workflow
 
 #### Automated
-- [ ] 3.1 `npm run build && npm run test:pack` passes, including `init` and `check` from the built CLI
-- [ ] 3.2 `actionlint` reports no issue in `.github/workflows/`
-- [ ] 3.3 `npm publish --dry-run` succeeds and lists `dist/cli.js` and `README.md`
-- [ ] 3.4 Gates green (typecheck, lint, test)
+- [x] 3.1 `npm run build && npm run test:pack` passes, including `init` and `check` from the built CLI
+- [x] 3.2 `actionlint` reports no issue in `.github/workflows/`
+- [x] 3.3 `npm publish --dry-run` succeeds and lists `dist/cli.js` and `README.md`
+- [x] 3.4 Gates green (typecheck, lint, test)
 
 #### Manual
 - [ ] 3.5 The owner adds the `NPM_TOKEN` secret and pushes tag `v0.1.0`; the workflow publishes with provenance
@@ -185,6 +187,7 @@ a compose-only repository, `main` usage errors.
 
 #### Automated
 - [ ] 4.1 `npx vitest run test/readme.test.ts` passes
+- [ ] 4.4 `npm publish --dry-run` and the pack test list `README.md`
 - [ ] 4.2 Gates green (typecheck, lint, test)
 
 #### Manual

@@ -1,8 +1,7 @@
 {
   "name": "@softure-ai/compat",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Backward-compatibility check between two git refs: OpenAPI, SQL migrations, seeds, persisted enums, configuration and message contracts",
+  "version": "0.1.0",
+  "description": "Backward-compatibility check between two git refs of a server release: OpenAPI, SQL migrations, seed scripts, persisted enums and configuration",
   "keywords": [
     "backward-compatibility",
     "openapi",
@@ -15,6 +14,10 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SOFTURE/COMPAT.git"
+  },
+  "homepage": "https://github.com/SOFTURE/COMPAT#readme",
+  "bugs": {
+    "url": "https://github.com/SOFTURE/COMPAT/issues"
   },
   "type": "module",
   "bin": {
