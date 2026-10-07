@@ -33,7 +33,7 @@ opens.
 
 | ID | Change | Outcome | Depends on | Mode | Status |
 | --- | --- | --- | --- | --- | --- |
-| **CMP-7** | `seed-silent-writes` | seed writes inside dynamic SQL are diffed; `COPY` and unreadable dynamic SQL are reported instead of silent | — | autonomous | new |
+| **CMP-7** | `seed-silent-writes` | seed writes inside dynamic SQL are diffed; `COPY` and unreadable dynamic SQL are reported instead of silent | — | autonomous | done |
 | **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | new |
 | **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | new |
 | **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | new |
@@ -51,7 +51,7 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ### CMP-7: Seed silent writes
 - **Change ID:** `seed-silent-writes`
-- **Status:** new
+- **Status:** done
 - **Outcome:** dynamic SQL with a literal body (`EXEC(N'...')`, `EXEC sp_executesql N'...'`, `EXECUTE '...'` in a
   `DO` body) is unwrapped and diffed; `EXECUTE format(...)`, concatenated dynamic SQL and `COPY ... FROM` are
   `unreadable-write` `needs-action`.

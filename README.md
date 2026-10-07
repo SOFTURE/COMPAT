@@ -428,7 +428,10 @@ The row key is the `ON CONFLICT (...)` target, else the `MERGE ... ON` pairs, el
 | `safe` | `row-added`, `row-removed`, `seed-file-removed`, `insert-query-added` |
 | `needs-action` | `row-changed`, `row-change-ignored`, `row-added-skipped`, `row-deleted`, `insert-unguarded`, `upsert-query`, `update-data`, `delete-data`, `truncate`, `unreadable-write` |
 
-Dynamic SQL (`EXEC(N'...')`, `EXECUTE format(...)`), `COPY` and `BULK INSERT` are not read.
+Dynamic SQL with a literal body (`EXEC(N'...')`, `EXEC sp_executesql N'...'`, `EXECUTE '...'` inside a `DO` body)
+is unwrapped and its statements are compared like any other, with the lines of the outer file. Dynamic SQL without a
+literal body (`EXEC(@sql)`, `EXECUTE format(...)`, concatenation), `COPY ... FROM` and `BULK INSERT` are reported as
+`unreadable-write`. psql's `\copy` is a client command and is not read.
 
 ### persisted-enums
 
