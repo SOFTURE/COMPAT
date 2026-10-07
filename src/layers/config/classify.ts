@@ -125,7 +125,7 @@ function compareText(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-function toEvidence(tree: RefTree, declarations: SourcedDeclaration[]): Evidence[] {
+export function toEvidence(tree: RefTree, declarations: SourcedDeclaration[]): Evidence[] {
   const unique = new Map<string, SourcedDeclaration>();
   for (const declaration of declarations) {
     unique.set(`${declaration.path}:${declaration.line}`, declaration);

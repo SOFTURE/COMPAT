@@ -138,6 +138,46 @@ describe("config layer schema", () => {
     ).toEqual([expect.stringMatching(/^accept\.0\.reason: /)]);
   });
 
+  it("accepts chains with defaults and chain accept entries", () => {
+    const result = parse({
+      sources: [{ kind: "compose" }, { ...regexSource, name: "deploy-prod" }, regexSource],
+      chains: [{ name: "app-env", sources: ["compose", "deploy-prod"], required: ["ansible"] }],
+      accept: [{ key: "DEV_ONLY", chain: "app-env", reason: "DEV only" }],
+    });
+    expect(result.success && result.data.chains).toEqual([
+      { name: "app-env", sources: ["compose", "deploy-prod"], required: ["ansible"], scope: "changed" },
+    ]);
+    expect(result.success && result.data.accept).toEqual([
+      { key: "DEV_ONLY", chain: "app-env", reason: "DEV only" },
+    ]);
+  });
+
+  it("rejects a chain with an unknown source, fewer than two sources, a repeated source or a repeated name", () => {
+    const sources = [{ kind: "compose" }, regexSource];
+    expect(issues({ sources, chains: [{ name: "c", sources: ["compose", "nope"] }] })).toEqual([
+      'chains.0: names source "nope", which is not in `sources`',
+    ]);
+    expect(issues({ sources, chains: [{ name: "c", sources: ["compose"] }] })).toEqual([
+      "chains.0: needs at least two sources",
+    ]);
+    expect(
+      issues({ sources, chains: [{ name: "c", sources: ["compose", "ansible"], required: ["compose"] }] }),
+    ).toEqual(["chains.0: lists a source more than once across `sources` and `required`"]);
+    const chain = { name: "c", sources: ["compose", "ansible"] };
+    expect(issues({ sources, chains: [chain, chain] })).toEqual(["chains.1.name: must be unique"]);
+  });
+
+  it("rejects a chain accept entry for an unknown chain or without a reason", () => {
+    const sources = [{ kind: "compose" }, regexSource];
+    const chains = [{ name: "c", sources: ["compose", "ansible"] }];
+    expect(issues({ sources, chains, accept: [{ key: "A", chain: "nope", reason: "x" }] })).toEqual([
+      'accept.0.chain: names chain "nope", which is not in `chains`',
+    ]);
+    expect(issues({ sources, chains, accept: [{ key: "A", chain: "c" }] })).toEqual([
+      expect.stringMatching(/^accept\.0\.reason: /),
+    ]);
+  });
+
   it("plugs into compat.config.json and names the full path of an error", () => {
     const valid = parseConfig(
       { layers: { config: { sources: [{ kind: "compose" }] } } },
