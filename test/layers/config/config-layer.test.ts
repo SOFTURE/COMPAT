@@ -155,6 +155,39 @@ describe("config layer", () => {
     });
   });
 
+  it("reports a new pass-through environment entry as a required key", async () => {
+    const passRepo = createRepo([
+      { files: { "docker-compose.yml": "services:\n  app:\n    environment:\n      - KEPT\n" }, tag: "v1" },
+      {
+        files: {
+          "docker-compose.yml": "services:\n  app:\n    environment:\n      - KEPT\n      - NEW_SECRET\n",
+        },
+        tag: "v2",
+      },
+    ]);
+    try {
+      const opened = await Promise.all([
+        openRefTree({ repoDir: passRepo.dir, ref: "v1", side: "base", tempRoot }),
+        openRefTree({ repoDir: passRepo.dir, ref: "v2", side: "revision", tempRoot }),
+      ]);
+      if (!opened[0].ok || !opened[1].ok) throw new Error("cannot open refs");
+      const result = await run(
+        { sources: [{ kind: "compose" }] },
+        { base: opened[0].value, revision: opened[1].value },
+      );
+      expect(result.status).toBe("ran");
+      if (result.status !== "ran") return;
+      expect(result.findings.map((f) => `${f.subject} ${f.id} ${f.class}`)).toEqual([
+        "NEW_SECRET config-key-added-required needs-action",
+      ]);
+      expect(result.findings[0]?.evidence).toEqual([
+        expect.objectContaining({ path: "docker-compose.yml", line: 5 }),
+      ]);
+    } finally {
+      passRepo.cleanup();
+    }
+  });
+
   it("joins regex sources with compose sources and applies accept entries", async () => {
     const result = await run({
       sources: [
