@@ -92,6 +92,15 @@ function compareDeclarations(before: Declaration[], after: Declaration[]): Verdi
   };
 }
 
+/** Why a finding exists although the manifest range may not have changed. */
+function describeResolution(declarations: Declaration[]): string {
+  const resolutions = declarations.map((declaration) => declaration.resolution);
+  if (resolutions.every((resolution) => resolution === undefined)) return "";
+  if (resolutions.every((resolution) => resolution === "transitive"))
+    return "; transitive, resolved from lockfile";
+  return "; resolved from lockfile";
+}
+
 function compareText(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
@@ -157,7 +166,8 @@ export function classifyPackages(options: ClassifyOptions): Classified {
     }
     if (verdict === null) continue;
     let findingClass = verdict.class;
-    let message = verdict.message;
+    let message =
+      verdict.message + describeResolution([...(before?.declarations ?? []), ...(after?.declarations ?? [])]);
     for (const { entry, matches } of watch) {
       if (!matches(known.name)) continue;
       if (entry.class !== undefined && compareClass(entry.class, findingClass) > 0) {
