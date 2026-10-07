@@ -37,7 +37,7 @@ opens.
 | **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | new |
 | **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | new |
 | **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | new |
-| **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | new |
+| **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | done |
 | **CMP-12** | `release-0-3-0` | README and backlog brought up to date, version `0.3.0` released | CMP-7..CMP-11 | autonomous | new |
 
 ## Order
@@ -92,7 +92,7 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ### CMP-11: GitHub Action
 - **Change ID:** `github-action`
-- **Status:** new
+- **Status:** done
 - **Outcome:** `action.yml` at the root (`uses: SOFTURE/COMPAT@v0`) runs the check, writes the report to
   `$GITHUB_STEP_SUMMARY` and creates or updates one PR comment; `release.yml` moves the `v0` tag.
 - **Why it matters:** `needs-action` findings (secrets, data preconditions) do not fail the default gate, so they
@@ -120,4 +120,4 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 | `protobuf` layer on `buf breaking` | considered for v2 | No consumer uses gRPC today, and AGENTS.md lists no gRPC adapter. Add it when a consumer needs it. |
 
 ## Done
-(nothing yet)
+- **CMP-11** `github-action`: composite `action.yml` (job summary, one PR comment by marker, gate last, CLI pinned to the release through `package.json`), CI self-test, `release.yml` moves the major tag; archived in `archive/2026-10-07-github-action/`
