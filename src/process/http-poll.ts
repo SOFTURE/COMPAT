@@ -17,6 +17,8 @@ export type PollUrlOutcome =
 
 const DEFAULT_INTERVAL_MS = 500;
 const MAX_REQUEST_MS = 10_000;
+const NO_RESPONSE_YET = "no response yet";
+const REQUEST_TIMED_OUT = "request timed out";
 
 /**
  * Fetches `url` until it answers 2xx with an accepted body. Each outcome other than `ready`
@@ -24,15 +26,18 @@ const MAX_REQUEST_MS = 10_000;
  */
 export async function pollUrl(options: PollUrlOptions): Promise<PollUrlOutcome> {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-  let lastObservation = "no response yet";
+  let lastObservation = NO_RESPONSE_YET;
   for (;;) {
     const stopReason = options.getStopReason?.() ?? null;
     if (stopReason !== null) return { status: "stopped", reason: stopReason, lastObservation };
     const remainingMs = options.deadline - Date.now();
     if (remainingMs <= 0) return { status: "timed-out", lastObservation };
-    const attempt = await fetchOnce(options, Math.min(remainingMs, MAX_REQUEST_MS));
+    const requestMs = Math.min(remainingMs, MAX_REQUEST_MS);
+    const attempt = await fetchOnce(options, requestMs);
     if (attempt.status === "ready") return attempt;
-    lastObservation = attempt.observation;
+    // A request the deadline cut short says nothing new; keep the answer the app gave before it.
+    const isCutByDeadline = attempt.observation === REQUEST_TIMED_OUT && requestMs < MAX_REQUEST_MS;
+    if (!isCutByDeadline || lastObservation === NO_RESPONSE_YET) lastObservation = attempt.observation;
     const waitMs = Math.min(intervalMs, options.deadline - Date.now());
     if (waitMs > 0) await new Promise((done) => setTimeout(done, waitMs));
   }
@@ -68,7 +73,7 @@ async function fetchOnce(options: PollUrlOptions, timeoutMs: number): Promise<At
 
 function describeFetchError(error: unknown): string {
   const failure = error as { name?: string; cause?: { code?: string } };
-  if (failure.name === "TimeoutError") return "request timed out";
+  if (failure.name === "TimeoutError") return REQUEST_TIMED_OUT;
   const code = failure.cause?.code;
   if (code === "ECONNREFUSED") return "connection refused";
   if (code === "ECONNRESET") return "connection reset";
