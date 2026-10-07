@@ -347,9 +347,11 @@ describe("softure-compat init", () => {
     const exitCode = await main(["check", "--base", "v1", "--revision", "HEAD", "--format", "json"], run.io);
     expect(exitCode).toBe(0);
     const report = JSON.parse(run.stdout()) as {
-      layers: { layer: string; findings: { subject: string; id: string }[] }[];
+      layers: { layer: string; status: string; findings: { subject: string; id: string }[] }[];
     };
-    expect(report.layers.map((layer) => layer.layer)).toEqual(["config"]);
+    expect(report.layers.filter((layer) => layer.status !== "disabled").map((layer) => layer.layer)).toEqual([
+      "config",
+    ]);
     expect(report.layers[0]?.findings.map((finding) => `${finding.subject} ${finding.id}`)).toEqual([
       "B config-key-added-required",
     ]);
