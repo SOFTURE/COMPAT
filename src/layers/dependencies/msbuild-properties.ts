@@ -15,7 +15,7 @@ const DIRECTORY_BUILD_TARGETS = "Directory.Build.targets";
 
 /** A property group or an import, in document order. */
 const ELEMENT =
-  /<PropertyGroup\b[^>]*>([\s\S]*?)<\/PropertyGroup\s*>|<Import\b((?:[^>"']|"[^"]*"|'[^']*')*?)\/?>/g;
+  /<PropertyGroup\b[^>]*(?<!\/)>([\s\S]*?)<\/PropertyGroup\s*>|<Import\b((?:[^>"']|"[^"]*"|'[^']*')*?)\/?>/g;
 const PROPERTY = /<([\w.-]+)\b[^>]*>([^<]*)<\/\1\s*>/g;
 const ATTRIBUTE = /([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 const PATH_OF_FILE_ABOVE = /^\$\(\[MSBuild\]::GetPathOfFileAbove\(\s*'([^']+)'\s*(?:,\s*'([^']*)'\s*)?\)\)$/i;

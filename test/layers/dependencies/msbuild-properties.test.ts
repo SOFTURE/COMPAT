@@ -112,6 +112,20 @@ describe("evaluateMsbuildProperties", () => {
     ]);
   });
 
+  it("does not let an empty self-closing property group hide the import after it", async () => {
+    const { properties } = await evaluate("Api.csproj", {
+      "Api.csproj": [
+        "<Project>",
+        "  <PropertyGroup />",
+        '  <Import Project="Versions.props" />',
+        "  <PropertyGroup><Own>1.0.0</Own></PropertyGroup>",
+        "</Project>",
+      ].join("\n"),
+      "Versions.props": props("<Polly>8.0.0</Polly>"),
+    });
+    expect(properties).toEqual({ polly: "8.0.0", own: "1.0.0" });
+  });
+
   it("applies each file once when imports form a cycle", async () => {
     const { properties } = await evaluate("Api.csproj", {
       "Api.csproj": '<Project><Import Project="a.props" /></Project>',

@@ -11,8 +11,12 @@ import {
 } from "./classify.js";
 import { type DependencySource, dependenciesConfigSchema } from "./config.js";
 import type { Declaration } from "./declaration.js";
+import { evaluateMsbuildProperties, type ReadMsbuildFile } from "./msbuild-properties.js";
 import { readNpm } from "./read-npm.js";
 import { readNuget } from "./read-nuget.js";
+
+/** Unresolved versions listed in the notes per ref; the rest are counted. */
+const MAX_UNRESOLVED_NOTED = 5;
 
 /** Folders of installed packages and build output: their manifests are not the repository's own. */
 const IGNORED_SEGMENTS = new Set(["node_modules", "bin", "obj"]);
@@ -39,6 +43,10 @@ export const dependenciesLayer = defineLayer({
       notes.push(
         `${source.kind}: ${atBase.value.declarations.length} declaration(s) in ${atBase.value.files.length} file(s) at the base, ` +
           `${atRevision.value.declarations.length} in ${atRevision.value.files.length} file(s) in the revision`,
+      );
+      notes.push(
+        ...describeUnresolved(atBase.value.declarations, "the base"),
+        ...describeUnresolved(atRevision.value.declarations, "the revision"),
       );
     }
     // Nothing to compare must not read as "no upgrades".
@@ -72,6 +80,33 @@ function failed(error: string, notes: string[]): LayerResult {
   return { layer: DEPENDENCIES_LAYER, status: "failed", error, findings: [], notes };
 }
 
+/** A note naming the versions that still hold an MSBuild `$(Property)`, so they are never silent. */
+function describeUnresolved(declarations: Declaration[], side: string): string[] {
+  const unresolved = declarations.filter((declaration) => declaration.unresolved !== undefined);
+  if (unresolved.length === 0) return [];
+  const listed = unresolved
+    .slice(0, MAX_UNRESOLVED_NOTED)
+    .map(({ name, version, path, line }) => `${name} ${version} (${path}:${line})`);
+  const more =
+    unresolved.length > MAX_UNRESOLVED_NOTED ? ` and ${unresolved.length - MAX_UNRESOLVED_NOTED} more` : "";
+  return [
+    `${unresolved.length} NuGet version(s) keep an undefined MSBuild property at ${side}: ${listed.join(", ")}${more}`,
+  ];
+}
+
+/** Reads files of one tree once, however many MSBuild files import them. */
+function createCachedReader(tree: RefTree): ReadMsbuildFile {
+  const cache = new Map<string, ReturnType<ReadMsbuildFile>>();
+  return (path) => {
+    let text = cache.get(path);
+    if (text === undefined) {
+      text = tree.readFile(path);
+      cache.set(path, text);
+    }
+    return text;
+  };
+}
+
 async function scanSource(source: DependencySource, tree: RefTree): Promise<Result<SourceScan>> {
   const listed = await tree.listFiles(source.files);
   if (!listed.ok) return err(`cannot list files at ${tree.ref}: ${listed.error}`);
@@ -79,12 +114,15 @@ async function scanSource(source: DependencySource, tree: RefTree): Promise<Resu
     (path) => !path.split("/").some((segment) => IGNORED_SEGMENTS.has(segment)),
   );
   const declarations: Declaration[] = [];
+  const readFile = createCachedReader(tree);
   for (const path of files) {
-    const text = await tree.readFile(path);
+    const text = await readFile(path);
     if (!text.ok) return err(`cannot read ${path} at ${tree.ref}: ${text.error}`);
     if (text.value === null) continue;
     if (source.kind === "nuget") {
-      declarations.push(...readNuget(text.value, path));
+      const evaluated = await evaluateMsbuildProperties({ path, readFile });
+      if (!evaluated.ok) return err(`at ${tree.ref}: ${evaluated.error}`);
+      declarations.push(...readNuget(text.value, path, evaluated.value));
       continue;
     }
     const read = readNpm(text.value, path, source.sections);
