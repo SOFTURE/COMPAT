@@ -66,7 +66,7 @@ What `init` detects:
 | `seed` | `.sql` files with `seed` in the name that are not migrations |
 | `persisted-enums` | a `*DbContext.cs` calling `ConfigureEnum<T>()` (string storage) |
 | `config` | compose files and `.env` examples at the default globs |
-| `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`; one glob per such folder |
+| `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`, one glob per such folder, kept when the folder name ends with `Messages` or `Events` or when an `IConsumer<T>`, `ConsumeContext<T>`, `IRequestClient<T>`, `Publish`/`Send<T>` or `Publish`/`Send(new T ...)` in the repository names one of its types; request DTO folders are left to `openapi`, and with none kept the layer is written disabled |
 | `behaviour` | never: it is written disabled with example commands, since nothing in a repository says how its stack starts |
 
 Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A SQL file is read as SQL Server when it has `GO`
@@ -701,8 +701,41 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 | Key | Meaning |
 | --- | --- |
 | `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
-| `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none` |
+| `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments?, report? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none`; `report: false` for a source that only feeds a `composed` one |
+| `queues[]` | `{ kind: "composed", name, template, parts }`: names built at runtime, see below |
 | `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
+
+Some brokers build queue names at runtime, for example `SOFTURE.MessageBroker.Rabbit` 1.x names a consumer group
+queue `{Rabbit:Name}{GroupSeparator}{group}`. A `composed` source builds those names from what `regex` sources find
+and compares them like any other queue source:
+
+```json
+{
+  "queues": [
+    { "kind": "regex", "name": "rabbit-endpoint", "files": "**/appsettings.json", "pattern": "\"Name\":\\s*\"(?<queue>[^\"]+)\"", "report": false },
+    { "kind": "regex", "name": "group-separator", "files": "**/appsettings.json", "pattern": "\"GroupSeparator\":\\s*\"(?<queue>[^\"]+)\"", "report": false },
+    { "kind": "regex", "name": "consumer-groups", "files": "**/ConsumerGroups.cs", "pattern": "const string \\w+ = \"(?<queue>\\w+)\"", "report": false },
+    {
+      "kind": "composed",
+      "name": "group-queues",
+      "template": "{endpoint}{separator}{group}",
+      "parts": {
+        "endpoint": "rabbit-endpoint",
+        "group": "consumer-groups",
+        "separator": { "source": "group-separator", "default": "." }
+      }
+    }
+  ]
+}
+```
+
+Every `{part}` of the template has an entry in `parts`: the name of a `regex` queue source, or `{ source?, default? }`.
+A part takes every name its source finds at that ref, its `default` when the source finds none, or only `default`
+without a source. The source gives one queue per combination of part values, and fails above 1000 of them. Its
+evidence points at the last part, in template order, that came from a source. A `report: false` source gives no
+finding and may find nothing at a ref; the `composed` source fails when it builds no name at either ref. A separator
+that only lives inside a library (not in your configuration) is a `default`, so a library upgrade that changes it is
+reported by [`dependencies`](#dependencies), not here.
 
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire
@@ -722,7 +755,7 @@ enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`
 | `message-property-added` | `safe` when nullable (`T?`) or initialized (`= null!` and `= default` do not count); `rollback-risk` otherwise; `breaking` when `required` or `[JsonRequired]` |
 | `message-property-removed` | `breaking` |
 | `message-property-type-changed` | `breaking` (`System.` qualifiers, `global::`, `Nullable<T>` and type aliases are normalized first) |
-| `message-property-nullability-changed` | `rollback-risk`: only `?` changed |
+| `message-property-nullability-changed` | `rollback-risk`: only `?` changed; the message says what a null does to a value type (fails to deserialize or reads as a default), to a reference type (deserializes, then throws where code dereferences it) or, for a type declared outside the sources, both |
 | `message-property-required` | `breaking`: an existing property became `required` or `[JsonRequired]` |
 | `queue-added` | `safe` |
 | `queue-removed` | `needs-action`: drain it before the deploy |

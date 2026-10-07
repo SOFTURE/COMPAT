@@ -12,13 +12,16 @@ import {
   type LocatedType,
   type Site,
 } from "./compare-contracts.js";
+import { composeQueues, type QueueNames } from "./compose-queues.js";
 import {
   type AcceptEntry,
   type ContractSource,
   compileQueuePattern,
+  getPartSource,
   type MessageContractsConfig,
   messageContractsConfigSchema,
   type QueueSource,
+  type RegexQueueSource,
 } from "./config.js";
 import { parseContracts } from "./parse-contracts.js";
 
@@ -31,8 +34,8 @@ type Sides = Record<Side, RefTree>;
 /** What one source holds at one ref. */
 type SourceScan = { files: string[]; types: LocatedType[]; enums: LocatedEnum[]; failures: string[] };
 
-/** Queue names of one queue source at one ref, each with the first place it appears. */
-type QueueScan = { files: string[]; queues: Map<string, Site> };
+/** Queue names of one queue source at one ref, each with the first place it appears when there is one. */
+type QueueScan = { files: string[]; queues: Map<string, Site | undefined> };
 
 export const messageContractsLayer = defineLayer({
   name: MESSAGE_CONTRACTS_LAYER,
@@ -89,19 +92,10 @@ export const messageContractsLayer = defineLayer({
       ...compareContracts(withoutNames(indexes.base, unreadable), withoutNames(indexes.revision, unreadable)),
     );
 
-    for (const source of context.config.queues ?? []) {
-      const scanned = await scanQueuesAtBothRefs(source, sides);
-      if (!scanned.ok) {
-        errors.push(`queue source "${source.name}": ${scanned.error}`);
-        continue;
-      }
-      const [atBase, atRevision] = scanned.value;
-      errors.push(...checkQueueCoverage(source, atBase, atRevision));
-      changes.push(...compareQueues(source, atBase, atRevision));
-      notes.push(
-        `queue source "${source.name}": ${atBase.queues.size} queue(s) at the base, ${atRevision.queues.size} in the revision`,
-      );
-    }
+    const queues = await scanAllQueues(context.config.queues ?? [], sides);
+    errors.push(...queues.errors);
+    changes.push(...queues.changes);
+    notes.push(...queues.notes);
 
     const findings = changes.map((change) => toFinding(change, sides));
     const accepted = applyAccept(findings, context.config.accept ?? []);
@@ -219,7 +213,63 @@ function checkSourceCoverage(source: ContractSource, base: SourceScan, revision:
   return [];
 }
 
-async function scanQueues(source: QueueSource, tree: RefTree): Promise<Result<QueueScan>> {
+type QueueOutcome = { errors: string[]; changes: ContractChange[]; notes: string[] };
+
+/** Scans the regex queue sources, then builds the composed ones from what they found. */
+async function scanAllQueues(sources: QueueSource[], sides: Sides): Promise<QueueOutcome> {
+  const outcome: QueueOutcome = { errors: [], changes: [], notes: [] };
+  const found: Record<Side, Map<string, QueueNames>> = { base: new Map(), revision: new Map() };
+  const failed = new Set<string>();
+  for (const source of sources) {
+    if (source.kind !== "regex") continue;
+    const scanned = await scanQueuesAtBothRefs(source, sides);
+    if (!scanned.ok) {
+      outcome.errors.push(`queue source "${source.name}": ${scanned.error}`);
+      failed.add(source.name);
+      continue;
+    }
+    const [atBase, atRevision] = scanned.value;
+    found.base.set(source.name, atBase.queues);
+    found.revision.set(source.name, atRevision.queues);
+    outcome.errors.push(...checkQueueCoverage(source, atBase, atRevision));
+    if (source.report) outcome.changes.push(...compareQueues(source, atBase, atRevision));
+    outcome.notes.push(
+      `queue source "${source.name}": ${atBase.queues.size} queue(s) at the base, ${atRevision.queues.size} in the revision` +
+        (source.report ? "" : " (a part, not reported)"),
+    );
+  }
+  for (const source of sources) {
+    if (source.kind !== "composed") continue;
+    const name = `queue source "${source.name}"`;
+    const failedParts = Object.values(source.parts)
+      .map(getPartSource)
+      .filter((part) => part !== undefined && failed.has(part));
+    if (failedParts.length > 0) {
+      outcome.errors.push(`${name} is skipped: part source "${failedParts[0]}" failed`);
+      continue;
+    }
+    const atBase = composeQueues(source, found.base);
+    if (!atBase.ok) {
+      outcome.errors.push(`${name} at ${sides.base.ref} ${atBase.error}`);
+      continue;
+    }
+    const atRevision = composeQueues(source, found.revision);
+    if (!atRevision.ok) {
+      outcome.errors.push(`${name} at ${sides.revision.ref} ${atRevision.error}`);
+      continue;
+    }
+    const base: QueueScan = { files: [], queues: atBase.value };
+    const revision: QueueScan = { files: [], queues: atRevision.value };
+    outcome.errors.push(...checkQueueNames(name, base, revision));
+    outcome.changes.push(...compareQueues(source, base, revision));
+    outcome.notes.push(
+      `${name}: ${base.queues.size} queue(s) at the base, ${revision.queues.size} in the revision`,
+    );
+  }
+  return outcome;
+}
+
+async function scanQueues(source: RegexQueueSource, tree: RefTree): Promise<Result<QueueScan>> {
   const compiled = compileQueuePattern(source.pattern, source.flags);
   if ("error" in compiled) return err(`pattern ${compiled.error}`);
   const files = await readFiles(tree, source.files);
@@ -242,7 +292,7 @@ async function scanQueues(source: QueueSource, tree: RefTree): Promise<Result<Qu
 }
 
 async function scanQueuesAtBothRefs(
-  source: QueueSource,
+  source: RegexQueueSource,
   sides: Sides,
 ): Promise<Result<[QueueScan, QueueScan]>> {
   const base = await scanQueues(source, sides.base);
@@ -252,11 +302,17 @@ async function scanQueuesAtBothRefs(
   return ok([base.value, revision.value]);
 }
 
-function checkQueueCoverage(source: QueueSource, base: QueueScan, revision: QueueScan): string[] {
+function checkQueueCoverage(source: RegexQueueSource, base: QueueScan, revision: QueueScan): string[] {
   const name = `queue source "${source.name}"`;
   if (base.files.length === 0 && revision.files.length === 0)
     return [`${name} matches no file at either ref`];
   if (revision.files.length === 0) return [`${name} matches files at the base but none in the revision`];
+  // A part may find nothing at a ref (a setting left to its default); the composed source checks the names.
+  return source.report ? checkQueueNames(name, base, revision) : [];
+}
+
+/** A queue source that finds nothing, or loses every queue in the revision, is misconfigured. */
+function checkQueueNames(name: string, base: QueueScan, revision: QueueScan): string[] {
   if (base.queues.size === 0 && revision.queues.size === 0) return [`${name} finds no queue at either ref`];
   if (base.queues.size > 0 && revision.queues.size === 0)
     return [`${name} finds queues at the base but none in the revision`];

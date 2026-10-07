@@ -131,6 +131,38 @@ describe("compareContracts", () => {
     ]);
   });
 
+  it("explains a nullability change by the kind of the property type (issue #45)", () => {
+    const declarations = [
+      "public enum Status { Open }",
+      "public struct Money { public decimal Amount { get; set; } }",
+      "public class Address { public string City { get; set; } }",
+    ].join(" ");
+    const members = (mark: string) =>
+      ["int", "DateTime", "Status", "Money", "List<DayOfWeek>", "string", "Address", "int[]", "External"]
+        .map((type, position) => `public ${type}${mark} P${position} { get; set; }`)
+        .join(" ");
+    const messages = compareContracts(
+      index({ "a.cs": `namespace N; ${declarations} public class C { ${members("?")} }` }),
+      index({ "a.cs": `namespace N; ${declarations} public class C { ${members("")} }` }),
+    ).map((change) => [change.subject, change.message]);
+    const value = "a null sent by one build fails to deserialize or reads as a default in the other";
+    const reference =
+      "a null sent by one build still deserializes in the other (nullable reference annotations are not enforced); code there that dereferences it throws";
+    const unknown =
+      "a null sent by one build fails to deserialize or reads as a default in the other for a value type, and for a reference type deserializes but throws where code dereferences it";
+    expect(messages).toEqual([
+      ["N.C.P0", `int? -> int: ${value}`],
+      ["N.C.P1", `DateTime? -> DateTime: ${value}`],
+      ["N.C.P2", `Status? -> Status: ${value}`],
+      ["N.C.P3", `Money? -> Money: ${value}`],
+      ["N.C.P4", `List<DayOfWeek>? -> List<DayOfWeek>: ${reference}`],
+      ["N.C.P5", `string? -> string: ${reference}`],
+      ["N.C.P6", `Address? -> Address: ${reference}`],
+      ["N.C.P7", `int[]? -> int[]: ${reference}`],
+      ["N.C.P8", `External? -> External: ${unknown}`],
+    ]);
+  });
+
   it("reports an existing property that became required (impl review F2)", () => {
     expect(
       compare(
