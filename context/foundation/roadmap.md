@@ -28,7 +28,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 | **CMP-1** | `backward-compat-checker` | `softure-compat check` runs end to end with the finding model, git refs, reports, exit codes and the `openapi` layer | — | autonomous | done |
 | **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | done |
 | **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | done |
-| **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | ready |
+| **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | done |
 | **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | done |
 | **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | ready |
 
@@ -77,7 +77,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-4: Persisted enums layer
 - **Change ID:** `persisted-enums-layer`
-- **Status:** ready
+- **Status:** done
 - **Outcome:** C# and TypeScript enums named in the config (or discovered by a pattern such as
   `ConfigureEnum<T>`) are compared member by member with storage-aware classes.
 - **Prerequisites:** CMP-1.
@@ -117,3 +117,4 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 - **CMP-2** `sql-migrations-layer`: `sql-migrations` layer (folder and EF Core idempotent sources, Postgres and SQL Server, 26 rules, accept allowlist), shared SQL scanner in `src/sql/` for CMP-3, UTF-16 decoding in `RefTree`; archived in `archive/2026-10-07-sql-migrations-layer/`
 - **CMP-3** `seed-layer`: `seed` layer (seed files diffed per table and row key across a source's files; conflict guards, `MERGE`, `IF NOT EXISTS` blocks, `DO` bodies and T-SQL without semicolons; 14 finding ids, accept allowlist); archived in `archive/2026-10-07-seed-layer/`
 - **CMP-5** `config-layer`: `config` layer over compose interpolation, `.env` examples and configured regex sources; new required keys and removed defaults are `needs-action`, compared file by file and failing closed on silent sources; archived in `archive/2026-10-07-config-layer/`
+- **CMP-4** `persisted-enums-layer`: `persisted-enums` layer (C# and TypeScript enum parser, string and int storage rules, discovery by glob + regex, accept allowlist, F7 acceptance test); archived in `archive/2026-10-07-persisted-enums-layer/`
