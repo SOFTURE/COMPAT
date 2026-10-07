@@ -1,0 +1,7 @@
+- name: Check required settings
+  ansible.builtin.assert:
+    that:
+      - app_env.ConnectionStrings__Default is defined
+      - app_env.Shop__BaseUrl is defined
+      - app_env.Shop__ApiKey is defined
+      # - app_env.Legacy__Token is defined

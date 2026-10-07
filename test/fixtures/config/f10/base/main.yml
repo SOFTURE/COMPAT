@@ -1,0 +1,4 @@
+- name: Check required settings
+  ansible.builtin.assert:
+    that:
+      - app_env.ConnectionStrings__Default is defined

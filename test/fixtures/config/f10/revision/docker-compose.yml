@@ -1,0 +1,10 @@
+services:
+  api:
+    image: petseo/api:${API_TAG:-latest}
+    environment:
+      ConnectionStrings__Default: ${ConnectionStrings__Default:?set the database connection}
+      Logging__Level: ${Logging__Level}
+      Shop__BaseUrl: ${Shop__BaseUrl}
+      Shop__ApiKey: ${Shop__ApiKey:?the shop API key is required}
+      Shop__TimeoutSeconds: ${Shop__TimeoutSeconds:-30}
+      # Legacy__Token: ${Legacy__Token}
