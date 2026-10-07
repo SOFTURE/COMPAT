@@ -249,7 +249,10 @@ jobs:
             exit 0
           fi
           MAJOR="v${VERSION%%.*}"
-          CURRENT=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${MAJOR}" --jq .object.sha 2>/dev/null || true)
+          # matching-refs answers an empty list when the tag is missing; git/ref answers 404 with an error body that
+          # --jq would turn into a non-empty CURRENT.
+          CURRENT=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${MAJOR}" \
+            --jq ".[] | select(.ref == \"refs/tags/${MAJOR}\") | .object.sha")
           if [ "${CURRENT}" = "${SHA}" ]; then
             echo "${MAJOR} already points at v${VERSION} (${SHA})."
           elif [ -n "${CURRENT}" ]; then
