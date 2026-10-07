@@ -279,9 +279,9 @@ exit 1, evidence `drizzle/0002_x.sql:<line>`; the same with an accept entry → 
 ### Phase 2: Statement rules and migration classification
 
 #### Automated
-- [ ] 2.1 Every rule id in the Rules table has a passing test in at least one dialect, and the dialect-specific ones in theirs
-- [ ] 2.2 The named classify tests pass, including the created-table downgrade and the accept allowlist
-- [ ] 2.3 Gates green (typecheck, lint, test)
+- [x] 2.1 Every rule id in the Rules table has a passing test in at least one dialect, and the dialect-specific ones in theirs
+- [x] 2.2 The named classify tests pass, including the created-table downgrade and the accept allowlist
+- [x] 2.3 Gates green (typecheck, lint, test)
 
 ### Phase 3: Sources, the layer and the F4/F5 acceptance cases
 
