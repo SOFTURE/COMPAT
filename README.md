@@ -174,10 +174,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0   # base, revision and fail-on come from "check" in compat.config.json
+      - uses: SOFTURE/COMPAT@v0.3.0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
-`@v0` follows the latest `0.x` release; pin `@v0.3.0` to stay on one version. The action runs the CLI version released
+Use the tag of a release (`@v0.3.0`); every release has one. The action runs the CLI version released
 from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
@@ -941,12 +941,11 @@ a real oasdiff, tests the packed CLI and packs the tarball; when the `package.js
 then:
 1. publishes `@softure-ai/compat` to **npmjs.com** with provenance;
 2. publishes `@softure/compat` to **GitHub Packages** (GitHub requires the scope to match the org);
-3. creates the tag `vX.Y.Z` on the released commit and the **GitHub Release** with generated notes and the tarball.
-4. moves the major tag (`v0`) to that commit, so `uses: SOFTURE/COMPAT@v0` runs the new release (not for a
-   prerelease). GitHub does not let the workflow's own token create or move a tag on a commit with workflow files,
-   so this step needs the repository secret `MAJOR_TAG_TOKEN`: a fine-grained personal access token for this
-   repository with *Contents* and *Workflows* set to read and write. Without it the step warns and the tag stays
-   where it was; add the secret and re-run the failed or warned job to catch up.
+3. creates the tag `vX.Y.Z` on the released commit and the **GitHub Release** with generated notes and the tarball,
+   so `uses: SOFTURE/COMPAT@vX.Y.Z` runs the new release.
+
+There is no moving major tag (`v0`): GitHub does not let the workflow's own token create or move a tag on a commit
+that holds workflow files.
 
 A version with a prerelease suffix (`0.2.0-rc.1`) goes to the `next` dist-tag and is marked as a prerelease. A
 version already on a registry is skipped, so re-running the workflow (Actions → *SOFTURE COMPAT - RELEASE* → *Run
