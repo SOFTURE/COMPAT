@@ -38,7 +38,7 @@ opens.
 | **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | done |
 | **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | done |
 | **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | done |
-| **CMP-12** | `release-0-3-0` | README and backlog brought up to date, version `0.3.0` released | CMP-7..CMP-11 | autonomous | new |
+| **CMP-12** | `release-0-3-0` | README and backlog brought up to date, version `0.3.0` released | CMP-7..CMP-11 | autonomous | done |
 
 ## Order
 CMP-7..CMP-11 have no prerequisites and run in parallel (five threads). CMP-12 goes last.
@@ -102,7 +102,7 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ### CMP-12: Release 0.3.0
 - **Change ID:** `release-0-3-0`
-- **Status:** new
+- **Status:** done
 - **Outcome:** README and `context/backlog/later-layers.md` reflect v2, `package.json` goes to `0.3.0`, the merge
   releases it.
 - **Prerequisites:** CMP-7..CMP-11.
@@ -121,3 +121,4 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ## Done
 - **CMP-11** `github-action`: composite `action.yml` (job summary, one PR comment by marker, gate last, CLI pinned to the release through `package.json`), CI self-test, `release.yml` moves the major tag; archived in `archive/2026-10-07-github-action/`
+- **CMP-12** `release-0-3-0`: README "What it does not check yet" lists the 0.3.0 gaps and points to the rejected ideas, backlog closes CMP-9, `package.json` `0.3.0` released by `release.yml`; archived in `archive/2026-10-07-release-0-3-0/`

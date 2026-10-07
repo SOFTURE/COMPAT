@@ -915,9 +915,18 @@ The v1 acceptance case is the PETSEO 2.2.4 → 2.3.4 release. The tool reproduce
 migration, seed, persisted enum, configuration and dependency findings (covered by `test/e2e/acceptance.test.ts`), and
 its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-string binding changes, push payloads
 opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
-[`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked. Further layers
-are planned in
-[`context/backlog/later-layers.md`](context/backlog/later-layers.md).
+[`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked.
+
+Known gaps in 0.3.0:
+
+- psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
+- MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions
+  give different values stays unresolved and is reported conservatively (see [dependencies](#dependencies)).
+- A new error code counts against every live client whose map lacks it, whether or not that client calls an
+  operation that returns it.
+
+Open ideas live in [`context/backlog/later-layers.md`](context/backlog/later-layers.md); ideas weighed and rejected,
+with the reason, are in the "Rejected" table of [`context/foundation/roadmap.md`](context/foundation/roadmap.md).
 
 ## Releasing (maintainers)
 
