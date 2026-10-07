@@ -23,15 +23,26 @@ It works only from git. It never connects to a production server or database.
 npm install --save-dev @softure-ai/compat
 ```
 
-Node.js 22 or newer and `git` are required. The `openapi` layer also needs **oasdiff v1.33.0**:
+Node.js 22 or newer and `git` are required. The `openapi` layer uses **oasdiff v1.33.0**. You do not have to
+install it: the CLI looks for oasdiff in `layers.openapi.oasdiff.path`, the `SOFTURE_COMPAT_OASDIFF` environment
+variable and `PATH`, and when none has it, downloads the pinned v1.33.0 release for your OS and CPU from
+[github.com/oasdiff/oasdiff/releases](https://github.com/oasdiff/oasdiff/releases). The archive is checked against
+a SHA-256 shipped inside this package before it is used, and the binary is cached, so later runs work offline.
+
+| Topic | Details |
+| --- | --- |
+| Platforms | macOS (Intel and Apple silicon), Linux x64 and arm64, Windows x64 and arm64 |
+| Cache | `SOFTURE_COMPAT_CACHE_DIR`, else `$XDG_CACHE_HOME/softure-compat` or `~/.cache/softure-compat` (`%LOCALAPPDATA%\softure-compat` on Windows) |
+| Turn it off | `--no-download`, `SOFTURE_COMPAT_NO_DOWNLOAD=1`, or `"oasdiff": { "download": false }` |
+| Behind a proxy | Node.js reads `HTTPS_PROXY` when `NODE_USE_ENV_PROXY=1` is set |
+
+A download that fails or does not match the checksum fails the `openapi` layer; it never passes unchecked. With
+downloading turned off and no oasdiff found, the layer is skipped, and a skipped layer fails the gate unless you
+pass `--allow-incomplete`. The report notes which oasdiff ran and where it came from. To install oasdiff yourself:
 
 ```sh
 go install github.com/oasdiff/oasdiff@v1.33.0
 ```
-
-The CLI finds oasdiff on `PATH`, in `layers.openapi.oasdiff.path`, or in the `SOFTURE_COMPAT_OASDIFF`
-environment variable. Without it the `openapi` layer is skipped, and a skipped layer fails the gate unless you pass
-`--allow-incomplete`.
 
 ## Quick start
 
@@ -76,6 +87,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--output <file>` | check | write the report to a file instead of stdout |
 | `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `breaking`) |
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
+| `--no-download` | check | never download oasdiff; the `openapi` layer is skipped when it is missing |
 | `--force` | init | overwrite an existing config file |
 | `-h`, `--help` | both | show the help |
 | `-v`, `--version` | both | show the version |
@@ -128,10 +140,6 @@ The check needs both refs in the clone, so fetch the full history (or at least t
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- uses: actions/setup-go@v5
-  with:
-    go-version: "1.24"
-- run: go install github.com/oasdiff/oasdiff@v1.33.0
 - run: npm ci
 - run: npx softure-compat check --base github-deployment:production --revision HEAD --output compat-report.md
   env:
@@ -140,6 +148,10 @@ The check needs both refs in the clone, so fetch the full history (or at least t
 
 The job needs `permissions: { contents: read, deployments: read, actions: read }` for the GitHub resolvers. A
 literal ref (`--base "$PRODUCTION_TAG"`) works too.
+
+No Go toolchain is needed: the first run downloads the pinned oasdiff (see [Install](#install)). Cache
+`~/.cache/softure-compat` with `actions/cache` to skip the download, or pass `--no-download` on runners without
+internet access and provide oasdiff yourself.
 
 `--format json` gives a machine-readable report with the same content.
 
@@ -213,6 +225,7 @@ Several APIs built from one solution can share one build per side:
 | `setup` | `{ run, timeoutSeconds? }`: a command run once per side, before any spec source of that side; see below |
 | `concurrency` | `2` (default) prepares the base and revision sides in parallel; `1` prepares them one after the other |
 | `oasdiff.path` | oasdiff binary; a relative path is resolved against the repository root |
+| `oasdiff.download` | `false` never downloads the pinned oasdiff (default `true`) |
 | `oasdiff.args` | extra arguments for `oasdiff changelog` (not `--format`, `-f`, `--fail-on`, `-o`) |
 
 Spec sources:

@@ -101,6 +101,8 @@ export const openapiConfigSchema = z.strictObject({
   oasdiff: z
     .strictObject({
       path: z.string().min(1).optional(),
+      /** Download the pinned oasdiff release when none is configured or on PATH (default true). */
+      download: z.boolean().optional(),
       args: z
         .array(z.string())
         .refine(

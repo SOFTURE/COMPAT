@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { type CheckIo, EXIT_CANNOT_RUN, REPORT_FORMATS, runCheck } from "./commands/check.js";
 import { runInit } from "./commands/init.js";
+import { NO_DOWNLOAD_ENV_VAR } from "./layers/openapi/oasdiff-download.js";
 import { FAIL_ON_VALUES } from "./model/gate.js";
 
 export const USAGE = `Usage: softure-compat check --base <ref> --revision <ref> [options]
@@ -21,6 +22,7 @@ Options:
   --output <file>         check: write the report to a file instead of stdout
   --fail-on <class>       check: breaking | rollback-risk | needs-action | never (default: breaking)
   --allow-incomplete      check: do not fail when a layer was skipped or failed
+  --no-download           check: never download oasdiff; skip the openapi layer when it is missing
   --force                 init: overwrite an existing config file
   -h, --help              show this help
   -v, --version           show the version
@@ -28,7 +30,15 @@ Options:
 Exit codes: 0 gate passed (init: config written), 1 gate failed, 2 the command could not run.
 `;
 
-const CHECK_ONLY_FLAGS = ["base", "revision", "format", "output", "fail-on", "allow-incomplete"] as const;
+const CHECK_ONLY_FLAGS = [
+  "base",
+  "revision",
+  "format",
+  "output",
+  "fail-on",
+  "allow-incomplete",
+  "no-download",
+] as const;
 
 function readVersion(): string {
   const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -55,6 +65,7 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       output: { type: "string" },
       "fail-on": { type: "string" },
       "allow-incomplete": { type: "boolean" },
+      "no-download": { type: "boolean" },
       force: { type: "boolean" },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -103,7 +114,8 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       failOn,
       allowIncomplete: values["allow-incomplete"] ?? false,
     },
-    io,
+    // Layers read the opt-out from the environment, the same switch CI can set without the flag.
+    values["no-download"] ? { ...io, env: { ...io.env, [NO_DOWNLOAD_ENV_VAR]: "1" } } : io,
   );
 }
 

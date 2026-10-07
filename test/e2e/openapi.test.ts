@@ -93,9 +93,9 @@ describe.skipIf(shouldSkipRealOasdiff(oasdiff))("openapi layer with real oasdiff
 describe("openapi layer without oasdiff", () => {
   const env = { ...process.env, PATH: "/nonexistent", SOFTURE_COMPAT_OASDIFF: undefined };
 
-  it("is skipped and fails the gate", async () => {
+  it("is skipped with --no-download and fails the gate", async () => {
     const run = createIo(repo.dir);
-    expect(await main(check("missing.json"), { ...run.io, env })).toBe(1);
+    expect(await main(check("missing.json", "--no-download"), { ...run.io, env })).toBe(1);
     expect(run.stdout()).toContain("| openapi | skipped |");
     expect(run.stdout()).toContain("go install github.com/oasdiff/oasdiff@v1.33.0");
     expect(run.stdout()).toContain("oasdiff not found on PATH");
@@ -103,6 +103,8 @@ describe("openapi layer without oasdiff", () => {
 
   it("passes with --allow-incomplete", async () => {
     const run = createIo(repo.dir);
-    expect(await main(check("missing.json", "--allow-incomplete"), { ...run.io, env })).toBe(0);
+    expect(await main(check("missing.json", "--no-download", "--allow-incomplete"), { ...run.io, env })).toBe(
+      0,
+    );
   });
 });
