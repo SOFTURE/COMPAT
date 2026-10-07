@@ -80,6 +80,29 @@ describe("runCheck with a refining layer", () => {
     });
   });
 
+  it("passes the client calls a layer shares to the layers after it, and keeps them out of the report", async () => {
+    const calls = [{ client: "mobile", api: "b2c", ref: "1.0", operations: [{ method: "get", path: "/a" }] }];
+    const sharer = createStubLayer("stub", () => ({ layer: "stub", status: "ran", findings: [], notes: [] }));
+    const refiner = createRefiner(() => []);
+    const seen: unknown[] = [];
+    const run = createIo(repo.dir, [
+      { ...sharer, run: async (context) => ({ ...(await sharer.run(context)), calls }) },
+      {
+        ...refiner,
+        run: (context) => {
+          seen.push(context.calls);
+          return refiner.run(context);
+        },
+      },
+    ]);
+    await runCheck(
+      { base: "v1", revision: "v2", format: "json", failOn: "breaking", allowIncomplete: false },
+      run.io,
+    );
+    expect(seen).toEqual([calls]);
+    expect(JSON.parse(run.stdout()).layers[0].calls).toBeUndefined();
+  });
+
   it("fails the refining layer and keeps the original findings when a revision changes which finding it is", async () => {
     const { exitCode, report } = await check(
       createRefiner(() => [

@@ -111,6 +111,45 @@ describe("error-codes layer", () => {
     ]);
   });
 
+  it("reports only codes returned by operations that live client refs call", async () => {
+    const web = { ...mobile, name: "web", refs: ["mobile-2.0.1"] };
+    const result = await errorCodesLayer.run({
+      config: errorCodesLayer.configSchema.parse({
+        codes,
+        clients: [{ ...mobile, refs: ["mobile-2.0.1"] }, web],
+        returnedBy: [{ codes: "Shop.*", api: "b2c", operations: "* /api/shop/**" }],
+      }),
+      base,
+      revision,
+      repoDir: repo.dir,
+      tempDir: tempRoot,
+      env: process.env,
+      log: () => {},
+      results: [{ layer: "openapi", status: "ran", findings: [], notes: [] }],
+      calls: [
+        {
+          client: "mobile",
+          api: "b2c",
+          ref: "2.0.1",
+          operations: [{ method: "get", path: "/api/shop/cart" }],
+        },
+        { client: "web", api: "b2c", ref: "w1", operations: [{ method: "get", path: "/api/pets" }] },
+      ],
+    });
+    if (result.status === "skipped") throw new Error("skipped");
+    expect(
+      result.findings
+        .filter((finding) => finding.id === "error-code-unknown-to-client")
+        .map((finding) => [finding.scope, finding.subject, finding.class]),
+    ).toEqual([
+      ["mobile", "FeatureFlag.General.Disabled", "needs-action"],
+      ["mobile", "Shop.Cart.NotFound", "needs-action"],
+      ["web", "FeatureFlag.General.Disabled", "needs-action"],
+      ["web", "Shop.Cart.NotFound", "safe"],
+    ]);
+    expect(result.notes).toContain("returnedBy made 1 error-code-unknown-to-client finding(s) safe");
+  });
+
   it("fails when a client ref has no map file, keeping the code findings", async () => {
     const result = await run({ codes, clients: [{ ...mobile, refs: ["server-2.3.5"] }] });
     expect(result.status).toBe("failed");

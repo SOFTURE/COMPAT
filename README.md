@@ -376,7 +376,8 @@ library), every executable project is kept. Two or more APIs listed by one `*.sl
 oasdiff judges the contract, not what deployed clients do. This layer reads what the live builds of each client
 call and send, and re-classifies the `openapi` findings of that client's API and the
 [`enum-member-exposed-added`](#exposed-enums) findings of `persisted-enums`. It runs after both and needs at least one
-of them enabled; it adds no findings of its own.
+of them enabled; it adds no findings of its own. What each live ref calls also scopes
+[`error-codes`](#error-codes) `returnedBy`.
 
 ```json
 {
@@ -477,7 +478,8 @@ both refs and each client's translation map at the client's live refs.
       "pattern": "\"(?<code>[\\w.]+)\"\\s*:"
     }
   ],
-  "accept": [{ "code": "Shop.Cart.NotFound", "client": "mobile", "reason": "the cart is web only" }]
+  "returnedBy": [{ "codes": "ServiceVendor.Location.*", "api": "b2b", "operations": ["POST /api/service-vendors"] }],
+  "accept": [{ "code": "Shop.*", "client": "mobile", "reason": "the shop is web only" }]
 }
 ```
 
@@ -488,7 +490,9 @@ both refs and each client's translation map at the client's live refs.
 | `clients[]` | `{ name, refs, files, pattern, flags? }`: the client's translation map files, read at every live ref; the named group `code` captures one translated code |
 | `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags` and `workflowRuns` selectors) |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
-| `accept[]` | `{ code, client?, reason }`: accepts `error-code-unknown-to-client` for that code (and client) |
+| `clients[].usage` | the [`client-usage`](#client-usage) clients whose calls are this client's, for `returnedBy`; defaults to the one with the same name |
+| `returnedBy[]` | `{ codes, api, operations }`: codes (or globs such as `Shop.*`) that only these operations of the `openapi` API return; `operations` are `METHOD /path/glob`, the method may be `*` (`* /api/shop/**`); both take one string or a list |
+| `accept[]` | `{ code, client?, reason }`: accepts `error-code-unknown-to-client` for that code (and client); `code` may be a glob such as `Shop.*` |
 
 | Class | Finding ids |
 | --- | --- |
@@ -498,8 +502,16 @@ both refs and each client's translation map at the client's live refs.
 A code the base already returns is live today, so only codes new in the revision count against clients, and a client
 whose every live ref already translates a new code gets no finding. The layer fails closed: a code source that matches
 no file or captures no code at the revision, a client ref missing from the clone, or a map file that is absent or
-yields no code at a client ref fails the layer. Which operations return a code is not checked yet, so a code counts
-for every client even when only operations that client never calls return it.
+yields no code at a client ref fails the layer.
+
+A code counts for every client unless a `returnedBy` entry covers it. With one, and with `client-usage` enabled, the
+finding becomes `safe` for a client whose live refs call none of the matching operations, or call them only as
+operations `openapi` reports as `endpoint-added`; the reason names the operations and refs, for example
+`returned only by POST /api/service-vendors (b2b), which mobile@2.0.1 does not call`. A client's calls are what its
+`client-usage` clients' generated clients call, so an API none of them targets counts as not called. A client
+without `client-usage` calls keeps its findings, and a note says so. Every accept entry is noted with the number of
+findings it accepted, or as unused when it matched none; a finding `returnedBy` already made `safe` is not counted,
+so an entry it made redundant reads as unused.
 
 Some codes are built at runtime, for example a generic `RepositoryErrors<TEntity>.NotFound` declared as
 `$"{typeof(TEntity).Name}Repository.NotFound"`. A `composed` source builds those codes from what `regex` sources
@@ -956,8 +968,8 @@ Known gaps in 0.3.0:
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions
   give different values stays unresolved and is reported conservatively (see [dependencies](#dependencies)).
-- A new error code counts against every live client whose map lacks it, whether or not that client calls an
-  operation that returns it.
+- A new error code counts against every live client whose map lacks it unless an [`error-codes`](#error-codes)
+  `returnedBy` entry names the operations that return it; which handler returns a code is not read from the server.
 
 Open ideas live in [`context/backlog/later-layers.md`](context/backlog/later-layers.md); ideas weighed and rejected,
 with the reason, are in the "Rejected" table of [`context/foundation/roadmap.md`](context/foundation/roadmap.md).

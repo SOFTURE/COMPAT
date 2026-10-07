@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { DEFAULT_CONFIG_FILE, loadConfig } from "../config/config.js";
 import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
-import type { Layer } from "../layers/layer.js";
+import type { ClientRefCalls, Layer } from "../layers/layer.js";
 import { LAYERS } from "../layers/registry.js";
 import { applyRevisions, splitOutput } from "../layers/revisions.js";
 import type { LayerResult, Side } from "../model/finding.js";
@@ -141,11 +141,12 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     }
 
     let results: LayerResult[] = [];
+    let calls: ClientRefCalls[] | undefined;
     for (const { layer, config: layerConfig } of config.value.layers) {
       const tempDir = join(tempRoot, `layer-${layer.name}`);
       await mkdir(tempDir, { recursive: true });
       try {
-        const { result, revisions } = splitOutput(
+        const output = splitOutput(
           await layer.run({
             config: layerConfig,
             base: base.value.tree,
@@ -156,12 +157,15 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
             fetch: io.fetch,
             log: (message) => io.stderr(`[${layer.name}] ${message}\n`),
             results: [...results],
+            calls,
           }),
         );
-        const revised = applyRevisions(results, revisions);
+        const { result } = output;
+        const revised = applyRevisions(results, output.revisions);
         if (revised.ok) {
           results = revised.value;
           results.push(result);
+          if (output.calls !== undefined) calls = output.calls;
         } else {
           results.push({
             layer: layer.name,

@@ -33,7 +33,8 @@ export type RefineSummary = { revisions: FindingRevision[]; toSafe: number; with
 
 type Call = { usage: ClientRefUsage; operations: ClientOperation[] };
 
-function isCalled(usage: ClientRefUsage, operation: ClientOperation): boolean {
+/** Whether the ref's own code calls the operation; without sources every client operation counts. */
+export function isCalled(usage: ClientRefUsage, operation: ClientOperation): boolean {
   if (usage.sourceIdentifiers === undefined || operation.functionName === undefined) return true;
   return usage.sourceIdentifiers.has(operation.functionName);
 }
@@ -48,7 +49,7 @@ function findCalls(usage: ClientRefUsage, method: string, path: string): ClientO
 }
 
 /** `mobile@2.0.1, 2.1.1; admin@1.0.0`: refs grouped by client in the order given. */
-export function formatRefs(usages: readonly ClientRefUsage[]): string {
+export function formatRefs(usages: readonly { client: string; ref: string }[]): string {
   const byClient = new Map<string, string[]>();
   for (const usage of usages) byClient.set(usage.client, [...(byClient.get(usage.client) ?? []), usage.ref]);
   return [...byClient].map(([client, refs]) => `${client}@${refs.join(", ")}`).join("; ");

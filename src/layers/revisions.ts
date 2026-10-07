@@ -1,6 +1,6 @@
 import type { Finding, LayerResult } from "../model/finding.js";
 import { err, ok, type Result } from "../result.js";
-import type { FindingRevision, LayerOutput } from "./layer.js";
+import type { ClientRefCalls, FindingRevision, LayerOutput } from "./layer.js";
 
 const FIXED_KEYS = ["layer", "scope", "id", "subject"] as const;
 
@@ -50,8 +50,12 @@ export function applyRevisions(
   return ok(revised);
 }
 
-/** Splits what `run` returned into the layer's own result and its revisions. */
-export function splitOutput(output: LayerOutput): { result: LayerResult; revisions: FindingRevision[] } {
-  const { revisions, ...result } = output;
-  return { result: result as LayerResult, revisions: revisions ?? [] };
+/** Splits what `run` returned into the layer's own result, its revisions and the client calls it shares. */
+export function splitOutput(output: LayerOutput): {
+  result: LayerResult;
+  revisions: FindingRevision[];
+  calls?: ClientRefCalls[];
+} {
+  const { revisions, calls, ...result } = output;
+  return { result: result as LayerResult, revisions: revisions ?? [], calls };
 }
