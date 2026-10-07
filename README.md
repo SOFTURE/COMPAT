@@ -596,14 +596,20 @@ change (a new retry policy in a messaging client, a new default in an ORM).
 
 | Source | Reads |
 | --- | --- |
-| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved from the same file; a reference without a version takes it from `Directory.Packages.props` |
-| `npm` | `package.json` (default `files`: `**/package.json`); `sections` from `dependencies` (default), `devDependencies`, `peerDependencies`, `optionalDependencies` |
+| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved from the same file; a reference without a version takes it from `Directory.Packages.props`; lockfile: `packages.lock.json` (versions 1 and 2) in the folder of a matched file |
+| `npm` | `package.json` (default `files`: `**/package.json`); `sections` from `dependencies` (default), `devDependencies`, `peerDependencies`, `optionalDependencies`; lockfile: the nearest `package-lock.json` (versions 1 to 3) or `pnpm-lock.yaml` (5.x, 6.x, 9.x) in the manifest folder or above that installs it (workspaces), `package-lock.json` first |
 
 `sources` defaults to both kinds; files under `node_modules`, `bin` and `obj` are skipped. Packages are compared by
-name over all files of a ref (NuGet names case-insensitively); a range compares by its lower bound (`^1.2.3`,
-`[1.2,2.0)`). When projects declare several versions of one package, a version that went down anywhere is a
+name over all files of a ref (NuGet names case-insensitively). With a lockfile, a direct dependency compares by the
+version the lockfile resolves, so `npm update` that moves `^4.1.0` from 4.1.0 to 4.9.0 in the lockfile only is
+reported, and a `watch` package installed only as a dependency of another one is reported when its version changes
+(the message says `resolved from lockfile` or `transitive, resolved from lockfile`; evidence points at the
+lockfile entry). Other transitive packages are not read. When a lockfile resolves a package at a ref, its declared
+versions at that ref are not compared. Without a lockfile, or with `lockfiles: false` on a source, a range compares
+by its lower bound (`^1.2.3`, `[1.2,2.0)`). When projects declare several versions of one package, a version that went down anywhere is a
 downgrade, otherwise the jump from the lowest base version to the highest revision version decides the class. The
-layer fails when no dependency file matches at either ref or a `package.json` is not valid JSON.
+layer fails when no dependency file matches at either ref, a `package.json` is not valid JSON, or a lockfile cannot
+be read or has a version this list does not support (set `lockfiles: false` on the source to skip lockfiles).
 
 `watch[]` entries are `{ name, class?, releaseNotes? }`: every finding of a matching package gets at least `class`,
 and `releaseNotes` is printed with it (nothing is fetched). `ignore[]` lists packages that produce no finding.
