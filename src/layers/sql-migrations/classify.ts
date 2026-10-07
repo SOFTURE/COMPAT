@@ -73,6 +73,17 @@ function countNewlines(text: string): number {
   return text.split("\n").length - 1;
 }
 
+/** Keys of the tables that `CREATE TABLE` statements of these migrations name. */
+export function getCreatedTables(migrations: Migration[], dialect: SqlDialect): Set<string> {
+  const tables = new Set<string>();
+  for (const migration of migrations) {
+    for (const { match } of matchMigration(migration, dialect, new Set())) {
+      if (match.rule === "create-table" && match.table) tables.add(match.table.key);
+    }
+  }
+  return tables;
+}
+
 /** Rules that describe the creation itself; they are never downgraded. */
 const ADDITIVE_RULES = new Set(["create-schema", "create-table", "create-index", "add-column"]);
 

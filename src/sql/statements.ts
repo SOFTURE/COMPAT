@@ -133,7 +133,8 @@ export function maskComments(text: string, dialect: SqlDialect): string {
   return masked;
 }
 
-function createLineIndex(text: string): (offset: number) => number {
+/** A function that gives the 1-based line of an offset in `text`, built once for many lookups. */
+export function createLineIndex(text: string): (offset: number) => number {
   const lineStarts = [0];
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] === "\n") lineStarts.push(index + 1);

@@ -286,8 +286,8 @@ exit 1, evidence `drizzle/0002_x.sql:<line>`; the same with an accept entry → 
 ### Phase 3: Sources, the layer and the F4/F5 acceptance cases
 
 #### Automated
-- [ ] 3.1 The named config, ef-script, sources and layer tests pass
-- [ ] 3.2 End to end, F4 gives the `sql-migrations` verdict `safe` and exit 0, in both dialects
-- [ ] 3.3 End to end, F5 gives one `needs-action` `insert-explicit-id` naming 418, 496 and `max(Id)`, in both dialects, and exit 1 with `--fail-on needs-action`
-- [ ] 3.4 End to end, a drizzle `DROP COLUMN` exits 1 with `path:line` evidence, and 0 once accepted
-- [ ] 3.5 Gates green (typecheck, lint, test)
+- [x] 3.1 The named config, ef-script, sources and layer tests pass
+- [x] 3.2 End to end, F4 gives the `sql-migrations` verdict `safe` and exit 0, in both dialects
+- [x] 3.3 End to end, F5 gives one `needs-action` `insert-explicit-id` naming 418, 496 and `max(Id)`, in both dialects, and exit 1 with `--fail-on needs-action`
+- [x] 3.4 End to end, a drizzle `DROP COLUMN` exits 1 with `path:line` evidence, and 0 once accepted
+- [x] 3.5 Gates green (typecheck, lint, test)
