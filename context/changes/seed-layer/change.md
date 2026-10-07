@@ -1,7 +1,7 @@
 ---
 change_id: seed-layer
 title: "Seed scripts that run on every deploy are diffed and their effect on existing rows is classified"
-status: implementing
+status: implemented
 roadmap_item: CMP-3
 branch: null
 created: 2026-10-07

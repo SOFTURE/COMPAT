@@ -228,7 +228,7 @@ text → `row-changed` `needs-action` and exit 1 with `--fail-on needs-action`.
 ### Phase 3: Seed layer, config and F6 end to end
 
 #### Automated
-- [ ] 3.1 Config, layer and end-to-end cases pass under `npm test`
-- [ ] 3.2 `softure-compat check` on the F6 fixture exits 0 with `--fail-on needs-action` in both dialects
-- [ ] 3.3 `npm run build` and `npm run test:pack` pass
-- [ ] 3.4 Gates green (typecheck, lint, test)
+- [x] 3.1 Config, layer and end-to-end cases pass under `npm test` — 8e42ac6
+- [x] 3.2 `softure-compat check` on the F6 fixture exits 0 with `--fail-on needs-action` in both dialects — 8e42ac6
+- [x] 3.3 `npm run build` and `npm run test:pack` pass — 8e42ac6
+- [x] 3.4 Gates green (typecheck, lint, test) — 8e42ac6
