@@ -96,3 +96,32 @@ describe("parseConfig", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe("parseConfig check defaults", () => {
+  const parseCheck = (check: unknown) => parseConfig({ check, layers: { stub: {} } }, layers, "c.json");
+
+  it("is empty when the config has no check", () => {
+    const result = parseConfig({ layers: { stub: {} } }, layers, "c.json");
+    expect(result.ok && result.value.check).toEqual({});
+  });
+
+  it("reads base, revision and failOn, each optional", () => {
+    const full = {
+      base: "github-deployment:prod",
+      revision: "github-deployment:dev",
+      failOn: "needs-action",
+    };
+    expect(parseCheck(full)).toMatchObject({ ok: true, value: { check: full } });
+    expect(parseCheck({ base: "v1" })).toMatchObject({ ok: true, value: { check: { base: "v1" } } });
+  });
+
+  it.each([
+    [{ bsae: "v1" }, 'check: Unrecognized key: "bsae"'],
+    [{ failOn: "info" }, "check.failOn: Invalid option"],
+    [{ base: "" }, "check.base: Too small"],
+  ])("rejects %j", (check, message) => {
+    const result = parseCheck(check);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(message);
+  });
+});

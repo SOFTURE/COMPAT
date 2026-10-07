@@ -6,6 +6,7 @@ import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
 import { DEFAULT_COMPOSE_FILES, DEFAULT_DOTENV_FILES } from "../layers/config/config.js";
 import { DEFAULT_NPM_FILES, DEFAULT_NUGET_FILES } from "../layers/dependencies/config.js";
 import { LAYERS } from "../layers/registry.js";
+import { guessCheckDefaults } from "../resolve/guess-check-defaults.js";
 import { err, ok, type Result } from "../result.js";
 import type { SqlDialect } from "../sql/statements.js";
 import { type CheckIo, EXIT_CANNOT_RUN } from "./check.js";
@@ -686,7 +687,11 @@ export async function runInit(options: InitOptions, io: CheckIo): Promise<number
   const layers = await buildStarterConfig(tree.value);
   if (!layers.ok) return fail(`cannot read the repository: ${layers.error}`);
 
-  const config = { layers: Object.fromEntries(layers.value.map((layer) => [layer.name, layer.config])) };
+  const guess = await guessCheckDefaults({ repoDir: repoRoot.value, env: io.env, fetch: io.fetch });
+  const config = {
+    check: { base: guess.base, revision: guess.revision, failOn: "breaking" },
+    layers: Object.fromEntries(layers.value.map((layer) => [layer.name, layer.config])),
+  };
   const parsed = parseConfig(config, LAYERS, configPath);
   if (!parsed.ok) return fail(`init built an invalid config, please report it: ${parsed.error}`);
 
@@ -695,13 +700,15 @@ export async function runInit(options: InitOptions, io: CheckIo): Promise<number
   } catch (error) {
     return fail(`cannot write ${configPath} (${(error as NodeJS.ErrnoException).code})`);
   }
+  io.stderr(`softure-compat: check compares ${guess.base} with ${guess.revision}: ${guess.reason}\n`);
   for (const layer of layers.value) {
     io.stderr(`softure-compat: ${layer.name} ${layer.enabled ? "enabled" : "disabled"}: ${layer.summary}\n`);
   }
   io.stderr(
     `softure-compat: wrote ${configPath}\n` +
-      'Review it (a disabled layer is turned on by removing its "enabled": false), then run:\n' +
-      "  softure-compat check --base <production tag> --revision HEAD\n",
+      'Review it (a disabled layer is turned on by removing its "enabled": false, and "check" names the refs to\n' +
+      "compare), then run:\n" +
+      "  softure-compat check\n",
   );
   return 0;
 }

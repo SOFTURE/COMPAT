@@ -1,12 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Layer } from "../layers/layer.js";
-import type { InactiveLayer } from "../model/gate.js";
+import { FAIL_ON_VALUES, type FailOn, type InactiveLayer } from "../model/gate.js";
 import { err, ok, type Result } from "../result.js";
 
 export const DEFAULT_CONFIG_FILE = "compat.config.json";
 
+/** Defaults for `check`; the command-line flags override them one by one. */
+export type CheckDefaults = { base?: string; revision?: string; failOn?: FailOn };
+
 export type CompatConfig = {
+  check: CheckDefaults;
   /** Enabled layers with their parsed config, in registry order. */
   layers: { layer: Layer; config: Record<string, unknown> }[];
   /** Known layers that will not run, in registry order. */
@@ -20,6 +24,13 @@ export function buildConfigSchema(layers: Layer[]) {
   }
   return z.strictObject({
     $schema: z.string().optional(),
+    check: z
+      .strictObject({
+        base: z.string().min(1).optional(),
+        revision: z.string().min(1).optional(),
+        failOn: z.enum(FAIL_ON_VALUES).optional(),
+      })
+      .optional(),
     layers: z.strictObject(layerShape),
   });
 }
@@ -55,7 +66,7 @@ export function parseConfig(raw: unknown, layers: Layer[], source: string): Resu
     const { enabled: _enabled, ...config } = entry;
     enabled.push({ layer, config });
   }
-  return ok({ layers: enabled, inactive });
+  return ok({ check: parsed.data.check ?? {}, layers: enabled, inactive });
 }
 
 export async function loadConfig(path: string, layers: Layer[]): Promise<Result<CompatConfig>> {

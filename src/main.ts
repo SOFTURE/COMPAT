@@ -5,22 +5,23 @@ import { runInit } from "./commands/init.js";
 import { NO_DOWNLOAD_ENV_VAR } from "./layers/openapi/oasdiff-download.js";
 import { FAIL_ON_VALUES } from "./model/gate.js";
 
-export const USAGE = `Usage: softure-compat check --base <ref> --revision <ref> [options]
+export const USAGE = `Usage: softure-compat check [--base <ref>] [--revision <ref>] [options]
        softure-compat init [--repo <dir>] [--config <file>] [--force]
 
 check   tells whether the revision is backward compatible with the base (the release in production)
 init    writes a starter compat.config.json from the files committed at HEAD
 
 Options:
-  --base <ref>            check: git ref running in production (required)
-  --revision <ref>        check: git ref about to be released (required)
+  --base <ref>            check: git ref running in production (default: check.base in the config)
+  --revision <ref>        check: git ref about to be released (default: check.revision in the config)
                           both take a git ref or a resolver: github-deployment:<environment>,
                           github-workflow:<file>, latest-tag[:<glob>]
   --repo <dir>            repository directory (default: current directory)
   --config <file>         config file (default: <repo>/compat.config.json)
   --format <md|json>      check: report format (default: md)
   --output <file>         check: write the report to a file instead of stdout
-  --fail-on <class>       check: breaking | rollback-risk | needs-action | never (default: breaking)
+  --fail-on <class>       check: breaking | rollback-risk | needs-action | never
+                          (default: check.failOn in the config, then breaking)
   --allow-incomplete      check: do not fail when a layer was skipped or failed
   --require <layer,...>   check: fail unless these layers ran (not disabled, unconfigured, skipped or failed)
   --no-download           check: never download oasdiff; skip the openapi layer when it is missing
@@ -95,15 +96,12 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
     return runInit({ repoDir: values.repo, configPath: values.config, force: values.force ?? false }, io);
   }
   if (values.force !== undefined) return usageError(io, "--force is only for init");
-  if (values.base === undefined || values.revision === undefined) {
-    return usageError(io, "--base and --revision are required");
-  }
   const format = values.format ?? "md";
   if (!isOneOf(REPORT_FORMATS, format)) {
     return usageError(io, `--format must be one of ${REPORT_FORMATS.join(", ")}`);
   }
-  const failOn = values["fail-on"] ?? "breaking";
-  if (!isOneOf(FAIL_ON_VALUES, failOn)) {
+  const failOn = values["fail-on"];
+  if (failOn !== undefined && !isOneOf(FAIL_ON_VALUES, failOn)) {
     return usageError(io, `--fail-on must be one of ${FAIL_ON_VALUES.join(", ")}`);
   }
   const required = parseLayerList(values.require);
