@@ -1,9 +1,9 @@
 ---
 change_id: persisted-enums-layer
 title: "Changes to enums persisted in the database are classified by how they are stored"
-status: new
+status: plan_reviewed
 roadmap_item: CMP-4
-branch: null
+branch: claude/project-thread-ijh43y
 created: 2026-10-07
 updated: 2026-10-07
 archived_at: null
@@ -29,3 +29,4 @@ TypeScript, tolerating attributes, comments, explicit values and implicit number
 
 ## Notes
 - 2026-10-07: opened from roadmap v1.
+- 2026-10-07: research, plan and plan review done (verdict: ready after fixes; all findings applied).
