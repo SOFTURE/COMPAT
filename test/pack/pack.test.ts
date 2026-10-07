@@ -24,6 +24,7 @@ describe("published package", () => {
     expect(paths).toContain("dist/cli.js");
     expect(paths).toContain("package.json");
     expect(paths).toContain("LICENSE");
+    expect(paths).toContain("README.md");
     expect(
       paths.filter(
         (path) => path.startsWith("src/") || path.startsWith("test/") || path.startsWith("context/"),

@@ -175,10 +175,10 @@ a compose-only repository, `main` usage errors.
 ### Phase 3: Package, CI and publish workflow
 
 #### Automated
-- [x] 3.1 `npm run build && npm run test:pack` passes, including `init` and `check` from the built CLI
-- [x] 3.2 `actionlint` reports no issue in `.github/workflows/`
-- [x] 3.3 `npm publish --dry-run` succeeds and lists `dist/cli.js` and `README.md`
-- [x] 3.4 Gates green (typecheck, lint, test)
+- [x] 3.1 `npm run build && npm run test:pack` passes, including `init` and `check` from the built CLI — 8839dc6
+- [x] 3.2 `actionlint` reports no issue in `.github/workflows/` — 8839dc6
+- [x] 3.3 `npm publish --dry-run` succeeds and lists `dist/cli.js` and `README.md` — 8839dc6
+- [x] 3.4 Gates green (typecheck, lint, test) — 8839dc6
 
 #### Manual
 - [ ] 3.5 The owner adds the `NPM_TOKEN` secret and pushes tag `v0.1.0`; the workflow publishes with provenance
@@ -186,9 +186,9 @@ a compose-only repository, `main` usage errors.
 ### Phase 4: README
 
 #### Automated
-- [ ] 4.1 `npx vitest run test/readme.test.ts` passes
-- [ ] 4.4 `npm publish --dry-run` and the pack test list `README.md`
-- [ ] 4.2 Gates green (typecheck, lint, test)
+- [x] 4.1 `npx vitest run test/readme.test.ts` passes
+- [x] 4.4 `npm publish --dry-run` and the pack test list `README.md`
+- [x] 4.2 Gates green (typecheck, lint, test)
 
 #### Manual
 - [ ] 4.3 The owner can configure PETSEO from the README alone
