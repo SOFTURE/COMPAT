@@ -166,6 +166,77 @@ export interface MedicationBase { name: string }
     });
   });
 
+  describe("call sites that always send the property (issue #75)", () => {
+    const allOf = notNullable("allOf[subschema #2]/daysOfWeek");
+    const GENERATED = `
+export const petsClient = {
+  postMedicationEndpoint(body: AddMedicationRequest, petId: string): Promise<void> {
+    return fetch(\`/api/pets/\${petId}/medications\`, { method: "POST", body: JSON.stringify(body) });
+  },
+};
+export interface AddMedicationRequest { name: string; daysOfWeek?: DayOfWeek[] }
+`;
+    const model = readTypescriptClient(GENERATED);
+    const withSources = (...texts: string[]) =>
+      usage({
+        model,
+        sourceIdentifiers: new Set(["postMedicationEndpoint"]),
+        sources: texts.map((text, index) => ({ path: `app/screen${index}.tsx`, text })),
+      });
+
+    it("drops the finding to safe when the only literal always sets the property", () => {
+      const screen = `
+function save(petId: string, weekdays: boolean, days: DayOfWeek[]) {
+  return petsClient.postMedicationEndpoint({ name: "a", daysOfWeek: weekdays ? days : [] }, petId);
+}`;
+      const { revisions } = refineFindings([allOf], [withSources(screen)]);
+      expect(revisions[0]?.finding).toMatchObject({
+        class: "safe",
+        reclassified: {
+          reason:
+            "`allOf[subschema #2]/daysOfWeek` is always sent non-null by the call sites of mobile@2.2.4",
+        },
+      });
+      expect(revisions[0]?.finding.evidence.at(-1)).toEqual({
+        side: "client",
+        ref: "2.2.4",
+        commit: "c".repeat(40),
+        path: "app/screen0.tsx",
+        line: 3,
+      });
+    });
+
+    it("drops the finding to safe when the body is forwarded through mutationFn", () => {
+      const hook = `
+export const useUpsertMedication = () =>
+  useMutation({
+    mutationFn: async ({ petId, request }: UpsertParams) => {
+      await petsClient.postMedicationEndpoint(request, petId);
+    },
+  });`;
+      const screen = `
+function Screen({ petId }: Props) {
+  const upsert = useUpsertMedication();
+  const submit = (weekdays: boolean, days: DayOfWeek[]) =>
+    upsert.mutateAsync({ petId, request: { name: "a", daysOfWeek: weekdays ? days : [] } });
+}`;
+      const { revisions } = refineFindings([allOf], [withSources(hook, screen)]);
+      expect(revisions[0]?.finding.class).toBe("safe");
+      expect(revisions[0]?.finding.evidence.at(-1)).toMatchObject({ path: "app/screen1.tsx", line: 5 });
+    });
+
+    it.each([
+      ["may be undefined", "{ name: 'a', daysOfWeek: maybe ?? undefined }"],
+      ["spreads another object", "{ ...defaults, daysOfWeek: [] }"],
+      ["passes a value it cannot follow", "buildRequest()"],
+    ])("keeps the class and names the ref when the call site %s", (_, body) => {
+      const screen = `petsClient.postMedicationEndpoint(${body}, petId);`;
+      const { revisions } = refineFindings([allOf], [withSources(screen)]);
+      expect(revisions[0]?.finding.class).toBe("breaking");
+      expect(revisions[0]?.finding.message).toContain("; mobile@2.2.4 may send it without");
+    });
+  });
+
   it("drops an operation no client ref calls to safe and lists every ref", () => {
     const { revisions } = refineFindings(
       [finding({ id: "api-path-removed-without-deprecation", subject: "DELETE /api/pets/{petId}" })],

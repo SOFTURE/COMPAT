@@ -425,6 +425,14 @@ What changes, per `openapi` finding of the client's API that is not accepted and
   without `?`, and also without `null` for the not-nullable rule) → `safe`, with the declarations as evidence.
   `allOf[...]` segments of the property path are skipped (a generated client flattens allOf into one type or an
   intersection `A & B`, whose members the reader merges); under `oneOf[...]` or `anyOf[...]` the class stays.
+  A client generated from the base spec declares the property as the base allowed it (`prop?: T`), so with `sources`
+  the layer also reads the call sites: every call of the client function must pass an object literal (directly, as a
+  local `const`, or through one parameter of the enclosing function: its callers, or `mutate`/`mutateAsync` of the
+  hook whose `mutationFn` it is) that sets the property to a value that cannot be `undefined` or `null` (a literal,
+  a conditional whose branches all qualify, `a ?? b` with `b` qualifying, or a name or `a.b` member whose declared
+  type has neither). Then the finding is `safe`, reason `always sent non-null by the call sites of ...`, with the
+  literals as evidence. A spread, an argument or value the reader cannot follow, or the client function passed
+  around uncalled keeps the class.
 - Otherwise the class stays, the message names the refs that call the operation (or may omit the property), and the
   calls are added as evidence.
 

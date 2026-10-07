@@ -181,7 +181,7 @@ describe("readTypescriptClient", () => {
         path: "/api/pets/{}/medications",
         line: 9,
         functionName: "addMedication",
-        body: { typeName: "AddMedicationCommand", isOptional: false },
+        body: { typeName: "AddMedicationCommand", isOptional: false, index: 1 },
       },
       { method: "get", path: "/api/pets", line: 32, functionName: "listPets" },
     ]);
@@ -216,7 +216,7 @@ describe("readTypescriptClient", () => {
         path: "/api/pets/{}/medications",
         line: 7,
         functionName: "addMedication",
-        body: { typeName: "AddMedicationRequest", isOptional: false },
+        body: { typeName: "AddMedicationRequest", isOptional: false, index: 1 },
       },
       { method: "delete", path: "/api/pets/{}/archive", line: 12, functionName: "removePet" },
     ]);
@@ -231,7 +231,7 @@ describe("readTypescriptClient", () => {
         path: "/api/pets/{}/medications",
         line: 8,
         functionName: "postMedicationEndpoint",
-        body: { typeName: "AddMedicationRequest", isOptional: false },
+        body: { typeName: "AddMedicationRequest", isOptional: false, index: 0 },
       },
       {
         method: "delete",
@@ -282,7 +282,7 @@ export const ping = () => axios.request({ url: "/api/ping", method: "GET" });
         method: "post",
         path: "/api/pets",
         functionName: "createPet",
-        body: { typeName: "CreatePetBody", isOptional: false },
+        body: { typeName: "CreatePetBody", isOptional: false, index: 0 },
       },
       { method: "get", path: "/api/pets/{}", functionName: "getPet", body: undefined },
     ]);
