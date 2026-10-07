@@ -1,0 +1,9 @@
+{
+  "language": "en",
+  "mainBranch": "master",
+  "gates": { "typecheck": null, "lint": null, "test": null },
+  "integration": { "local": null, "remote": null },
+  "migrations": null,
+  "worktree": { "setup": ["npm ci"], "maxParallel": 4 },
+  "release": { "owner": true }
+}

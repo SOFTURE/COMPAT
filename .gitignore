@@ -1,0 +1,24 @@
+node_modules/
+.DS_Store
+*.tgz
+
+# softure-skills:begin (managed by @softure-ai/skills)
+/.claude/skills/softure-archive/
+/.claude/skills/softure-code-review/
+/.claude/skills/softure-frame/
+/.claude/skills/softure-impl-review/
+/.claude/skills/softure-implement/
+/.claude/skills/softure-init/
+/.claude/skills/softure-lesson/
+/.claude/skills/softure-new/
+/.claude/skills/softure-plan/
+/.claude/skills/softure-plan-review/
+/.claude/skills/softure-prd/
+/.claude/skills/softure-research/
+/.claude/skills/softure-roadmap/
+/.claude/skills/softure-rule-review/
+/.claude/skills/softure-shape/
+/.claude/skills/softure-worktree/
+/.claude/skills/softure-worktree-manager/
+/.claude/softure-skills.json
+# softure-skills:end

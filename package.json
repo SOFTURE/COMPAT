@@ -1,0 +1,18 @@
+{
+  "name": "@softure-ai/compat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Backward-compatibility check between two git refs: OpenAPI, SQL migrations, seeds, persisted enums, configuration and message contracts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SOFTURE/COMPAT.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@softure-ai/skills": "^0.4.0"
+  }
+}
