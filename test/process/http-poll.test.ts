@@ -7,6 +7,7 @@ import { pollUrl } from "../../src/process/http-poll.js";
 let server: Server;
 let baseUrl: string;
 let warmupRequests = 0;
+let stallingRequests = 0;
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -22,6 +23,10 @@ beforeAll(async () => {
       response.end(warmupRequests < 3 ? "<html>starting</html>" : '{"openapi":"3.0.3"}');
       return;
     }
+    if (request.url === "/stalls-after-first") {
+      stallingRequests += 1;
+      if (stallingRequests > 1) return;
+    }
     response.writeHead(404);
     response.end();
   });
@@ -29,6 +34,7 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(async () => {
+  server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
 });
 
@@ -48,6 +54,15 @@ describe("pollUrl", () => {
     expect(await pollUrl({ url: `${baseUrl}/secret`, deadline: soon(300), intervalMs: 50 })).toEqual({
       status: "timed-out",
       lastObservation: "HTTP 401",
+    });
+  });
+
+  it("keeps the last answer when the deadline cuts the final request short", async () => {
+    expect(
+      await pollUrl({ url: `${baseUrl}/stalls-after-first`, deadline: soon(300), intervalMs: 50 }),
+    ).toEqual({
+      status: "timed-out",
+      lastObservation: "HTTP 404",
     });
   });
 
