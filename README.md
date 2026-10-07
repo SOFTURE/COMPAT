@@ -66,7 +66,7 @@ What `init` detects:
 | `seed` | `.sql` files with `seed` in the name that are not migrations |
 | `persisted-enums` | a `*DbContext.cs` calling `ConfigureEnum<T>()` (string storage) |
 | `config` | compose files and `.env` examples at the default globs |
-| `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`; one glob per such folder |
+| `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`, one glob per such folder, kept when the folder name ends with `Messages` or `Events` or when an `IConsumer<T>`, `ConsumeContext<T>`, `IRequestClient<T>`, `Publish`/`Send<T>` or `Publish`/`Send(new T ...)` in the repository names one of its types; request DTO folders are left to `openapi`, and with none kept the layer is written disabled |
 | `behaviour` | never: it is written disabled with example commands, since nothing in a repository says how its stack starts |
 
 Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A SQL file is read as SQL Server when it has `GO`
@@ -711,7 +711,7 @@ enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`
 | `message-property-added` | `safe` when nullable (`T?`) or initialized (`= null!` and `= default` do not count); `rollback-risk` otherwise; `breaking` when `required` or `[JsonRequired]` |
 | `message-property-removed` | `breaking` |
 | `message-property-type-changed` | `breaking` (`System.` qualifiers, `global::`, `Nullable<T>` and type aliases are normalized first) |
-| `message-property-nullability-changed` | `rollback-risk`: only `?` changed |
+| `message-property-nullability-changed` | `rollback-risk`: only `?` changed; the message says what a null does to a value type (fails to deserialize or reads as a default), to a reference type (deserializes, then throws where code dereferences it) or, for a type declared outside the sources, both |
 | `message-property-required` | `breaking`: an existing property became `required` or `[JsonRequired]` |
 | `queue-added` | `safe` |
 | `queue-removed` | `needs-action`: drain it before the deploy |
