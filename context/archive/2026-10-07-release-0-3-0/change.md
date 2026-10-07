@@ -1,12 +1,12 @@
 ---
 change_id: release-0-3-0
 title: "Version 0.3.0 ships the v2 roadmap"
-status: new
+status: archived
 roadmap_item: CMP-12
-branch: null
+branch: claude/project-thread-1htr95
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -21,3 +21,4 @@ Roadmap v2 item CMP-12. Last item; starts after CMP-7..CMP-11 are merged.
 
 ## Notes
 - 2026-10-07: opened from roadmap v2.
+- 2026-10-07: README gaps and backlog updated, version bumped to 0.3.0; the merge to `master` releases it.
