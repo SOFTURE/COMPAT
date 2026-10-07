@@ -7,7 +7,7 @@ import {
   unescapeSqlString,
   unquoteIdentifier,
 } from "../../sql/identifiers.js";
-import { findClosingParen, type SqlDialect, splitTopLevel } from "../../sql/statements.js";
+import { findClosingParen, maskLiterals, type SqlDialect, splitTopLevel } from "../../sql/statements.js";
 
 export const RULE_CLASSES = {
   "create-schema": "safe",
@@ -59,17 +59,20 @@ export type RuleMatch = {
   explicitIds?: ExplicitIds;
 };
 
+/** What explicit-id inserts into one table wrote; summaries of several inserts merge with `mergeExplicitIds`. */
 export type ExplicitIds = {
   /** The id column as written, or `null` when only `IDENTITY_INSERT` says that ids are explicit. */
   column: string | null;
-  /** The id values of every row, or `null` when they cannot be read (`INSERT ... SELECT`). */
-  values: string[] | null;
+  /** Number of rows, or `null` when it cannot be read (`INSERT ... SELECT`). */
+  rows: number | null;
+  /** Lowest and highest id when every id is an integer literal, otherwise `null`. */
+  range: { first: number; last: number } | null;
 };
 
 export type StatementMatch =
   | RuleMatch
-  /** `SET IDENTITY_INSERT <table> ON`: later inserts into the table in the same migration carry explicit ids. */
-  | { kind: "identity-insert"; table: SqlName }
+  /** `SET IDENTITY_INSERT <table> ON|OFF`: while on, inserts into the table in the same migration carry explicit ids. */
+  | { kind: "identity-insert"; table: SqlName; isEnabled: boolean }
   /**
    * SQL to split and match again: the literal of `EXEC(N'...')` (offset `null`, evidence at the
    * statement's line) or the body of a `DO` block, an `IF ... THEN` or a T-SQL `IF <condition>`
@@ -105,7 +108,7 @@ const UPDATE = pattern(`^UPDATE\\s+${TOP}(?:ONLY\\s+)?(${NAME})`);
 const DELETE = pattern(`^DELETE\\s+${TOP}(?:FROM\\s+)?(?:ONLY\\s+)?(${NAME})`);
 const MERGE = pattern(`^MERGE\\s+${TOP}(?:INTO\\s+)?(${NAME})`);
 const INSERT = pattern(`^INSERT\\s+(?:INTO\\s+)?(${NAME})\\s*`);
-const IDENTITY_INSERT_ON = pattern(`\\bSET\\s+IDENTITY_INSERT\\s+(${NAME})\\s+ON\\b`);
+const IDENTITY_INSERT = pattern(`^SET\\s+IDENTITY_INSERT\\s+(${NAME})\\s+(ON|OFF)\\b`);
 const ALTER_TABLE = pattern(
   `^ALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(${NAME})\\s*\\*?\\s+(.*)$`,
 );
@@ -115,8 +118,7 @@ const SP_RENAME = pattern(
   `^EXEC(?:UTE)?\\s+(?:\\[?sys\\]?\\s*\\.\\s*)?\\[?sp_rename\\]?\\s+(?:@objname\\s*=\\s*)?(${STRING})\\s*,\\s*(?:@newname\\s*=\\s*)?(${STRING})(?:\\s*,\\s*(?:@objtype\\s*=\\s*)?(${STRING}))?`,
 );
 const EXEC_LITERAL = pattern(`^EXEC(?:UTE)?\\s*\\(?\\s*(${STRING})\\s*\\)?$`);
-const DO_BLOCK = pattern("^DO\\s+(?:LANGUAGE\\s+\\w+\\s+)?(\\$\\w*\\$)(.*)\\1$");
-const IF_THEN = pattern("^IF\\b.*?\\bTHEN\\b");
+const DO_BLOCK = pattern("^DO\\s+(?:LANGUAGE\\s+\\w+\\s+)?(\\$\\w*\\$)(.*)\\1(?:\\s+LANGUAGE\\s+\\w+)?$");
 const DEFINED_OBJECT = pattern(
   `^CREATE\\s+(?:OR\\s+(?:REPLACE|ALTER)\\s+)?(MATERIALIZED\\s+VIEW|VIEW|FUNCTION|PROCEDURE|PROC|TYPE|SEQUENCE|SCHEMA)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(${NAME})`,
 );
@@ -135,7 +137,7 @@ function columnObject(table: SqlName, column: string): string {
   return `${table.display}.${unquoteIdentifier(column)}`;
 }
 
-function matchAddition(table: SqlName, body: string): RuleMatch[] {
+function matchAddition(table: SqlName, body: string, dialect: SqlDialect): RuleMatch[] {
   const constraint = pattern(
     `^(?:CONSTRAINT\\s+${IDENT}\\s+)?(PRIMARY\\s+KEY|UNIQUE|FOREIGN\\s+KEY|CHECK|EXCLUDE|DEFAULT|PERIOD)\\b`,
   ).exec(body);
@@ -156,7 +158,8 @@ function matchAddition(table: SqlName, body: string): RuleMatch[] {
   const column = pattern(`^(?:COLUMN\\s+)?(?:IF\\s+NOT\\s+EXISTS\\s+)?(${IDENT})\\s+(.*)$`).exec(body);
   if (!column) return [];
   const object = columnObject(table, column[1] as string);
-  const definition = column[2] as string;
+  // Keywords inside strings or quoted names (`COLLATE "default"`, `CHECK (c <> 'NOT NULL')`) do not count.
+  const definition = maskLiterals(column[2] as string, dialect);
   const isRequired = /\bNOT\s+NULL\b|\bPRIMARY\s+KEY\b/i.test(definition);
   const hasValue =
     /\bDEFAULT\b|\bIDENTITY\b|\bGENERATED\b/i.test(definition) ||
@@ -233,13 +236,15 @@ function matchAlterTable(tableRaw: string, actionsText: string, dialect: SqlDial
   const table = parseName(tableRaw, dialect);
   const actions = splitTopLevel(actionsText.replace(/^WITH\s+(?:NO)?CHECK\s+/i, ""), dialect);
   const matches: RuleMatch[] = [];
-  // SQL Server lists several columns after one verb: `ADD a int, b int` or `DROP COLUMN a, b`.
-  let verb: "add" | "drop-column" | "other" = "other";
+  // SQL Server lists several items after one verb: `ADD a int, b int` or `DROP COLUMN a, CONSTRAINT b`.
+  let verb: "add" | "drop-column" | "drop-constraint" | "other" = "other";
   for (const action of actions) {
     if (/^ADD\b/i.test(action)) {
       verb = "add";
-      matches.push(...matchAddition(table, action.replace(/^ADD\s+/i, "")));
-    } else if (/^DROP\s+(?:CONSTRAINT|PRIMARY|FOREIGN|INDEX|PERIOD|SYSTEM)\b/i.test(action)) {
+      matches.push(...matchAddition(table, action.replace(/^ADD\s+/i, ""), dialect));
+    } else if (/^DROP\s+CONSTRAINT\b/i.test(action)) {
+      verb = "drop-constraint";
+    } else if (/^DROP\s+(?:PRIMARY|FOREIGN|INDEX|PERIOD|SYSTEM)\b/i.test(action)) {
       verb = "other";
     } else if (/^DROP\b/i.test(action)) {
       verb = "drop-column";
@@ -292,9 +297,14 @@ function matchAlterTable(tableRaw: string, actionsText: string, dialect: SqlDial
         ),
       );
     } else if (verb === "add") {
-      matches.push(...matchAddition(table, action));
-    } else if (verb === "drop-column") {
-      matches.push(...matchDropColumn(table, action.replace(/^COLUMN\s+/i, "")));
+      matches.push(...matchAddition(table, action, dialect));
+    } else if (verb === "drop-column" || verb === "drop-constraint") {
+      // Each item may switch between `COLUMN` and `CONSTRAINT`; a bare item keeps the last kind.
+      if (/^CONSTRAINT\b/i.test(action)) verb = "drop-constraint";
+      else if (/^COLUMN\b/i.test(action)) verb = "drop-column";
+      if (verb === "drop-column") {
+        matches.push(...matchDropColumn(table, action.replace(/^COLUMN\s+(?:IF\s+EXISTS\s+)?/i, "")));
+      }
     }
   }
   return matches;
@@ -348,12 +358,9 @@ function matchSpRename(match: RegExpExecArray, dialect: SqlDialect): RuleMatch[]
   ];
 }
 
-function matchInsert(
-  sql: string,
-  match: RegExpExecArray,
-  dialect: SqlDialect,
-  context: MatchContext,
-): RuleMatch[] {
+type MatchInsertOptions = { sql: string; match: RegExpExecArray; dialect: SqlDialect; context: MatchContext };
+
+function matchInsert({ sql, match, dialect, context }: MatchInsertOptions): RuleMatch[] {
   const table = parseName(match[1] as string, dialect);
   const rest = sql.slice(match[0].length);
   const close = rest.startsWith("(") ? findClosingParen(rest, 0, dialect) : -1;
@@ -365,9 +372,11 @@ function matchInsert(
     .slice(close + 1)
     .trim()
     .replace(/^OVERRIDING\s+(?:SYSTEM|USER)\s+VALUE\s+/i, "");
+  const values = idIndex === -1 ? null : readValues(source, idIndex, dialect);
   const explicitIds: ExplicitIds = {
     column: idIndex === -1 ? null : (columns[idIndex] as string),
-    values: idIndex === -1 ? null : readValues(source, idIndex, dialect),
+    rows: values === null ? null : values.length,
+    range: values === null ? null : getIntegerRange(values),
   };
   return [
     {
@@ -377,16 +386,38 @@ function matchInsert(
   ];
 }
 
+function getIntegerRange(values: string[]): ExplicitIds["range"] {
+  if (values.length === 0) return null;
+  let first = Number.POSITIVE_INFINITY;
+  let last = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!/^-?\d+$/.test(value)) return null;
+    const id = Number(value);
+    if (id < first) first = id;
+    if (id > last) last = id;
+  }
+  return { first, last };
+}
+
+/** The summary of two explicit-id inserts into the same table. */
+export function mergeExplicitIds(a: ExplicitIds, b: ExplicitIds): ExplicitIds {
+  return {
+    column: a.column ?? b.column,
+    rows: a.rows === null || b.rows === null ? null : a.rows + b.rows,
+    range:
+      a.range === null || b.range === null
+        ? null
+        : { first: Math.min(a.range.first, b.range.first), last: Math.max(a.range.last, b.range.last) },
+  };
+}
+
 /** The message of an `insert-explicit-id` finding, also used when several inserts are merged into one. */
 export function describeExplicitIds(table: SqlName, ids: ExplicitIds): string {
   const column = ids.column ?? "the identity column";
-  const values = ids.values ?? [];
-  const numbers = values.filter((value) => /^-?\d+$/.test(value)).map(Number);
-  if (values.length > 0 && numbers.length === values.length) {
-    const first = Math.min(...numbers);
-    const last = Math.max(...numbers);
+  if (ids.range !== null && ids.rows !== null) {
+    const { first, last } = ids.range;
     const range = first === last ? `${first}` : `${first}-${last}`;
-    return `inserts ${values.length} row(s) into ${table.display} with explicit ${column} ${range}; precondition: production max(${column}) < ${first}, and the identity sequence must continue after ${last}`;
+    return `inserts ${ids.rows} row(s) into ${table.display} with explicit ${column} ${range}; precondition: production max(${column}) < ${first}, and the identity sequence must continue after ${last}`;
   }
   return `inserts rows into ${table.display} with explicit ${column} values; precondition: no production row uses these values, and the identity sequence must continue after them`;
 }
@@ -457,17 +488,52 @@ function getTsqlIfBody(sql: string): { sql: string; offset: number } | null {
   return null;
 }
 
+/** The body of a `DO` block: between its first `BEGIN` and its last `END`. */
 function getDoBody(body: string): { text: string; offset: number } | null {
   const begin = /\bBEGIN\b/i.exec(body);
   if (!begin) return null;
   const start = begin.index + begin[0].length;
-  const exception = /\bEXCEPTION\b/i.exec(body.slice(start));
-  let end = exception ? start + exception.index : -1;
-  if (end === -1) {
-    const ends = [...body.matchAll(/\bEND\b/gi)];
-    end = ends.length === 0 ? body.length : (ends[ends.length - 1] as RegExpExecArray).index;
-  }
+  const ends = [...body.matchAll(/\bEND\b/gi)];
+  const last = ends[ends.length - 1];
+  const end = last === undefined || last.index < start ? body.length : last.index;
   return { text: body.slice(start, end), offset: start };
+}
+
+/**
+ * For `WITH name AS (...)[, ...] <statement>`, the statement after the common table expressions
+ * and its offset; `null` when `sql` does not start that way.
+ */
+function getStatementAfterCte(sql: string, dialect: SqlDialect): { sql: string; offset: number } | null {
+  const head = /^WITH\s+(?:RECURSIVE\s+)?/i.exec(sql);
+  if (!head) return null;
+  let index = head[0].length;
+  const cte = pattern(`^${IDENT}\\s*(?:\\([^)]*\\)\\s*)?AS\\s*(?:NOT\\s+)?(?:MATERIALIZED\\s+)?\\(`);
+  for (;;) {
+    const start = cte.exec(sql.slice(index));
+    if (!start) return null;
+    const close = findClosingParen(sql, index + start[0].length - 1, dialect);
+    if (close === -1) return null;
+    const after = /^\s*(,)?\s*/.exec(sql.slice(close + 1)) as RegExpExecArray;
+    index = close + 1 + after[0].length;
+    if (after[1] === undefined) return { sql: sql.slice(index), offset: index };
+  }
+}
+
+/**
+ * Procedural wrappers whose inner statement is matched again: a T-SQL `IF <condition>`, `ELSE`,
+ * `BEGIN <statement>`; in PL/pgSQL `IF ... THEN`, `ELSIF ... THEN`, `ELSE` and `BEGIN <statement>`.
+ */
+function getWrappedStatement(sql: string, dialect: SqlDialect): { sql: string; offset: number } | null {
+  if (dialect === "sqlserver") {
+    const body = getTsqlIfBody(sql);
+    if (body !== null) return body;
+  } else {
+    const opener = /^(?:IF|ELSIF|ELSEIF)\b.*?\bTHEN\b\s*/is.exec(sql);
+    if (opener) return { sql: sql.slice(opener[0].length), offset: opener[0].length };
+  }
+  const wrapper =
+    /^(?:ELSE|BEGIN(?!\s+(?:TRAN|TRANSACTION|TRY|CATCH|DISTRIBUTED|WORK|ISOLATION)\b))\s+(?=\S)/i.exec(sql);
+  return wrapper ? { sql: sql.slice(wrapper[0].length), offset: wrapper[0].length } : null;
 }
 
 /**
@@ -475,14 +541,17 @@ function getDoBody(body: string): { text: string; offset: number } | null {
  * more matches; an unrecognised statement returns none.
  */
 export function matchStatement(sql: string, dialect: SqlDialect, context: MatchContext): StatementMatch[] {
-  const identityInsert = IDENTITY_INSERT_ON.exec(sql);
-  if (identityInsert)
-    return [{ kind: "identity-insert", table: parseName(identityInsert[1] as string, dialect) }];
-
-  if (dialect === "sqlserver") {
-    const body = getTsqlIfBody(sql);
-    if (body !== null) return [{ kind: "nested", ...body }];
+  const identityInsert = IDENTITY_INSERT.exec(sql);
+  if (identityInsert) {
+    const table = parseName(identityInsert[1] as string, dialect);
+    return [
+      { kind: "identity-insert", table, isEnabled: (identityInsert[2] as string).toUpperCase() === "ON" },
+    ];
   }
+  // A PL/pgSQL exception handler (`EXCEPTION WHEN ... THEN`) only runs when the block failed.
+  if (dialect === "postgres" && /^EXCEPTION\b/i.test(sql)) return [];
+  const wrapped = getWrappedStatement(sql, dialect) ?? getStatementAfterCte(sql, dialect);
+  if (wrapped !== null) return [{ kind: "nested", ...wrapped }];
   const exec = EXEC_LITERAL.exec(sql);
   if (exec) return [{ kind: "nested", sql: unescapeSqlString(exec[1] as string), offset: null }];
   if (dialect === "postgres") {
@@ -493,8 +562,6 @@ export function matchStatement(sql: string, dialect: SqlDialect, context: MatchC
       const body = getDoBody(doBlock[2] as string);
       return body ? [{ kind: "nested", sql: body.text, offset: bodyStart + body.offset }] : [];
     }
-    const ifThen = IF_THEN.exec(sql);
-    if (ifThen) return [{ kind: "nested", sql: sql.slice(ifThen[0].length), offset: ifThen[0].length }];
   }
 
   const schema = CREATE_SCHEMA.exec(sql);
@@ -641,6 +708,6 @@ export function matchStatement(sql: string, dialect: SqlDialect, context: MatchC
     ];
   }
   const insert = INSERT.exec(sql);
-  if (insert) return matchInsert(sql, insert, dialect, context);
+  if (insert) return matchInsert({ sql, match: insert, dialect, context });
   return [];
 }

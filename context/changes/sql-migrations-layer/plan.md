@@ -264,6 +264,9 @@ exit 1, evidence `drizzle/0002_x.sql:<line>`; the same with an accept entry → 
 - Accept allowlist → yes, per source, mirroring `openapi`.
 - UTF-16 decoding → in this change, through a `latin1` read in `RefTree` (core backlog item names CMP-2).
 - Plan review findings C1, W1-W3, S1-S3 → all fixed in the plan (reviews/plan-review.md).
+- EF statements outside every guard (found in impl review W3) → classified as the migration `(outside migration
+  guards)` when the base script did not have them (hand-written SQL must not bypass the rules).
+- Impl review findings C1, W1-W6, S1-S3 → all fixed (reviews/impl-review.md).
 
 ## Progress
 

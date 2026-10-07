@@ -25,6 +25,13 @@ export type SourceChanges = {
 
 export type ReadSourceOptions = { source: MigrationSource; base: RefTree; revision: RefTree };
 
+/** Migration id given to statements of an EF script that sit outside every migration guard. */
+export const UNGUARDED_MIGRATION = "(outside migration guards)";
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, " ");
+}
+
 type FolderSource = Extract<MigrationSource, { kind: "folder" }>;
 type EfScriptSource = Extract<MigrationSource, { kind: "ef-script" }>;
 
@@ -96,7 +103,9 @@ async function readEfScript(
   const revisionScript = parseEfScript(revisionText.value, source.dialect, source.historyTable);
   if (!revisionScript.ok) return err(`${source.path} at revision ${revision.ref}: ${revisionScript.error}`);
   const baseScript =
-    baseText.value === null ? ok([]) : parseEfScript(baseText.value, source.dialect, source.historyTable);
+    baseText.value === null
+      ? ok({ migrations: [], unguarded: [] })
+      : parseEfScript(baseText.value, source.dialect, source.historyTable);
   if (!baseScript.ok) return err(`${source.path} at base ${base.ref}: ${baseScript.error}`);
 
   const toMigration = ({
@@ -110,13 +119,23 @@ async function readEfScript(
     path: source.path,
     statements,
   });
-  const baseIds = new Set(baseScript.value.map((migration) => migration.id));
-  const revisionIds = new Set(revisionScript.value.map((migration) => migration.id));
+  const baseIds = new Set(baseScript.value.migrations.map((migration) => migration.id));
+  const revisionIds = new Set(revisionScript.value.migrations.map((migration) => migration.id));
+  const newMigrations = revisionScript.value.migrations
+    .filter((migration) => !baseIds.has(migration.id))
+    .map(toMigration);
+  // Hand-written SQL outside the guards runs on every deploy; only what the revision added is new.
+  const baseUnguarded = new Set(baseScript.value.unguarded.map((statement) => normalizeSql(statement.sql)));
+  const newUnguarded = revisionScript.value.unguarded.filter(
+    (statement) => !baseUnguarded.has(normalizeSql(statement.sql)),
+  );
+  if (newUnguarded.length > 0)
+    newMigrations.push(toMigration({ id: UNGUARDED_MIGRATION, statements: newUnguarded }));
   return ok({
-    newMigrations: revisionScript.value.filter((migration) => !baseIds.has(migration.id)).map(toMigration),
-    changed: baseScript.value
+    newMigrations,
+    changed: baseScript.value.migrations
       .filter((migration) => !revisionIds.has(migration.id))
       .map((migration) => ({ kind: "removed", migration: migration.id, path: source.path, side: "base" })),
-    baseTables: getCreatedTables(baseScript.value.map(toMigration), source.dialect),
+    baseTables: getCreatedTables(baseScript.value.migrations.map(toMigration), source.dialect),
   });
 }

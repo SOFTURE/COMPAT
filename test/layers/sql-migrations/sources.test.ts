@@ -33,7 +33,9 @@ beforeAll(async () => {
         "drizzle/0002_gone.sql": null,
         "drizzle/0003_new.sql": 'ALTER TABLE "pets" DROP COLUMN "a";',
         "db/ef.sql":
-          EF_BLOCK("A", 'CREATE TABLE "Breeds" ("Id" int);') + EF_BLOCK("C", 'DROP TABLE "Breeds";'),
+          EF_BLOCK("A", 'CREATE TABLE "Breeds" ("Id" int);') +
+          EF_BLOCK("C", 'DROP TABLE "Breeds";') +
+          'TRUNCATE "Pets";\n',
         "db/new-ef.sql": EF_BLOCK("X", "SELECT 1;"),
       },
       tag: "v2",
@@ -98,7 +100,12 @@ describe("readSourceChanges", () => {
       revision,
     });
     if (!changes.ok) throw new Error(changes.error);
-    expect(changes.value.newMigrations.map((migration) => migration.id)).toEqual(["C"]);
+    expect(
+      changes.value.newMigrations.map((migration) => [migration.id, migration.statements.map((s) => s.sql)]),
+    ).toEqual([
+      ["C", ['DROP TABLE "Breeds"']],
+      ["(outside migration guards)", ['TRUNCATE "Pets"']],
+    ]);
     expect(changes.value.changed).toEqual([
       { kind: "removed", migration: "B", path: "db/ef.sql", side: "base" },
     ]);

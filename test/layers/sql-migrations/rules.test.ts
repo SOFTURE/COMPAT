@@ -132,6 +132,28 @@ describe("matchStatement rules", () => {
       'ALTER TABLE "Pets" ADD "A" text, DROP COLUMN "B", ALTER COLUMN "C" SET NOT NULL',
       ["add-column safe Pets.A", "drop-column breaking Pets.B", "set-not-null breaking Pets.C"],
     ],
+    [
+      "postgres",
+      'ALTER TABLE t ADD COLUMN c text COLLATE pg_catalog."default" NOT NULL',
+      ["add-required-column breaking t.c"],
+    ],
+    [
+      "sqlserver",
+      "ALTER TABLE [t] ADD [c] nvarchar(10) NOT NULL CONSTRAINT [CK_c] CHECK ([c] <> N'default')",
+      ["add-required-column breaking t.c"],
+    ],
+    ["postgres", 'ALTER TABLE t ADD COLUMN c "identity" NOT NULL', ["add-required-column breaking t.c"]],
+    ["postgres", "ALTER TABLE t ADD COLUMN c text CHECK (c <> 'NOT NULL')", ["add-column safe t.c"]],
+    [
+      "sqlserver",
+      "ALTER TABLE [Pets] DROP CONSTRAINT [DF_x], COLUMN [Name]",
+      ["drop-column breaking Pets.Name"],
+    ],
+    [
+      "sqlserver",
+      "ALTER TABLE [Pets] DROP COLUMN [Name], CONSTRAINT [DF_x]",
+      ["drop-column breaking Pets.Name"],
+    ],
     ["postgres", 'CREATE VIEW "v" AS SELECT 1', []],
     ["postgres", "SELECT 1", []],
     ["postgres", "SELECT setval('\"Breeds_Id_seq\"', 496)", []],
@@ -161,7 +183,7 @@ describe("matchStatement explicit ids", () => {
       kind: "rule",
       rule: "insert-explicit-id",
       class: "needs-action",
-      explicitIds: { column: "Id", values: ["418", "419", "496"] },
+      explicitIds: { column: "Id", rows: 3, range: { first: 418, last: 496 } },
     });
     expect(found?.kind === "rule" && found.message).toContain("max(Id) < 418");
   });
@@ -192,15 +214,18 @@ describe("matchStatement explicit ids", () => {
       "postgres",
       NO_CONTEXT,
     );
-    expect(found).toMatchObject({ explicitIds: { column: "id", values: null } });
+    expect(found).toMatchObject({ explicitIds: { column: "id", rows: null, range: null } });
   });
 });
 
 describe("matchStatement wrappers", () => {
-  it("finds a conditional IDENTITY_INSERT", () => {
+  it("unwraps a conditional IDENTITY_INSERT and reads ON and OFF", () => {
     const sql =
       "IF EXISTS (SELECT * FROM [sys].[identity_columns] WHERE [name] IN (N'Id', N'Name') AND [object_id] = OBJECT_ID(N'[Breeds]'))\n    SET IDENTITY_INSERT [Breeds] ON";
-    expect(match(sql, "sqlserver")).toEqual(["identity-insert Breeds"]);
+    expect(match(sql, "sqlserver")).toEqual(["nested SET IDENTITY_INSERT [Breeds] ON"]);
+    expect(matchStatement("SET IDENTITY_INSERT [Breeds] OFF", "sqlserver", NO_CONTEXT)).toMatchObject([
+      { kind: "identity-insert", isEnabled: false },
+    ]);
   });
 
   it("unwraps an EXEC literal behind an IF condition", () => {
@@ -243,11 +268,23 @@ describe("matchStatement wrappers", () => {
     ).toEqual(["nested CREATE SCHEMA system"]);
   });
 
-  it("unwraps the body of a drizzle DO block up to EXCEPTION", () => {
-    const sql =
-      'DO $$ BEGIN\n ALTER TABLE "a" ADD CONSTRAINT "fk" FOREIGN KEY ("b") REFERENCES "b"("id");\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$';
-    expect(match(sql)).toEqual([
-      'nested ALTER TABLE "a" ADD CONSTRAINT "fk" FOREIGN KEY ("b") REFERENCES "b"("id");',
+  it("unwraps the body of a DO block, with LANGUAGE before or after it", () => {
+    expect(match("DO $$ BEGIN DROP TABLE t; END $$ LANGUAGE plpgsql")).toEqual(["nested DROP TABLE t;"]);
+    expect(match("DO LANGUAGE plpgsql $x$ BEGIN DROP TABLE t; END $x$")).toEqual(["nested DROP TABLE t;"]);
+  });
+
+  it("unwraps ELSE, ELSIF and BEGIN wrappers and skips exception handlers", () => {
+    expect(match("ELSIF x THEN DROP TABLE t")).toEqual(["nested DROP TABLE t"]);
+    expect(match("ELSE DROP TABLE t")).toEqual(["nested DROP TABLE t"]);
+    expect(match("BEGIN DROP TABLE t")).toEqual(["nested DROP TABLE t"]);
+    expect(match("BEGIN TRANSACTION", "sqlserver")).toEqual([]);
+    expect(match("EXCEPTION WHEN duplicate_object THEN null")).toEqual([]);
+  });
+
+  it("matches the statement after common table expressions", () => {
+    expect(match("WITH x AS (SELECT 1), y (a) AS MATERIALIZED (SELECT (2)) UPDATE t SET a = 1")).toEqual([
+      "nested UPDATE t SET a = 1",
     ]);
+    expect(match("WITH x AS (SELECT 1) SELECT * FROM x")).toEqual(["nested SELECT * FROM x"]);
   });
 });

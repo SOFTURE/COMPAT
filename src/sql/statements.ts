@@ -50,7 +50,9 @@ function scanBlockComment(text: string, start: number): number {
   return text.length;
 }
 
-function scanQuoted(text: string, start: number, close: string, hasBackslashEscapes = false): number {
+type ScanQuotedOptions = { text: string; start: number; close: string; hasBackslashEscapes?: boolean };
+
+function scanQuoted({ text, start, close, hasBackslashEscapes = false }: ScanQuotedOptions): number {
   let index = start + 1;
   while (index < text.length) {
     const char = text[index];
@@ -106,11 +108,11 @@ function tokenize(text: string, dialect: SqlDialect): Range[] {
       push("comment", index, scanBlockComment(text, index));
     } else if (char === "'") {
       const hasBackslashEscapes = dialect === "postgres" && isEscapeStringPrefix(text, index);
-      push("string", index, scanQuoted(text, index, "'", hasBackslashEscapes));
+      push("string", index, scanQuoted({ text, start: index, close: "'", hasBackslashEscapes }));
     } else if (char === '"') {
-      push("identifier", index, scanQuoted(text, index, '"'));
+      push("identifier", index, scanQuoted({ text, start: index, close: '"' }));
     } else if (char === "[" && dialect === "sqlserver") {
-      push("identifier", index, scanQuoted(text, index, "]"));
+      push("identifier", index, scanQuoted({ text, start: index, close: "]" }));
     } else if (char === "$" && dialect === "postgres") {
       const end = scanDollarQuote(text, index);
       if (end === null) index += 1;
@@ -129,6 +131,19 @@ export function maskComments(text: string, dialect: SqlDialect): string {
   for (const range of tokenize(text, dialect)) {
     const part = text.slice(range.start, range.end);
     masked += range.kind === "comment" ? part.replace(/[^\n]/g, " ") : part;
+  }
+  return masked;
+}
+
+/**
+ * The text with comments, strings, quoted identifiers and dollar-quoted bodies replaced by spaces
+ * (newlines kept), so keyword tests cannot match inside them; offsets stay true.
+ */
+export function maskLiterals(text: string, dialect: SqlDialect): string {
+  let masked = "";
+  for (const range of tokenize(text, dialect)) {
+    const part = text.slice(range.start, range.end);
+    masked += range.kind === "code" ? part : part.replace(/[^\n]/g, " ");
   }
   return masked;
 }
@@ -168,8 +183,18 @@ function getCodeOffsets(text: string, ranges: Range[], char: string): number[] {
   return offsets;
 }
 
+/** Whether `offset` lies in code; `ranges` are contiguous and sorted, so a binary search finds its range. */
 function isInCode(ranges: Range[], offset: number): boolean {
-  return ranges.some((range) => range.kind === "code" && range.start <= offset && offset < range.end);
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle] as Range;
+    if (offset < range.start) high = middle - 1;
+    else if (offset >= range.end) low = middle + 1;
+    else return range.kind === "code";
+  }
+  return false;
 }
 
 /** `[start, end)` spans between `GO` lines (SQL Server) or the whole text (Postgres). */

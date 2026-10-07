@@ -3,6 +3,7 @@ import {
   findClosingParen,
   getLineAt,
   maskComments,
+  maskLiterals,
   splitStatements,
   splitTopLevel,
 } from "../../src/sql/statements.js";
@@ -101,6 +102,25 @@ describe("splitStatements", () => {
 
   it("returns the rest of the script as one statement after an unterminated string", () => {
     expect(sqls("SELECT 1; SELECT 'oops; DROP TABLE x;")).toEqual(["SELECT 1", "SELECT 'oops; DROP TABLE x"]);
+  });
+});
+
+describe("splitStatements performance", () => {
+  it("splits a 5 MB SQL Server script with many GO lines in linear time", () => {
+    const batch =
+      "IF NOT EXISTS (SELECT * FROM [h] WHERE [Id] = N'x')\nBEGIN\n    CREATE TABLE [a] ([b] int);\nEND;\nGO\n\n";
+    const text = batch.repeat(Math.ceil(5_000_000 / batch.length));
+    const started = performance.now();
+    const statements = splitStatements(text, "sqlserver");
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(statements.length).toBeGreaterThan(50_000);
+  });
+});
+
+describe("maskLiterals", () => {
+  it("blanks strings, quoted identifiers and dollar bodies", () => {
+    expect(maskLiterals("a 'x' \"y\" $$z$$ b", "postgres")).toBe(`a${" ".repeat(15)}b`);
+    expect(maskLiterals("[d] e", "sqlserver")).toBe("    e");
   });
 });
 

@@ -165,6 +165,65 @@ describe("classifyMigrations", () => {
   });
 });
 
+describe("classifyMigrations wrappers and order (impl review)", () => {
+  it.each([
+    [
+      "RAISE EXCEPTION before the statement",
+      "DO $$ BEGIN IF EXISTS (SELECT 1 FROM x) THEN RAISE EXCEPTION 'no'; END IF; DROP TABLE \"Pets\"; END $$;",
+    ],
+    ["LANGUAGE after the body", 'DO $$ BEGIN DROP TABLE "Pets"; END $$ LANGUAGE plpgsql;'],
+    ["an ELSE branch", 'DO $$ BEGIN IF x THEN SELECT 1; ELSE DROP TABLE "Pets"; END IF; END $$;'],
+  ])("finds a DROP TABLE in a DO block with %s", (_name, sql) => {
+    expect(summary(classify([migration("0002", sql)]))).toEqual(["drop-table breaking 0002: Pets"]);
+  });
+
+  it("unwraps an EXEC literal that starts with SET IDENTITY_INSERT", () => {
+    const sql = "EXEC(N'SET IDENTITY_INSERT [T] ON; INSERT INTO [T] ([Id]) VALUES (1); DROP TABLE [X]');";
+    expect(summary(classify([migration("A", sql, "sqlserver")], { dialect: "sqlserver" }))).toEqual([
+      "insert-explicit-id needs-action A: T",
+      "drop-table breaking A: X",
+    ]);
+  });
+
+  it("keeps a view that is created and then dropped a breaking drop", () => {
+    const items = classify([
+      migration("0002", "CREATE OR REPLACE VIEW v AS SELECT 1;"),
+      migration("0003", "DROP VIEW v;"),
+    ]);
+    expect(summary(items)).toEqual(["drop-object breaking 0003: v"]);
+  });
+
+  it("stops treating inserts as explicit ids after IDENTITY_INSERT OFF", () => {
+    const sql = [
+      "SET IDENTITY_INSERT [T] ON;",
+      "INSERT INTO [T] ([Id], [N]) VALUES (418, 'a');",
+      "SET IDENTITY_INSERT [T] OFF;",
+      "INSERT INTO [T] ([N]) VALUES ('b');",
+    ].join("\n");
+    const items = classify([migration("A", sql, "sqlserver")], { dialect: "sqlserver" });
+    expect(items.map(({ finding }) => finding.message)).toEqual([expect.stringContaining("max(Id) < 418")]);
+  });
+
+  it("merges 150,000 single-row inserts quickly", () => {
+    const sql = Array.from(
+      { length: 150_000 },
+      (_, index) => `INSERT INTO "B" ("Id") VALUES (${index + 1});`,
+    ).join("\n");
+    const started = performance.now();
+    const items = classify([migration("0002", sql)]);
+    expect(performance.now() - started).toBeLessThan(15_000);
+    expect(items.map(({ finding }) => finding.message)).toEqual([
+      expect.stringContaining("150000 row(s) into B with explicit Id 1-150000"),
+    ]);
+  });
+
+  it("reads one insert with 200,000 tuples without overflowing the stack", () => {
+    const values = Array.from({ length: 200_000 }, (_, index) => `(${index + 1})`).join(", ");
+    const items = classify([migration("0002", `INSERT INTO "B" ("Id") VALUES ${values};`)]);
+    expect(items[0]?.finding.message).toContain("200000 row(s) into B with explicit Id 1-200000");
+  });
+});
+
 describe("applyAccept", () => {
   const items = classify([
     migration("0002", 'ALTER TABLE "Pets" DROP COLUMN "A";\nALTER TABLE "Pets" DROP COLUMN "B";'),

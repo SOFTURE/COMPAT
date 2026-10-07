@@ -14,13 +14,14 @@ describe("parseEfScript", () => {
     const text = fixture(path);
     const parsed = parseEfScript(text, dialect, HISTORY);
     if (!parsed.ok) throw new Error(parsed.error);
-    expect(parsed.value.map((migration) => migration.id)).toEqual([
+    expect(parsed.value.unguarded).toEqual([]);
+    expect(parsed.value.migrations.map((migration) => migration.id)).toEqual([
       "20260901000000_Init",
       "20261001000000_AddFeatureFlags",
       "20261002000000_AddNotificationBroadcasts",
       "20261005073152_AddMissingPetBreeds",
     ]);
-    const statements = parsed.value.flatMap((migration) => migration.statements);
+    const statements = parsed.value.migrations.flatMap((migration) => migration.statements);
     expect(statements.some((statement) => statement.sql.includes(HISTORY))).toBe(false);
     const lines = text.split("\n");
     for (const statement of statements) {
@@ -40,12 +41,20 @@ describe("parseEfScript", () => {
     ].join("\n");
     expect(parseEfScript(text, "sqlserver", "Migrations")).toEqual({
       ok: true,
-      value: [{ id: "A", statements: [{ sql: "DROP TABLE [Old]", line: 3, offset: text.indexOf("DROP") }] }],
+      value: {
+        migrations: [
+          { id: "A", statements: [{ sql: "DROP TABLE [Old]", line: 3, offset: text.indexOf("DROP") }] },
+        ],
+        unguarded: [],
+      },
     });
   });
 
   it("returns no migrations for an empty script", () => {
-    expect(parseEfScript(" \n", "postgres", HISTORY)).toEqual({ ok: true, value: [] });
+    expect(parseEfScript(" \n", "postgres", HISTORY)).toEqual({
+      ok: true,
+      value: { migrations: [], unguarded: [] },
+    });
   });
 
   it("fails when the script has no guard", () => {
@@ -56,5 +65,18 @@ describe("parseEfScript", () => {
 
   it("fails for a script of the other dialect", () => {
     expect(parseEfScript(fixture("ef-sqlserver/base.sql"), "postgres", HISTORY).ok).toBe(false);
+  });
+
+  it.each([
+    ["postgres", "ef-postgres/base.sql", 'ALTER TABLE "Pets" DROP COLUMN "y";'],
+    ["sqlserver", "ef-sqlserver/base.sql", "DROP TABLE [Pets];\nGO"],
+  ] as const)("returns %s statements outside the guards", (dialect, path, appended) => {
+    const text = `${fixture(path)}\n${appended}\n`;
+    const parsed = parseEfScript(text, dialect, HISTORY);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const line = text.split("\n").length - (dialect === "postgres" ? 1 : 2);
+    expect(parsed.value.unguarded.map((statement) => [statement.sql, statement.line])).toEqual([
+      [appended.split(";")[0], line],
+    ]);
   });
 });
