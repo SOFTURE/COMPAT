@@ -228,6 +228,11 @@ Spec sources:
   Swashbuckle, FastEndpoints), and make sure the command works on a clean checkout (restore dependencies inside it).
 - `{ "kind": "url", "base": "https://dev.example.com/swagger.json", "revision": "https://..." }`: fetched over
   HTTP(S), for example from a DEV environment.
+- `{ "kind": "serve", "run": "...", "url": "http://127.0.0.1:{port}/swagger/v1/swagger.json" }`: for specs that
+  exist only while the app runs (ASP.NET with Swashbuckle, NSwag or FastEndpoints, spec hidden in production). In each
+  materialised ref the tool picks a free port, starts `run` through the shell, polls `url` until it answers 2xx with an
+  OpenAPI document (JSON or YAML), saves it, and stops the app with everything it started (SIGTERM, then SIGKILL to
+  the whole process group after 3 seconds). See below.
 
 `setup` runs **once in each materialised ref**, whatever the number of APIs, before their spec sources, with the
 same working directory and environment (`COMPAT_SIDE`, `COMPAT_REF`, `COMPAT_COMMIT`) as a `command` source. Use it
@@ -235,6 +240,45 @@ for a build that every export command shares; the export commands then skip the 
 The default timeout is 600 seconds (maximum 7200). A failing setup fails the layer with the side, the ref and the
 end of its stderr. The base and revision checkouts are separate, so both sides (setup, then the spec of each API in
 order) run in parallel; set `"concurrency": 1` when one build at a time is all the machine can take.
+
+A `serve` source for an ASP.NET API whose spec sits behind an internal key:
+
+```json
+{
+  "setup": { "run": "dotnet build App.slnx -c Debug", "timeoutSeconds": 900 },
+  "apis": [
+    {
+      "name": "b2c",
+      "source": {
+        "kind": "serve",
+        "run": "dotnet run --no-build --no-launch-profile --project src/Api",
+        "url": "http://127.0.0.1:{port}/swagger/v1/swagger.json",
+        "ready": "http://127.0.0.1:{port}/hc",
+        "env": { "ASPNETCORE_URLS": "http://127.0.0.1:{port}", "ASPNETCORE_ENVIRONMENT": "Development" },
+        "headers": { "X-Internal-Api-Key": "${INTERNAL_API_KEY}" },
+        "timeoutSeconds": 180
+      }
+    }
+  ]
+}
+```
+
+| `serve` key | Meaning |
+| --- | --- |
+| `run` | shell command that starts the app and keeps running; working directory is the materialised ref |
+| `url` | where the running app serves the spec |
+| `ready` | optional URL polled until 2xx before `url`, for example a health check |
+| `env` | extra environment variables for the app |
+| `headers` | sent with every request; `${VAR}` reads the environment, a missing variable fails the layer, values are never printed |
+| `timeoutSeconds` | from the start of the app until the spec is fetched; default 180, maximum 7200 |
+
+`{port}` in `run`, `url`, `ready`, `env` and `headers` is replaced by a free port picked for each side, so the base
+and revision apps run in parallel without clashing; the app also gets it as `COMPAT_PORT`, next to `COMPAT_SIDE`,
+`COMPAT_REF` and `COMPAT_COMMIT`. The report names the spec by its `url` with `{port}` kept and any query redacted.
+When the spec never arrives, the error names the last answer of the URL (`HTTP 401`, `connection refused`, ...)
+and the end of the app output; an app that exits early is reported with its exit code. Each API with a `serve`
+source starts its own app. `init` proposes a disabled `serve` source for every `*.csproj` that references
+`FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` when the repository has no committed spec.
 
 ### sql-migrations
 

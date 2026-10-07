@@ -57,6 +57,32 @@ describe("openapi config", () => {
     expect(firstIssue({ apis: [api(source)], concurrency: 0 })).toMatch(/^concurrency: Too small/);
   });
 
+  it("accepts a serve source with {port} in its URLs", () => {
+    const source = {
+      kind: "serve",
+      run: "dotnet run --no-launch-profile --project src/Api",
+      url: "http://127.0.0.1:{port}/swagger/v1/swagger.json",
+      ready: "http://127.0.0.1:{port}/hc",
+      env: { ASPNETCORE_URLS: "http://127.0.0.1:{port}" },
+      headers: { "X-Internal-Api-Key": "$" + "{INTERNAL_API_KEY}" },
+      timeoutSeconds: 180,
+    };
+    expect(parse({ apis: [api(source)] }).success).toBe(true);
+  });
+
+  it("rejects a serve source with a non-http URL, a bad env name or a typo", () => {
+    const serve = { kind: "serve", run: "npm start", url: "http://127.0.0.1:{port}/spec.json" };
+    expect(firstIssue({ apis: [api({ ...serve, url: "ftp://host/spec.json" })] })).toBe(
+      "apis.0.source.url: must be an http(s) URL; '{port}' is allowed",
+    );
+    expect(firstIssue({ apis: [api({ ...serve, env: { "1BAD": "x" } })] })).toMatch(
+      /^apis\.0\.source\.env\.1BAD: /,
+    );
+    expect(firstIssue({ apis: [api({ ...serve, readyTimeout: 5 })] })).toBe(
+      'apis.0.source: Unrecognized key: "readyTimeout"',
+    );
+  });
+
   it("rejects paths that leave the repository", () => {
     expect(firstIssue({ apis: [api({ kind: "file", path: "../secrets.json" })] })).toBe(
       "apis.0.source.path: must not contain '..'",
