@@ -48,7 +48,7 @@ beforeAll(() => {
         config: {
           sources,
           accept: [
-            ...["Shop__BaseUrl", "Shop__ApiKey", "ShopBaseUrl", "ShopApiKey"].map((key) => ({
+            ...["Shop__BaseUrl", "SHOP_API_KEY"].map((key) => ({
               key,
               id: "config-key-added-required",
               reason: "set in the production vault on 2026-10-06",
@@ -99,20 +99,16 @@ describe("config layer end to end (research F10)", () => {
     expect(layer?.status).toBe("ran");
     const summary = layer?.findings.map((f) => `${f.subject} ${f.id} ${f.class}`);
     expect(summary).toEqual([
-      "Logging__Level config-key-default-removed needs-action",
-      "ShopApiKey config-key-added-required needs-action",
-      "ShopBaseUrl config-key-added-required needs-action",
-      "Shop__ApiKey config-key-added-required needs-action",
-      "Shop__BaseUrl config-key-added-required needs-action",
-      "Shop__TimeoutSeconds config-key-added-optional safe",
+      "LOGGING_LEVEL config-key-default-removed needs-action",
+      "SHOP_API_KEY config-key-added-required needs-action",
+      "SHOP_BASE_URL config-key-added-required needs-action",
+      "SHOP_TIMEOUT_SECONDS config-key-added-optional safe",
     ]);
-    const baseUrl = layer?.findings.find((f) => f.subject === "Shop__BaseUrl");
+    // The .NET member `ShopBaseUrl` and the `Shop__BaseUrl` of compose and Ansible are one setting.
+    const baseUrl = layer?.findings.find((f) => f.subject === "SHOP_BASE_URL");
     expect(baseUrl?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
       "VPS/ANSIBLE/roles/app/tasks/main.yml:5",
       "deploy/docker-compose.yml:7",
-    ]);
-    const dotnet = layer?.findings.find((f) => f.subject === "ShopBaseUrl");
-    expect(dotnet?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
       "src/Petseo.Api/Settings/ApiSettings.cs:10",
     ]);
   });
@@ -142,12 +138,6 @@ describe("config layer end to end (research F10)", () => {
     const { code, layer } = await runJson(...check("accepted.json", "--fail-on", "needs-action"));
     expect(code).toBe(0);
     const accepted = layer?.findings.filter((f) => f.accepted).map((f) => f.subject);
-    expect(accepted).toEqual([
-      "Logging__Level",
-      "ShopApiKey",
-      "ShopBaseUrl",
-      "Shop__ApiKey",
-      "Shop__BaseUrl",
-    ]);
+    expect(accepted).toEqual(["LOGGING_LEVEL", "SHOP_API_KEY", "SHOP_BASE_URL"]);
   });
 });
