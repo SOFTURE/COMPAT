@@ -6,4 +6,10 @@ import { seedLayer } from "./seed/seed-layer.js";
 import { sqlMigrationsLayer } from "./sql-migrations/sql-migrations-layer.js";
 
 /** Every layer the CLI knows, in the order they run and appear in reports. Add one line per layer. */
-export const LAYERS: Layer[] = [openapiLayer, sqlMigrationsLayer, seedLayer, persistedEnumsLayer, configLayer];
+export const LAYERS: Layer[] = [
+  openapiLayer,
+  sqlMigrationsLayer,
+  seedLayer,
+  persistedEnumsLayer,
+  configLayer,
+];

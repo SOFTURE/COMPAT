@@ -22,4 +22,6 @@ node_modules/
 /.claude/skills/softure-worktree-manager/
 /.claude/softure-skills.json
 # softure-skills:end
+
 dist/
+
