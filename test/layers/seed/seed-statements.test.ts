@@ -370,6 +370,151 @@ describe("readSeedStatements: guards and blocks", () => {
   });
 });
 
+describe("readSeedStatements: dynamic SQL and bulk loads", () => {
+  it("unwraps a T-SQL EXEC literal and keeps the outer file's lines", () => {
+    const statements = readSeedStatements(
+      [
+        "SET NOCOUNT ON;",
+        "EXEC(N'",
+        "  INSERT INTO [dbo].[Roles] ([Id], [Name])",
+        "  VALUES (1, N''Admin''),",
+        "         (2, N''User'')')",
+      ].join("\n"),
+      "sqlserver",
+    );
+    expect(statements).toMatchObject([
+      {
+        kind: "rows",
+        line: 3,
+        mode: "none",
+        rows: [
+          { key: "1", values: "1, N'Admin'", line: 4 },
+          { key: "2", values: "2, N'User'", line: 5 },
+        ],
+      },
+    ]);
+    expect(readSeedStatements("EXECUTE ('DELETE FROM t WHERE id = 1')", "sqlserver")).toMatchObject([
+      { kind: "delete", text: "DELETE FROM T WHERE ID = 1" },
+    ]);
+  });
+
+  it("unwraps sp_executesql with parameters, a named statement and a schema prefix", () => {
+    expect(
+      readSeedStatements(
+        "EXEC sp_executesql N'UPDATE t SET a = @a WHERE id = 1', N'@a int', @a = 5",
+        "sqlserver",
+      ),
+    ).toMatchObject([{ kind: "update", text: "UPDATE T SET A = @A WHERE ID = 1" }]);
+    expect(
+      readSeedStatements("EXECUTE sys.sp_executesql @stmt = N'TRUNCATE TABLE t';", "sqlserver"),
+    ).toMatchObject([{ kind: "truncate" }]);
+  });
+
+  it("keeps a T-SQL IF NOT EXISTS guard on the unwrapped statement", () => {
+    const statements = readSeedStatements(
+      "IF NOT EXISTS (SELECT 1 FROM t WHERE id = 1)\n  EXEC(N'INSERT INTO t (id, a) VALUES (1, ''x'')')",
+      "sqlserver",
+    );
+    expect(statements).toMatchObject([
+      { kind: "rows", mode: "ignore", guard: "(SELECT 1 FROM T WHERE ID = 1)" },
+    ]);
+  });
+
+  it("reports T-SQL dynamic SQL without a literal body, but not a procedure call", () => {
+    const statements = readSeedStatements(
+      [
+        "EXEC(@sql)",
+        "EXEC(N'INSERT INTO t VALUES (' + @id + N')')",
+        "EXEC sp_executesql @sql, N'@a int', @a = 1",
+        "EXEC dbo.RefreshCache @id = 1",
+      ].join("\n"),
+      "sqlserver",
+    );
+    expect(statements).toMatchObject([
+      { kind: "unknown-write", line: 1 },
+      { kind: "unknown-write", line: 2 },
+      { kind: "unknown-write", line: 3 },
+    ]);
+    expect(statements).toHaveLength(3);
+  });
+
+  it("reports BULK INSERT as an unknown write", () => {
+    expect(
+      readSeedStatements("BULK INSERT dbo.Roles FROM '/data/roles.csv' WITH (FORMAT = 'CSV');", "sqlserver"),
+    ).toMatchObject([{ kind: "unknown-write", line: 1 }]);
+  });
+
+  it("unwraps EXECUTE with a literal body in a DO block with true lines", () => {
+    const statements = readSeedStatements(
+      [
+        "DO $$",
+        "BEGIN",
+        "  EXECUTE 'INSERT INTO t (id, a)",
+        "    VALUES (1, ''x'')';",
+        "  EXECUTE $q$UPDATE t SET a = $1 WHERE id = 2$q$ USING 'y';",
+        "END $$;",
+      ].join("\n"),
+      "postgres",
+    );
+    expect(statements).toMatchObject([
+      { kind: "rows", line: 3, rows: [{ key: "1", values: "1, 'x'", line: 4 }] },
+      { kind: "update", line: 5, text: "UPDATE T SET A = $1 WHERE ID = 2" },
+    ]);
+  });
+
+  it("reports EXECUTE without a literal body in a DO block, but not a schema change", () => {
+    const statements = readSeedStatements(
+      [
+        "DO $$",
+        "DECLARE v_sql text := 'DELETE FROM t';",
+        "BEGIN",
+        "  EXECUTE format('INSERT INTO %I (id) VALUES (1)', 'x');",
+        "  EXECUTE v_sql;",
+        "  EXECUTE 'DELETE FROM t WHERE id = ' || 1;",
+        "  EXECUTE E'DELETE FROM t';",
+        "  EXECUTE format('CREATE INDEX IF NOT EXISTS ix ON %I (a)', 't');",
+        "END $$;",
+      ].join("\n"),
+      "postgres",
+    );
+    expect(statements).toMatchObject([
+      { kind: "unknown-write", line: 4 },
+      { kind: "unknown-write", line: 5 },
+      { kind: "unknown-write", line: 6 },
+      { kind: "unknown-write", line: 7 },
+    ]);
+    expect(statements).toHaveLength(4);
+  });
+
+  it("does not read a top-level Postgres EXECUTE of a prepared statement as dynamic SQL", () => {
+    expect(readSeedStatements("EXECUTE refresh_plan(1);", "postgres")).toEqual([]);
+  });
+
+  it("reports COPY ... FROM as an unknown write and COPY ... TO as a read", () => {
+    const statements = readSeedStatements(
+      [
+        "COPY roles FROM STDIN WITH (FORMAT csv);",
+        'COPY public."Roles" ("Id", "Name") FROM \'/data/roles.csv\' CSV HEADER;',
+        "COPY roles TO STDOUT;",
+        "COPY (SELECT * FROM roles) TO '/tmp/roles.csv';",
+      ].join("\n"),
+      "postgres",
+    );
+    expect(statements).toMatchObject([
+      { kind: "unknown-write", line: 1 },
+      { kind: "unknown-write", line: 2 },
+    ]);
+    expect(statements).toHaveLength(2);
+  });
+
+  it("reports nested SQL beyond the nesting limit instead of dropping it", () => {
+    const wrap = (sql: string) => `EXEC(N'${sql.replaceAll("'", "''")}')`;
+    const nested = wrap(wrap(wrap(wrap("DELETE FROM t"))));
+    expect(readSeedStatements(nested, "sqlserver")).toMatchObject([{ kind: "unknown-write", line: 1 }]);
+    expect(readSeedStatements(wrap(wrap("DELETE FROM t")), "sqlserver")).toMatchObject([{ kind: "delete" }]);
+  });
+});
+
 describe("normalizeSql", () => {
   it("collapses whitespace and uppercases outside quotes, and drops spaces around parentheses and commas", () => {
     expect(normalizeSql("INSERT  INTO t ( a ,\n b )  VALUES ('x  y', [a  b])", "sqlserver")).toBe(
