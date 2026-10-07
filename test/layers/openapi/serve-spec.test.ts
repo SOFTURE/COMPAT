@@ -158,13 +158,14 @@ describe("serve spec source", () => {
       serve({
         url: "http://127.0.0.1:{port}/missing.json",
         env: { APP_PORT: "{port}", APP_IGNORE_TERM: "1", APP_PID_FILE: pidFile },
-        timeoutSeconds: 1,
+        // Long enough for a busy CI runner to boot the app, so the 404 proves it ran and wrote its pid.
+        timeoutSeconds: 3,
       }),
     );
     expect(result).toEqual({
       ok: false,
       error: expect.stringContaining(
-        "http://127.0.0.1:{port}/missing.json not ready after 1 s (last: HTTP 404)",
+        "http://127.0.0.1:{port}/missing.json not ready after 3 s (last: HTTP 404)",
       ),
     });
     expect(isProcessAlive(Number(await readFile(pidFile, "utf8")))).toBe(false);
