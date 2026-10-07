@@ -13,7 +13,8 @@ updated: 2026-10-07
 > - Push main branch: no
 > - Archive roadmap: no
 > - Release: no (the owner publishes to npm with his own token)
-> - Parallelism: 1 (one session, items run in order)
+> - Parallelism: one thread per change, started by the project coordinator; an item starts once its
+>   prerequisites are merged into `master`
 
 Source: `context/changes/backward-compat-checker/research.md` (no PRD; the research and the owner's
 requests of 2026-10-07 are the product input). Scope of v1 follows research §6 question 4: `openapi`,
@@ -34,8 +35,9 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 ## Order
 CMP-1 builds the core every layer plugs into, so it goes first. CMP-3 reuses the SQL statement splitter of CMP-2.
 CMP-4 and CMP-5 only add a layer folder and a registry line each. CMP-6 closes the roadmap: it documents the
-finished command set and proves the PETSEO acceptance table on a synthetic repository. Items run one after another
-in this session; the shared hot files are `src/layers/registry.ts` and `src/config/schema.ts`.
+finished command set and proves the PETSEO acceptance table on a synthetic repository. Items run
+as separate threads, one change each; CMP-4 and CMP-5 may run next to CMP-2. The shared hot files are the layer
+registry and the config schema that CMP-1 creates; every later item adds one entry to each.
 
 ## Items
 

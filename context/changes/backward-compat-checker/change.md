@@ -2,7 +2,7 @@
 change_id: backward-compat-checker
 title: "An npm CLI tells, for two git refs, whether the new server release is backward compatible with what runs in production"
 status: preparing
-roadmap_item: null
+roadmap_item: CMP-1
 branch: null
 created: 2026-10-07
 updated: 2026-10-07
@@ -62,3 +62,7 @@ What is known today is in `research.md`: the tool landscape, the stacks of the S
 ## Notes
 - 2026-10-07: research written from the PETSEO 2.2.4 → 2.3.4 analysis.
 - 2026-10-07: names decided and the folder moved from PETSEO into `SOFTURE/COMPAT`. Next step: `softure-plan`.
+- 2026-10-07: the owner handed the project over for autonomous delivery. The intent above is the product goal of
+  roadmap v1 (`context/foundation/roadmap.md`). This change delivers its first item, CMP-1: the core command
+  (config, git refs, finding model, reports, exit codes) and the `openapi` layer. The other v1 layers are
+  CMP-2 to CMP-5, release readiness is CMP-6, and the later layers wait in `context/backlog/later-layers.md`.
