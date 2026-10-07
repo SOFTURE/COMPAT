@@ -78,7 +78,23 @@ export type StatementMatch =
    * statement's line) or the body of a `DO` block, an `IF ... THEN` or a T-SQL `IF <condition>`
    * (offset of the body in the statement).
    */
-  | { kind: "nested"; sql: string; offset: number | null };
+  | { kind: "nested"; sql: string; offset: number | null }
+  | SequenceReset;
+
+/**
+ * `setval(...)`, `ALTER SEQUENCE ... RESTART` or `ALTER TABLE ... ALTER COLUMN ... RESTART`: moves the
+ * identity sequence of a table, so explicit ids inserted earlier in the migration no longer collide with it.
+ */
+export type SequenceReset = {
+  kind: "sequence-reset";
+  table: SqlName;
+  /** The identity column, or `null` when the statement does not name it. */
+  column: string | null;
+  next: SequenceNext;
+};
+
+/** The next value the sequence gives after the reset. */
+export type SequenceNext = { kind: "after-max" } | { kind: "value"; value: number } | { kind: "unknown" };
 
 export type MatchContext = {
   /** Keys (`SqlName.key`) of tables under `SET IDENTITY_INSERT ... ON` earlier in the same migration. */
@@ -118,6 +134,17 @@ const SP_RENAME = pattern(
   `^EXEC(?:UTE)?\\s+(?:\\[?sys\\]?\\s*\\.\\s*)?\\[?sp_rename\\]?\\s+(?:@objname\\s*=\\s*)?(${STRING})\\s*,\\s*(?:@newname\\s*=\\s*)?(${STRING})(?:\\s*,\\s*(?:@objtype\\s*=\\s*)?(${STRING}))?`,
 );
 const EXEC_LITERAL = pattern(`^EXEC(?:UTE)?\\s*\\(?\\s*(${STRING})\\s*\\)?$`);
+const SETVAL = pattern("^(?:SELECT|PERFORM)\\s+(?:pg_catalog\\s*\\.\\s*)?setval\\s*\\(");
+const SERIAL_SEQUENCE = pattern(
+  `^(?:pg_catalog\\s*\\.\\s*)?pg_get_serial_sequence\\s*\\(\\s*(${STRING})\\s*,\\s*(${STRING})\\s*\\)$`,
+);
+const SEQUENCE_LITERAL = pattern(`^(${STRING})(?:\\s*::\\s*regclass)?$`);
+const ALTER_SEQUENCE_RESTART = pattern(
+  `^ALTER\\s+SEQUENCE\\s+(?:IF\\s+EXISTS\\s+)?(${NAME})\\s.*?\\bRESTART\\b(?:\\s+WITH)?(?:\\s+(\\d+))?`,
+);
+const ALTER_COLUMN_RESTART = pattern(
+  `^ALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(${NAME})\\s+ALTER\\s+(?:COLUMN\\s+)?(${IDENT})\\s.*?\\bRESTART\\b(?:\\s+WITH)?(?:\\s+(\\d+))?\\s*$`,
+);
 const DO_BLOCK = pattern("^DO\\s+(?:LANGUAGE\\s+\\w+\\s+)?(\\$\\w*\\$)(.*)\\1(?:\\s+LANGUAGE\\s+\\w+)?$");
 const DEFINED_OBJECT = pattern(
   `^CREATE\\s+(?:OR\\s+(?:REPLACE|ALTER)\\s+)?(MATERIALIZED\\s+VIEW|VIEW|FUNCTION|PROCEDURE|PROC|TYPE|SEQUENCE|SCHEMA)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(${NAME})`,
@@ -412,14 +439,101 @@ export function mergeExplicitIds(a: ExplicitIds, b: ExplicitIds): ExplicitIds {
 }
 
 /** The message of an `insert-explicit-id` finding, also used when several inserts are merged into one. */
-export function describeExplicitIds(table: SqlName, ids: ExplicitIds): string {
+export function describeExplicitIds(table: SqlName, ids: ExplicitIds, isSequenceMoved = false): string {
   const column = ids.column ?? "the identity column";
+  const moved = "; the migration moves the identity sequence past them";
   if (ids.range !== null && ids.rows !== null) {
     const { first, last } = ids.range;
     const range = first === last ? `${first}` : `${first}-${last}`;
-    return `inserts ${ids.rows} row(s) into ${table.display} with explicit ${column} ${range}; precondition: production max(${column}) < ${first}, and the identity sequence must continue after ${last}`;
+    const head = `inserts ${ids.rows} row(s) into ${table.display} with explicit ${column} ${range}; precondition: production max(${column}) < ${first}`;
+    return isSequenceMoved
+      ? `${head}${moved}`
+      : `${head}, and the identity sequence must continue after ${last}`;
   }
-  return `inserts rows into ${table.display} with explicit ${column} values; precondition: no production row uses these values, and the identity sequence must continue after them`;
+  const head = `inserts rows into ${table.display} with explicit ${column} values; precondition: no production row uses these values`;
+  return isSequenceMoved ? `${head}${moved}` : `${head}, and the identity sequence must continue after them`;
+}
+
+/** Whether a reset leaves the sequence past every id of `ids`; an unknown range only trusts `MAX(...)`. */
+export function isSequenceMovedPast(next: SequenceNext, ids: ExplicitIds): boolean {
+  if (next.kind === "after-max") return true;
+  return next.kind === "value" && ids.range !== null && next.value > ids.range.last;
+}
+
+/**
+ * The table, column and next value of a statement that moves an identity sequence (see `SequenceReset`);
+ * `null` for any other statement or when the sequence cannot be tied to a table.
+ */
+function matchSequenceReset(sql: string, dialect: SqlDialect): SequenceReset | null {
+  const setval = SETVAL.exec(sql);
+  if (setval) {
+    const open = setval[0].length - 1;
+    const close = findClosingParen(sql, open, dialect);
+    if (close === -1) return null;
+    const [target = "", value = "", isCalled = "true"] = splitTopLevel(sql.slice(open + 1, close), dialect);
+    const sequence = readSequenceTarget(target, dialect);
+    if (sequence === null) return null;
+    const masked = maskLiterals(value, dialect);
+    const next: SequenceNext = /\bMAX\s*\(/i.test(masked)
+      ? { kind: "after-max" }
+      : /^\d+$/.test(value)
+        ? { kind: "value", value: Number(value) + (/^false$/i.test(isCalled) ? 0 : 1) }
+        : { kind: "unknown" };
+    return { kind: "sequence-reset", ...sequence, next };
+  }
+  const sequenceRestart = ALTER_SEQUENCE_RESTART.exec(sql);
+  if (sequenceRestart) {
+    const sequence = getSequenceTable(parseName(sequenceRestart[1] as string, dialect), dialect);
+    if (sequence === null) return null;
+    return { kind: "sequence-reset", ...sequence, next: getRestartValue(sequenceRestart[2]) };
+  }
+  const columnRestart = ALTER_COLUMN_RESTART.exec(sql);
+  if (columnRestart) {
+    return {
+      kind: "sequence-reset",
+      table: parseName(columnRestart[1] as string, dialect),
+      column: unquoteIdentifier(columnRestart[2] as string),
+      next: getRestartValue(columnRestart[3]),
+    };
+  }
+  return null;
+}
+
+function getRestartValue(value: string | undefined): SequenceNext {
+  return value === undefined ? { kind: "unknown" } : { kind: "value", value: Number(value) };
+}
+
+/** The table and column behind the first argument of `setval`. */
+function readSequenceTarget(
+  target: string,
+  dialect: SqlDialect,
+): Omit<SequenceReset, "kind" | "next"> | null {
+  const serial = SERIAL_SEQUENCE.exec(target);
+  if (serial) {
+    return {
+      table: parseName(unescapeSqlString(serial[1] as string), dialect),
+      column: unquoteIdentifier(unescapeSqlString(serial[2] as string)),
+    };
+  }
+  const literal = SEQUENCE_LITERAL.exec(target);
+  return literal
+    ? getSequenceTable(parseName(unescapeSqlString(literal[1] as string), dialect), dialect)
+    : null;
+}
+
+/** The table and column of a sequence named the Postgres way, `<table>_<column>_seq`. */
+function getSequenceTable(
+  sequence: SqlName,
+  dialect: SqlDialect,
+): Omit<SequenceReset, "kind" | "next"> | null {
+  const last = sequence.parts[sequence.parts.length - 1] ?? "";
+  const named = /^(.+)_([^_]+)_seq$/i.exec(last);
+  if (!named) return null;
+  const parts = [...sequence.parts.slice(0, -1), named[1] as string];
+  return {
+    table: parseName(parts.map((part) => `"${part.replace(/"/g, '""')}"`).join("."), dialect),
+    column: named[2] as string,
+  };
 }
 
 /** The values at `index` of every `VALUES` tuple, or `null` when the source is not a plain `VALUES` list. */
@@ -621,6 +735,10 @@ export function matchStatement(sql: string, dialect: SqlDialect, context: MatchC
         droppedObject: getObjectKey(kind, name),
       },
     ];
+  }
+  if (dialect === "postgres") {
+    const reset = matchSequenceReset(sql, dialect);
+    if (reset !== null) return [reset];
   }
   const alterTable = ALTER_TABLE.exec(sql);
   if (alterTable) return matchAlterTable(alterTable[1] as string, alterTable[2] as string, dialect);

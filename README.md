@@ -572,7 +572,10 @@ Rules and classes:
 | `breaking` | `add-required-column`, `drop-table`, `drop-column`, `drop-object`, `rename-table`, `rename-column`, `move-table`, `change-column-type`, `alter-column`, `set-not-null`, `enum-value-renamed`, `truncate` |
 
 Statements on a table created by the same set of new migrations are `safe`. `insert-explicit-id` reports the id
-range and the precondition (for example "production `max(Id) < 418`").
+range and the precondition (for example "production `max(Id) < 418`"). When the same migration later moves the
+table's identity sequence past those ids (`setval(...)` with `MAX(...)` or a higher literal, `ALTER SEQUENCE ...
+RESTART WITH n`, `ALTER TABLE ... ALTER COLUMN ... RESTART WITH n`), the sequence half of the precondition is
+dropped and that statement is added as evidence.
 
 ### seed
 
