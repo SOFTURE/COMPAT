@@ -14,6 +14,7 @@ function checkRevision(original: Finding, revised: Finding): string | undefined 
   }
   if (JSON.stringify(original.accepted) !== JSON.stringify(revised.accepted)) return "changes accepted";
   if (JSON.stringify(original.exposure) !== JSON.stringify(revised.exposure)) return "changes exposure";
+  if (JSON.stringify(original.literals) !== JSON.stringify(revised.literals)) return "changes literals";
   return undefined;
 }
 
