@@ -1,6 +1,6 @@
 import { type Evidence, FINDING_CLASSES, type Finding, type LayerResult } from "../model/finding.js";
 import { getLayerVerdict } from "../model/gate.js";
-import type { Report } from "./report.js";
+import type { RefInfo, Report } from "./report.js";
 
 const CLASSES_BY_SEVERITY = [...FINDING_CLASSES].reverse();
 
@@ -41,12 +41,19 @@ function countByClass(result: LayerResult): string[] {
   );
 }
 
+/** `\`aaaa\`` for a plain ref, `github-deployment:prod → 2.2.4 \`aaaa\`` for a resolved one. */
+function formatRefInfo(info: RefInfo): string {
+  const commit = `\`${shortCommit(info.commit)}\``;
+  if (info.resolver === undefined) return commit;
+  return `${escapeMarkdown(info.resolver)} → ${escapeMarkdown(info.ref)} ${commit}`;
+}
+
 export function renderMarkdown(report: Report): string {
   const lines: string[] = [];
   lines.push(
     `# Backward compatibility: ${escapeMarkdown(report.base.ref)} → ${escapeMarkdown(report.revision.ref)}`,
     "",
-    `Base \`${shortCommit(report.base.commit)}\`, revision \`${shortCommit(report.revision.commit)}\`, fail on \`${report.failOn}\`${report.allowIncomplete ? ", incomplete layers allowed" : ""}.`,
+    `Base ${formatRefInfo(report.base)}, revision ${formatRefInfo(report.revision)}, fail on \`${report.failOn}\`${report.allowIncomplete ? ", incomplete layers allowed" : ""}.`,
     "",
   );
   lines.push(report.gate.passed ? "**Gate: PASS**" : "**Gate: FAIL**");

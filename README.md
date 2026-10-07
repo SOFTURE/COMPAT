@@ -65,8 +65,8 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 
 | Option | Command | Meaning |
 | --- | --- | --- |
-| `--base <ref>` | check | git ref running in production (required) |
-| `--revision <ref>` | check | git ref about to be released (required) |
+| `--base <ref>` | check | git ref running in production, or a [resolver](#finding-the-production-ref) (required) |
+| `--revision <ref>` | check | git ref about to be released, or a [resolver](#finding-the-production-ref) (required) |
 | `--repo <dir>` | both | repository directory (default: current directory) |
 | `--config <file>` | both | config file (default: `<repo>/compat.config.json`) |
 | `--format <md\|json>` | check | report format (default: `md`) |
@@ -78,7 +78,25 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `-v`, `--version` | both | show the version |
 
 **Exit codes:** `0` the gate passed (`init`: the config was written), `1` the gate failed, `2` the command could not
-run (bad arguments, invalid config, unknown ref, unreadable repository).
+run (bad arguments, invalid config, unknown ref, a resolver that found nothing, unreadable repository).
+
+### Finding the production ref
+
+`--base` must be what production runs, and the newest tag usually is not (it is often what DEV runs). Instead of a
+git ref, `--base` and `--revision` take a resolver:
+
+| Value | Resolves to |
+| --- | --- |
+| `github-deployment:<environment>` | the commit of the newest GitHub deployment to that environment whose newest status is `success` (superseded deployments are `inactive` and skipped) |
+| `github-workflow:<file>` | the head commit of the newest successful run of that workflow, e.g. `github-workflow:deploy-prod.yml` |
+| `latest-tag[:<glob>]` | the newest tag matching the glob (all tags without one), in version order, e.g. `latest-tag:v2.*` |
+
+The GitHub resolvers read the token from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`; the repository from
+`GITHUB_REPOSITORY`, then the `origin` remote; the API from `GITHUB_API_URL` (default `https://api.github.com`). A
+resolver that finds nothing stops the check with exit code `2`; it never falls back to a guess. The resolved commit
+must be in the clone, so fetch the full history. The report header names both, e.g.
+"Base github-deployment:prod → 2.2.4 `26b8973e1f0a`". A branch literally named `latest-tag` has to be passed as
+`refs/heads/latest-tag`.
 
 ### Classes and the gate
 
@@ -112,8 +130,13 @@ The check needs both refs in the clone, so fetch the full history (or at least t
     go-version: "1.24"
 - run: go install github.com/oasdiff/oasdiff@v1.33.0
 - run: npm ci
-- run: npx softure-compat check --base "$PRODUCTION_TAG" --revision HEAD --output compat-report.md
+- run: npx softure-compat check --base github-deployment:production --revision HEAD --output compat-report.md
+  env:
+    GH_TOKEN: ${{ github.token }}
 ```
+
+The job needs `permissions: { contents: read, deployments: read, actions: read }` for the GitHub resolvers. A
+literal ref (`--base "$PRODUCTION_TAG"`) works too.
 
 `--format json` gives a machine-readable report with the same content.
 

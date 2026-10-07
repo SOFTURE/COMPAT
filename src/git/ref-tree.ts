@@ -24,7 +24,14 @@ export type RefTree = {
   materialize(): Promise<Result<string>>;
 };
 
-export type OpenRefTreeOptions = { repoDir: string; ref: string; side: Side; tempRoot: string };
+export type OpenRefTreeOptions = {
+  repoDir: string;
+  ref: string;
+  side: Side;
+  tempRoot: string;
+  /** The name findings show for this tree; defaults to `ref` (a resolver opens by commit, labels by tag). */
+  label?: string;
+};
 
 const GIT_TIMEOUT_MS = 600_000;
 
@@ -85,7 +92,8 @@ export async function openRefTree(options: OpenRefTreeOptions): Promise<Result<R
   const repoDir = root.value;
   const commit = await resolveCommit(repoDir, options.ref);
   if (!commit.ok) return commit;
-  const { side, ref, tempRoot } = options;
+  const { side, tempRoot } = options;
+  const ref = options.label ?? options.ref;
   let allFiles: Promise<Result<Set<string>>> | undefined;
   let materialized: Promise<Result<string>> | undefined;
 
