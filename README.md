@@ -346,11 +346,13 @@ Reports configuration keys the revision needs that production may not have.
       "kind": "regex",
       "name": "dotnet-required",
       "files": ["src/**/*Settings.cs"],
-      "pattern": "public required [\\w<>?]+ (?<key>\\w+) \\{",
+      "pattern": "public required [\\w<>?]+ (?<member>\\w+) \\{",
+      "enclosing": "class (?<section>\\w+?)Settings\\b",
+      "key": "{section}__{member}",
       "comments": "slash"
     }
   ],
-  "accept": [{ "key": "Shop__ApiKey", "id": "config-key-added-required", "reason": "set in the production vault" }]
+  "accept": [{ "key": "SHOP_API_KEY", "id": "config-key-added-required", "reason": "set in the production vault" }]
 }
 ```
 
@@ -358,9 +360,16 @@ Reports configuration keys the revision needs that production may not have.
 | --- | --- |
 | `compose` | `${VAR}` interpolation in compose files (default `files`: `**/{docker-compose,compose}{,.*}.{yml,yaml}`); `${VAR:-x}` has a default, `${VAR}` and `${VAR:?msg}` are required |
 | `dotenv` | keys of `.env` examples (default `files`: `**/.env.{example,sample,template,dist}`, `**/{example,sample}.env`); with `valuesAreDefaults: false` (the default) every key is required, with `true` a key with a value has a default |
-| `regex` | your own pattern over `files`: named group `key` (required) and `default` (optional); `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first |
+| `regex` | your own pattern over `files`: named group `key` and an optional `default`; `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first. `key` builds the key from several named groups instead, e.g. `"{section}__{member}"`; a group can also come from `enclosing`, a pattern whose nearest match before the key lends its groups (the settings class around a member). A placeholder nothing fills stays empty |
 
-Every source has an optional unique `name` (`compose` and `dotenv` default to their kind; `regex` requires one).
+Every source has an optional unique `name` (`compose` and `dotenv` default to their kind; `regex` requires one)
+and an optional `prefix` prepended to each of its keys, for a source that reads one section only (`"prefix": "Shop__"`).
+
+Keys are normalized before they are compared (`"keyMatching": "normalized"`, the default): they are split on
+`:`, `__`, `.`, `_`, `-` and case changes and joined in upper snake case, so `Shop:BaseUrl`, `Shop__BaseUrl`,
+`SHOP_BASE_URL`, `shop.base_url` and the .NET member `ShopBaseUrl` are one key, `SHOP_BASE_URL`. A finding names
+the normalized key, every source that reads it, and the original spellings when they differ.
+`"keyMatching": "exact"` compares keys as written. `accept[].key` may use any spelling.
 Keys are compared file by file for files present at both refs. A source fails the layer when it matches no file,
 loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
 `accept[]` entries are `{ key, id, reason }`.

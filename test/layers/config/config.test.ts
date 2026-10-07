@@ -71,6 +71,54 @@ describe("config layer schema", () => {
     ]);
   });
 
+  it("defaults to normalized key matching and accepts exact", () => {
+    const parsed = parse({ sources: [{ kind: "compose" }] });
+    expect(parsed.success && parsed.data.keyMatching).toBe("normalized");
+    expect(issues({ sources: [{ kind: "compose" }], keyMatching: "exact" })).toEqual([]);
+    expect(issues({ sources: [{ kind: "compose" }], keyMatching: "loose" })).toEqual([
+      expect.stringMatching(/^keyMatching: /),
+    ]);
+  });
+
+  it("accepts a prefix on every source kind and a key template with an enclosing pattern", () => {
+    const result = parse({
+      sources: [
+        { kind: "compose", prefix: "App__" },
+        { kind: "dotenv", prefix: "App__" },
+        {
+          ...regexSource,
+          pattern: "public required \\w+ (?<member>\\w+) \\{",
+          enclosing: "class (?<section>\\w+?)Settings\\b",
+          key: "{section}__{member}",
+          prefix: "Api__",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a key template that is empty or names an unknown group, and an unused enclosing pattern", () => {
+    const pattern = "(?<member>\\w+)=";
+    expect(issues({ sources: [{ ...regexSource, pattern, key: "Shop" }] })).toEqual([
+      "sources.0.key: must use at least one named group as {name}",
+    ]);
+    expect(issues({ sources: [{ ...regexSource, pattern, key: "{section}__{member}" }] })).toEqual([
+      "sources.0.key: uses {section}, which is not a named group of pattern or enclosing",
+    ]);
+    expect(
+      issues({ sources: [{ ...regexSource, pattern, key: "{member}", enclosing: "(?<section>\\w+)" }] }),
+    ).toEqual(["sources.0.enclosing: is not used: the key template takes none of its named groups"]);
+    expect(issues({ sources: [{ ...regexSource, enclosing: "(?<section>\\w+)" }] })).toEqual([
+      'sources.0.enclosing: needs a `key` template that uses its groups, e.g. "{section}__{key}"',
+    ]);
+    expect(issues({ sources: [{ ...regexSource, pattern, key: "{member}", enclosing: "(" }] })).toEqual([
+      expect.stringMatching(/^sources\.0\.enclosing: is not a valid regular expression/),
+    ]);
+    expect(issues({ sources: [{ kind: "compose", prefix: "" }] })).toEqual([
+      expect.stringMatching(/^sources\.0\.prefix: /),
+    ]);
+  });
+
   it("rejects duplicate source names, including two unnamed sources of one kind", () => {
     expect(issues({ sources: [{ kind: "compose" }, { kind: "compose", files: ["x.yml"] }] })).toEqual([
       "sources: source names must be unique; name sources of the same kind with `name`",
