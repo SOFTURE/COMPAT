@@ -11,8 +11,11 @@ import {
   OASDIFF_ENV_VAR,
   OASDIFF_INSTALL_HINT,
   type Oasdiff,
+  type OasdiffSource,
+  probeOasdiff,
   runOasdiffChangelog,
 } from "./oasdiff.js";
+import { isDownloadTurnedOff, PINNED_OASDIFF, provideOasdiff } from "./oasdiff-download.js";
 import { type ResolvedSpec, resolveSpec } from "./spec-source.js";
 import { runTreeCommand } from "./tree-command.js";
 
@@ -26,23 +29,17 @@ export const openapiLayer = defineLayer({
   description: "HTTP API contract: OpenAPI specs of both refs compared with oasdiff",
   configSchema: openapiConfigSchema,
   async run(context) {
-    const located = await locateOasdiff({
-      configuredPath: context.config.oasdiff?.path,
-      env: context.env,
-      repoDir: context.repoDir,
-    });
+    const located = await findOasdiff(context);
     if (!located.ok)
       return { layer: OPENAPI_LAYER, status: "failed", error: located.error, findings: [], notes: [] };
-    if (located.value.status === "not-found") {
-      return {
-        layer: OPENAPI_LAYER,
-        status: "skipped",
-        reason: `oasdiff not found on PATH (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
-      };
+    if (located.value.status === "missing") {
+      return { layer: OPENAPI_LAYER, status: "skipped", reason: located.value.reason };
     }
     const { oasdiff } = located.value;
     const findings: Finding[] = [];
-    const notes = [`oasdiff ${oasdiff.version || "(no version)"} at ${oasdiff.path}`];
+    const notes = [
+      `oasdiff ${oasdiff.version || "(no version)"} at ${oasdiff.path} (${OASDIFF_SOURCE_LABELS[oasdiff.source]})`,
+    ];
     const sides = await prepareSides(context);
     if (!sides.ok) {
       return {
@@ -83,6 +80,50 @@ export const openapiLayer = defineLayer({
     return { layer: OPENAPI_LAYER, status: "ran", findings, notes } satisfies LayerResult;
   },
 });
+
+const OASDIFF_SOURCE_LABELS: Record<OasdiffSource, string> = {
+  config: "from layers.openapi.oasdiff.path",
+  env: `from ${OASDIFF_ENV_VAR}`,
+  path: "from PATH",
+  cache: "pinned release from the cache",
+  download: "pinned release, downloaded and checksum-verified",
+};
+
+type FindOutcome = { status: "found"; oasdiff: Oasdiff } | { status: "missing"; reason: string };
+
+/**
+ * A configured or PATH oasdiff wins; otherwise the pinned release comes from the cache or is
+ * downloaded. A download that fails or does not match its checksum fails the layer, so a
+ * check never passes without the API comparison; only an explicit opt-out skips it.
+ */
+async function findOasdiff(context: LayerContext<OpenapiConfig>): Promise<Result<FindOutcome>> {
+  const located = await locateOasdiff({
+    configuredPath: context.config.oasdiff?.path,
+    env: context.env,
+    repoDir: context.repoDir,
+  });
+  if (!located.ok) return located;
+  if (located.value.status === "found") return ok(located.value);
+  const isDownloadAllowed = context.config.oasdiff?.download !== false && !isDownloadTurnedOff(context.env);
+  if (!isDownloadAllowed) {
+    return ok({
+      status: "missing",
+      reason: `oasdiff not found on PATH and downloading is turned off (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
+    });
+  }
+  const provided = await provideOasdiff({ env: context.env, log: context.log });
+  if (!provided.ok) return provided;
+  if (provided.value.status === "unsupported") {
+    return ok({
+      status: "missing",
+      reason: `oasdiff not found on PATH and oasdiff ${PINNED_OASDIFF.version} has no release for ${provided.value.platform} (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
+    });
+  }
+  const { path, source } = provided.value.oasdiff;
+  const probed = await probeOasdiff({ path, source, env: context.env });
+  if (!probed.ok) return err(probed.error.message);
+  return ok({ status: "found", oasdiff: probed.value });
+}
 
 /**
  * Prepares both sides: base and revision live in separate trees, so they run in parallel unless

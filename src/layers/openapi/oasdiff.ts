@@ -22,44 +22,65 @@ export const oasdiffChangeSchema = z.looseObject({
 
 export type OasdiffChange = z.infer<typeof oasdiffChangeSchema>;
 
-export type Oasdiff = { path: string; version: string };
+export type OasdiffSource = "config" | "env" | "path" | "cache" | "download";
+
+export type Oasdiff = { path: string; version: string; source: OasdiffSource };
 
 export type LocateResult = { status: "found"; oasdiff: Oasdiff } | { status: "not-found" };
 
 /**
- * Finds oasdiff. Only a plain `oasdiff` missing from PATH counts as not found (the layer is
- * skipped); a path the consumer configured that cannot run is an error, so a typo never passes
- * as an incomplete check. A relative configured path is resolved against the repository root.
+ * Finds oasdiff. Only a plain `oasdiff` missing from PATH counts as not found (the caller may
+ * then download it or skip the layer); a path the consumer configured that cannot run is an
+ * error, so a typo never passes as an incomplete check. A relative configured path is resolved
+ * against the repository root.
  */
 export async function locateOasdiff(options: {
   configuredPath?: string;
   env: NodeJS.ProcessEnv;
   repoDir: string;
 }): Promise<Result<LocateResult>> {
-  const configured = options.configuredPath ?? options.env[OASDIFF_ENV_VAR];
+  const fromEnv = options.env[OASDIFF_ENV_VAR];
+  const configured = options.configuredPath ?? fromEnv;
+  const source: OasdiffSource =
+    options.configuredPath !== undefined ? "config" : fromEnv !== undefined ? "env" : "path";
   const candidate =
     configured === undefined
       ? "oasdiff"
       : configured.includes("/") || configured.includes("\\")
         ? resolve(options.repoDir, configured)
         : configured;
+  const probe = await probeOasdiff({ path: candidate, source, env: options.env });
+  if (!probe.ok) {
+    if (source === "path" && probe.error.isMissing) return ok({ status: "not-found" });
+    return err(probe.error.message);
+  }
+  return ok({ status: "found", oasdiff: probe.value });
+}
+
+/** Runs `oasdiff --version` to prove the binary works and to read its version. */
+export async function probeOasdiff(options: {
+  path: string;
+  source: OasdiffSource;
+  env: NodeJS.ProcessEnv;
+}): Promise<Result<Oasdiff, { message: string; isMissing: boolean }>> {
   const probe = await runProcess({
-    command: candidate,
+    command: options.path,
     args: ["--version"],
     env: options.env,
     timeoutMs: 30_000,
   });
   if (!probe.ok) {
-    if (configured === undefined && probe.error.kind === "spawn-failed" && probe.error.code === "ENOENT") {
-      return ok({ status: "not-found" });
-    }
+    const isMissing = probe.error.kind === "spawn-failed" && probe.error.code === "ENOENT";
     const cause = probe.error.kind === "spawn-failed" ? probe.error.code : "timed out";
-    return err(`oasdiff at ${candidate} cannot run --version (${cause})`);
+    return err({ message: `oasdiff at ${options.path} cannot run --version (${cause})`, isMissing });
   }
   if (probe.value.exitCode !== 0) {
-    return err(`oasdiff at ${candidate} --version exited ${probe.value.exitCode}`);
+    return err({
+      message: `oasdiff at ${options.path} --version exited ${probe.value.exitCode}`,
+      isMissing: false,
+    });
   }
-  return ok({ status: "found", oasdiff: { path: candidate, version: probe.value.stdout.trim() } });
+  return ok({ path: options.path, version: probe.value.stdout.trim(), source: options.source });
 }
 
 export async function runOasdiffChangelog(options: {

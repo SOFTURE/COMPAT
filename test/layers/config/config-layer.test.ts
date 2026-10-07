@@ -310,6 +310,120 @@ describe("config layer key normalization (issue #18)", () => {
     });
   });
 
+  describe("chains", () => {
+    let chainRepo: TestRepo;
+    let chainBase: RefTree;
+    let chainRevision: RefTree;
+    let chainComplete: RefTree;
+
+    const chainSources = [
+      { kind: "compose" },
+      {
+        kind: "regex",
+        name: "ansible-template",
+        files: ["roles/app/templates/env.j2"],
+        pattern: "^(?<key>\\w+)=",
+        flags: "m",
+      },
+      ...["dev", "prod"].map((env) => ({
+        kind: "regex",
+        name: `deploy-${env}`,
+        files: [`.github/workflows/deploy-${env}.yml`],
+        pattern: "^\\s+(?<key>[A-Z_]+): \\$\\{\\{ secrets\\.",
+        flags: "m",
+      })),
+    ];
+    const chains = [
+      { name: "app-env", sources: ["compose", "ansible-template", "deploy-prod"] },
+      { name: "dev-prod-parity", sources: ["deploy-dev", "deploy-prod"] },
+    ];
+    const workflow = (...keys: string[]) =>
+      `jobs:\n  deploy:\n    env:\n${keys.map((key) => `      ${key}: \${{ secrets.${key} }}\n`).join("")}`;
+
+    beforeAll(async () => {
+      chainRepo = createRepo([
+        {
+          files: {
+            "docker-compose.yml": "a: ${DB_URL}\n",
+            "roles/app/templates/env.j2": "DB_URL={{ db_url }}\n",
+            ".github/workflows/deploy-dev.yml": workflow("DB_URL"),
+            ".github/workflows/deploy-prod.yml": workflow("DB_URL"),
+          },
+          tag: "v1",
+        },
+        {
+          files: {
+            "docker-compose.yml": "a: ${DB_URL}\nb: ${SHOP_API_KEY}\n",
+            "roles/app/templates/env.j2": "DB_URL={{ db_url }}\nShop__ApiKey={{ shop_api_key }}\n",
+            ".github/workflows/deploy-dev.yml": workflow("DB_URL", "SHOP_API_KEY"),
+            ".github/workflows/deploy-prod.yml": workflow("DB_URL"),
+          },
+          tag: "v2",
+        },
+        {
+          files: { ".github/workflows/deploy-prod.yml": workflow("DB_URL", "SHOP_API_KEY") },
+          tag: "v3",
+        },
+      ]);
+      const opened = await Promise.all([
+        openRefTree({ repoDir: chainRepo.dir, ref: "v1", side: "base", tempRoot }),
+        openRefTree({ repoDir: chainRepo.dir, ref: "v2", side: "revision", tempRoot }),
+        openRefTree({ repoDir: chainRepo.dir, ref: "v3", side: "revision", tempRoot }),
+      ]);
+      if (!opened[0].ok || !opened[1].ok || !opened[2].ok) throw new Error("cannot open refs");
+      chainBase = opened[0].value;
+      chainRevision = opened[1].value;
+      chainComplete = opened[2].value;
+    });
+
+    afterAll(() => chainRepo.cleanup());
+
+    const chainFindings = (result: LayerResult) =>
+      result.status === "skipped"
+        ? []
+        : result.findings
+            .filter((f) => f.id === "config-chain-missing")
+            .map((f) => `${f.subject} ${f.class} ${f.scope}: ${f.message}`);
+
+    it("reports a key added to compose, the template and deploy-dev but not to deploy-prod", async () => {
+      const result = await run(
+        { sources: chainSources, chains },
+        { base: chainBase, revision: chainRevision },
+      );
+      expect(result.status).toBe("ran");
+      expect(chainFindings(result)).toEqual([
+        "SHOP_API_KEY needs-action chain app-env: the key is in compose, ansible-template but missing from deploy-prod; every source of the chain must have it",
+        "SHOP_API_KEY needs-action chain dev-prod-parity: the key is in deploy-dev but missing from deploy-prod; every source of the chain must have it",
+      ]);
+    });
+
+    it("reports nothing when every source of the chain has the key", async () => {
+      const result = await run(
+        { sources: chainSources, chains },
+        { base: chainBase, revision: chainComplete },
+      );
+      expect(result.status).toBe("ran");
+      expect(chainFindings(result)).toEqual([]);
+    });
+
+    it("accepts an intentional asymmetry by key and chain and notes the entry", async () => {
+      const result = await run(
+        {
+          sources: chainSources,
+          chains,
+          accept: [{ key: "shop.api_key", chain: "dev-prod-parity", reason: "rolled out to DEV first" }],
+        },
+        { base: chainBase, revision: chainRevision },
+      );
+      if (result.status !== "ran") throw new Error(`layer ${result.status}`);
+      const accepted = result.findings.filter((f) => f.accepted !== undefined).map((f) => f.scope);
+      expect(accepted).toEqual(["chain dev-prod-parity"]);
+      expect(result.notes).toContain(
+        "accept entry for chain dev-prod-parity on shop.api_key accepted 1 finding(s)",
+      );
+    });
+  });
+
   it("runs the presence command in the repository only when a finding needs a value in production", async () => {
     const marker = join(tempRoot, "presence-ran");
     const optionalOnly = await run({

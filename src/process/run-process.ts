@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
 import { err, ok, type Result } from "../result.js";
+import { killGroup, trackProcessGroup, untrackProcessGroup } from "./process-groups.js";
+
+export { killAllProcessGroups } from "./process-groups.js";
 
 export type RunProcessOptions = {
   command: string;
@@ -27,23 +30,6 @@ const DRAIN_GRACE_MS = 1_000;
 
 const isWindows = process.platform === "win32";
 
-/** Process groups started by `runProcess` that have not finished yet. */
-const liveGroups = new Set<number>();
-
-/** Kills every process group still running; used when the CLI is interrupted. */
-export function killAllProcessGroups(): void {
-  for (const pid of liveGroups) killGroup(pid);
-  liveGroups.clear();
-}
-
-function killGroup(pid: number): void {
-  try {
-    process.kill(isWindows ? pid : -pid, "SIGKILL");
-  } catch {
-    // Already gone.
-  }
-}
-
 export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOutput, ProcessError>> {
   return new Promise((resolve) => {
     const child = spawn(options.command, options.args ?? [], {
@@ -55,7 +41,7 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
       detached: !isWindows,
     });
     const pid = child.pid;
-    if (pid !== undefined) liveGroups.add(pid);
+    if (pid !== undefined) trackProcessGroup(pid);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let isTimedOut = false;
@@ -70,7 +56,7 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
       if (pid !== undefined) {
         // Stop whatever the process left behind in its group, then forget it.
         if (!isWindows) killGroup(pid);
-        liveGroups.delete(pid);
+        untrackProcessGroup(pid);
       }
       child.stdout.destroy();
       child.stderr.destroy();

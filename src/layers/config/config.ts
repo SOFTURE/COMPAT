@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FINDING_CLASSES } from "../../model/finding.js";
 import { CONFIG_FINDING_IDS } from "./classify.js";
 import { COMMENT_STYLES } from "./comments.js";
 import { KEY_MATCHING_MODES } from "./keys.js";
@@ -143,19 +144,99 @@ export const configAcceptEntrySchema = z.strictObject({
   reason: z.string().min(1),
 });
 
-export const configLayerConfigSchema = z.strictObject({
-  /** `normalized` compares `Shop:BaseUrl`, `Shop__BaseUrl` and `SHOP_BASE_URL` as one key; `exact` as written. */
-  keyMatching: z.enum(KEY_MATCHING_MODES).default("normalized"),
-  sources: z
-    .array(configSourceSchema)
-    .min(1)
-    .refine(
-      (sources) => new Set(sources.map((source) => source.name)).size === sources.length,
-      "source names must be unique; name sources of the same kind with `name`",
-    ),
-  /** Lists the key names of the target environment, never values; resolves keys that need a value there. */
-  presence: presenceSchema.optional(),
-  accept: z.array(configAcceptEntrySchema).optional(),
+/** Accepts a key that is intentionally missing from part of a chain, e.g. a DEV-only key. */
+export const chainAcceptEntrySchema = z.strictObject({
+  key: z.string().min(1),
+  chain: z.string().min(1),
+  reason: z.string().min(1),
 });
+
+export type ChainAcceptEntry = z.infer<typeof chainAcceptEntrySchema>;
+
+/**
+ * A finding accept entry `{ key, id, reason }` or a chain accept entry `{ key, chain, reason }`. The
+ * entry is routed by its `chain` field, so an error names the field that is wrong instead of a bare
+ * "invalid input" from a union.
+ */
+const acceptEntrySchema = z.unknown().transform((value, context) => {
+  const isChainEntry = typeof value === "object" && value !== null && "chain" in value;
+  const parsed = isChainEntry
+    ? chainAcceptEntrySchema.safeParse(value)
+    : configAcceptEntrySchema.safeParse(value);
+  if (parsed.success) return parsed.data as z.infer<typeof configAcceptEntrySchema> | ChainAcceptEntry;
+  for (const issue of parsed.error.issues) context.addIssue({ ...issue, code: "custom" });
+  return z.NEVER;
+});
+
+export const CHAIN_SCOPES = ["changed", "all"] as const;
+
+/** Sources where every key present in one must be present in all the others. */
+export const configChainSchema = z.strictObject({
+  name: z.string().min(1),
+  sources: z.array(sourceName).min(1),
+  /** Members whose missing key is `breaking` by default, e.g. the assert that guards the deploy. */
+  required: z.array(sourceName).optional(),
+  /** Overrides the class of every finding of the chain. */
+  class: z.enum(FINDING_CLASSES).optional(),
+  /** `changed` reports only keys whose declarations differ between the refs; `all` every key. */
+  scope: z.enum(CHAIN_SCOPES).default("changed"),
+});
+
+export type ConfigChain = z.infer<typeof configChainSchema>;
+
+export const configLayerConfigSchema = z
+  .strictObject({
+    /** `normalized` compares `Shop:BaseUrl`, `Shop__BaseUrl` and `SHOP_BASE_URL` as one key; `exact` as written. */
+    keyMatching: z.enum(KEY_MATCHING_MODES).default("normalized"),
+    sources: z
+      .array(configSourceSchema)
+      .min(1)
+      .refine(
+        (sources) => new Set(sources.map((source) => source.name)).size === sources.length,
+        "source names must be unique; name sources of the same kind with `name`",
+      ),
+    /** Lists the key names of the target environment, never values; resolves keys that need a value there. */
+    presence: presenceSchema.optional(),
+    chains: z.array(configChainSchema).optional(),
+    accept: z.array(acceptEntrySchema).optional(),
+  })
+  .superRefine((config, context) => {
+    const known = new Set(config.sources.map((source) => source.name));
+    const chainNames = new Set<string>();
+    for (const [index, chain] of (config.chains ?? []).entries()) {
+      if (chainNames.has(chain.name)) {
+        context.addIssue({ code: "custom", path: ["chains", index, "name"], message: "must be unique" });
+      }
+      chainNames.add(chain.name);
+      const members = [...chain.sources, ...(chain.required ?? [])];
+      for (const member of members) {
+        if (!known.has(member)) {
+          context.addIssue({
+            code: "custom",
+            path: ["chains", index],
+            message: `names source "${member}", which is not in \`sources\``,
+          });
+        }
+      }
+      if (new Set(members).size !== members.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["chains", index],
+          message: "lists a source more than once across `sources` and `required`",
+        });
+      } else if (members.length < 2) {
+        context.addIssue({ code: "custom", path: ["chains", index], message: "needs at least two sources" });
+      }
+    }
+    for (const [index, entry] of (config.accept ?? []).entries()) {
+      if ("chain" in entry && !chainNames.has(entry.chain)) {
+        context.addIssue({
+          code: "custom",
+          path: ["accept", index, "chain"],
+          message: `names chain "${entry.chain}", which is not in \`chains\``,
+        });
+      }
+    }
+  });
 
 export type ConfigLayerConfig = z.infer<typeof configLayerConfigSchema>;

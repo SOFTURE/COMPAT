@@ -56,6 +56,34 @@ describe("softure-compat init", () => {
     expect(written?.layers.dependencies).toEqual({ sources: [{ kind: "nuget" }] });
   });
 
+  it("proposes a disabled serve source for ASP.NET projects that serve their spec at runtime", async () => {
+    const repo = repoWith({
+      "src/Api/Api.csproj":
+        '<Project><ItemGroup><PackageReference Include="Swashbuckle.AspNetCore" /></ItemGroup></Project>\n',
+      "src/Admin/Admin.csproj": '<PackageReference Include="FastEndpoints.Swagger" Version="6.0.0" />\n',
+      "src/Domain/Domain.csproj": "<Project />\n",
+    });
+    const { written, stderr } = await init(repo);
+    const serve = (path: string) => ({
+      kind: "serve",
+      run: `dotnet run --no-launch-profile --project ${path}`,
+      url: "http://127.0.0.1:{port}/swagger/v1/swagger.json",
+      env: { ASPNETCORE_URLS: "http://127.0.0.1:{port}", ASPNETCORE_ENVIRONMENT: "Development" },
+      timeoutSeconds: 300,
+    });
+    expect(written?.layers.openapi).toEqual({
+      enabled: false,
+      apis: [
+        { name: "Admin", source: serve("src/Admin/Admin.csproj") },
+        { name: "Api", source: serve("src/Api/Api.csproj") },
+      ],
+    });
+    expect(parseConfig(written, LAYERS, "compat.config.json").ok).toBe(true);
+    expect(stderr).toContain(
+      "openapi disabled: src/Admin/Admin.csproj, src/Api/Api.csproj serve the spec at runtime; check the serve sources (URL, headers), then enable the layer",
+    );
+  });
+
   it("detects OpenAPI specs and names them after the file or its folder, uniquely", async () => {
     const repo = repoWith({
       "api/b2c/openapi.yaml": "openapi: 3.0.0\n",

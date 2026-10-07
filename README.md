@@ -23,15 +23,26 @@ It works only from git. It never connects to a production server or database.
 npm install --save-dev @softure-ai/compat
 ```
 
-Node.js 22 or newer and `git` are required. The `openapi` layer also needs **oasdiff v1.33.0**:
+Node.js 22 or newer and `git` are required. The `openapi` layer uses **oasdiff v1.33.0**. You do not have to
+install it: the CLI looks for oasdiff in `layers.openapi.oasdiff.path`, the `SOFTURE_COMPAT_OASDIFF` environment
+variable and `PATH`, and when none has it, downloads the pinned v1.33.0 release for your OS and CPU from
+[github.com/oasdiff/oasdiff/releases](https://github.com/oasdiff/oasdiff/releases). The archive is checked against
+a SHA-256 shipped inside this package before it is used, and the binary is cached, so later runs work offline.
+
+| Topic | Details |
+| --- | --- |
+| Platforms | macOS (Intel and Apple silicon), Linux x64 and arm64, Windows x64 and arm64 |
+| Cache | `SOFTURE_COMPAT_CACHE_DIR`, else `$XDG_CACHE_HOME/softure-compat` or `~/.cache/softure-compat` (`%LOCALAPPDATA%\softure-compat` on Windows) |
+| Turn it off | `--no-download`, `SOFTURE_COMPAT_NO_DOWNLOAD=1`, or `"oasdiff": { "download": false }` |
+| Behind a proxy | Node.js reads `HTTPS_PROXY` when `NODE_USE_ENV_PROXY=1` is set |
+
+A download that fails or does not match the checksum fails the `openapi` layer; it never passes unchecked. With
+downloading turned off and no oasdiff found, the layer is skipped, and a skipped layer fails the gate unless you
+pass `--allow-incomplete`. The report notes which oasdiff ran and where it came from. To install oasdiff yourself:
 
 ```sh
 go install github.com/oasdiff/oasdiff@v1.33.0
 ```
-
-The CLI finds oasdiff on `PATH`, in `layers.openapi.oasdiff.path`, or in the `SOFTURE_COMPAT_OASDIFF`
-environment variable. Without it the `openapi` layer is skipped, and a skipped layer fails the gate unless you pass
-`--allow-incomplete`.
 
 ## Quick start
 
@@ -76,6 +87,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--output <file>` | check | write the report to a file instead of stdout |
 | `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `breaking`) |
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
+| `--no-download` | check | never download oasdiff; the `openapi` layer is skipped when it is missing |
 | `--force` | init | overwrite an existing config file |
 | `-h`, `--help` | both | show the help |
 | `-v`, `--version` | both | show the version |
@@ -128,10 +140,6 @@ The check needs both refs in the clone, so fetch the full history (or at least t
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- uses: actions/setup-go@v5
-  with:
-    go-version: "1.24"
-- run: go install github.com/oasdiff/oasdiff@v1.33.0
 - run: npm ci
 - run: npx softure-compat check --base github-deployment:production --revision HEAD --output compat-report.md
   env:
@@ -140,6 +148,10 @@ The check needs both refs in the clone, so fetch the full history (or at least t
 
 The job needs `permissions: { contents: read, deployments: read, actions: read }` for the GitHub resolvers. A
 literal ref (`--base "$PRODUCTION_TAG"`) works too.
+
+No Go toolchain is needed: the first run downloads the pinned oasdiff (see [Install](#install)). Cache
+`~/.cache/softure-compat` with `actions/cache` to skip the download, or pass `--no-download` on runners without
+internet access and provide oasdiff yourself.
 
 `--format json` gives a machine-readable report with the same content.
 
@@ -213,6 +225,7 @@ Several APIs built from one solution can share one build per side:
 | `setup` | `{ run, timeoutSeconds? }`: a command run once per side, before any spec source of that side; see below |
 | `concurrency` | `2` (default) prepares the base and revision sides in parallel; `1` prepares them one after the other |
 | `oasdiff.path` | oasdiff binary; a relative path is resolved against the repository root |
+| `oasdiff.download` | `false` never downloads the pinned oasdiff (default `true`) |
 | `oasdiff.args` | extra arguments for `oasdiff changelog` (not `--format`, `-f`, `--fail-on`, `-o`) |
 
 Spec sources:
@@ -228,6 +241,11 @@ Spec sources:
   Swashbuckle, FastEndpoints), and make sure the command works on a clean checkout (restore dependencies inside it).
 - `{ "kind": "url", "base": "https://dev.example.com/swagger.json", "revision": "https://..." }`: fetched over
   HTTP(S), for example from a DEV environment.
+- `{ "kind": "serve", "run": "...", "url": "http://127.0.0.1:{port}/swagger/v1/swagger.json" }`: for specs that
+  exist only while the app runs (ASP.NET with Swashbuckle, NSwag or FastEndpoints, spec hidden in production). In each
+  materialised ref the tool picks a free port, starts `run` through the shell, polls `url` until it answers 2xx with an
+  OpenAPI document (JSON or YAML), saves it, and stops the app with everything it started (SIGTERM, then SIGKILL to
+  the whole process group after 3 seconds). See below.
 
 `setup` runs **once in each materialised ref**, whatever the number of APIs, before their spec sources, with the
 same working directory and environment (`COMPAT_SIDE`, `COMPAT_REF`, `COMPAT_COMMIT`) as a `command` source. Use it
@@ -235,6 +253,45 @@ for a build that every export command shares; the export commands then skip the 
 The default timeout is 600 seconds (maximum 7200). A failing setup fails the layer with the side, the ref and the
 end of its stderr. The base and revision checkouts are separate, so both sides (setup, then the spec of each API in
 order) run in parallel; set `"concurrency": 1` when one build at a time is all the machine can take.
+
+A `serve` source for an ASP.NET API whose spec sits behind an internal key:
+
+```json
+{
+  "setup": { "run": "dotnet build App.slnx -c Debug", "timeoutSeconds": 900 },
+  "apis": [
+    {
+      "name": "b2c",
+      "source": {
+        "kind": "serve",
+        "run": "dotnet run --no-build --no-launch-profile --project src/Api",
+        "url": "http://127.0.0.1:{port}/swagger/v1/swagger.json",
+        "ready": "http://127.0.0.1:{port}/hc",
+        "env": { "ASPNETCORE_URLS": "http://127.0.0.1:{port}", "ASPNETCORE_ENVIRONMENT": "Development" },
+        "headers": { "X-Internal-Api-Key": "${INTERNAL_API_KEY}" },
+        "timeoutSeconds": 180
+      }
+    }
+  ]
+}
+```
+
+| `serve` key | Meaning |
+| --- | --- |
+| `run` | shell command that starts the app and keeps running; working directory is the materialised ref |
+| `url` | where the running app serves the spec |
+| `ready` | optional URL polled until 2xx before `url`, for example a health check |
+| `env` | extra environment variables for the app |
+| `headers` | sent with every request; `${VAR}` reads the environment, a missing variable fails the layer, values are never printed |
+| `timeoutSeconds` | from the start of the app until the spec is fetched; default 180, maximum 7200 |
+
+`{port}` in `run`, `url`, `ready`, `env` and `headers` is replaced by a free port picked for each side, so the base
+and revision apps run in parallel without clashing; the app also gets it as `COMPAT_PORT`, next to `COMPAT_SIDE`,
+`COMPAT_REF` and `COMPAT_COMMIT`. The report names the spec by its `url` with `{port}` kept and any query redacted.
+When the spec never arrives, the error names the last answer of the URL (`HTTP 401`, `connection refused`, ...)
+and the end of the app output; an app that exits early is reported with its exit code. Each API with a `serve`
+source starts its own app. `init` proposes a disabled `serve` source for every `*.csproj` that references
+`FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` when the repository has no committed spec.
 
 ### client-usage
 
@@ -431,6 +488,29 @@ Keys are compared file by file for files present at both refs. A source fails th
 loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
 `accept[]` entries are `{ key, id, reason }`.
 
+`chains` compares sources with each other in the revision: in a chain, every key present in one source must be
+present in all the others (matched after normalization), so a key added to `deploy-dev` but not to `deploy-prod`,
+or to the compose file but not to the Ansible assert, is reported as `config-chain-missing`.
+
+```json
+"chains": [
+  { "name": "app-env", "sources": ["compose", "ansible-template", "deploy-prod"], "required": ["ansible-assert"] },
+  { "name": "dev-prod-parity", "sources": ["deploy-dev", "deploy-prod"] }
+],
+"accept": [{ "key": "DEBUG_TOOLBAR", "chain": "dev-prod-parity", "reason": "DEV only" }]
+```
+
+| Chain field | Meaning |
+| --- | --- |
+| `name` | unique chain name, shown as the finding scope `chain <name>` |
+| `sources` | names of sources in the chain; together with `required` at least two |
+| `required` | sources whose missing key is `breaking` (e.g. the assert that guards the deploy); a miss elsewhere is `needs-action` |
+| `class` | overrides the class of every finding of the chain |
+| `scope` | `changed` (default): only keys whose declarations differ between the refs in some source of the chain (added, removed, default changed); `all`: every key, for an audit |
+
+A chain with a source that failed to scan is skipped with a note. Chain `accept[]` entries are
+`{ key, chain, reason }` for an intentional asymmetry.
+
 `presence` (optional) resolves the keys that need a value in production by asking the target environment for its
 key names, never its values. `run` is a shell command that prints the names, one per line; `timeoutSeconds`
 defaults to 60.
@@ -455,6 +535,7 @@ leaves the findings as they were.
 | `config-key-added-optional` | `safe` |
 | `config-key-default-changed` | `safe` |
 | `config-key-removed` | `safe` |
+| `config-chain-missing` | `breaking` when a `required` source misses the key, else `needs-action`; `class` overrides |
 
 ### dependencies
 
