@@ -1,12 +1,12 @@
 ---
 change_id: config-layer
 title: "New required configuration keys are reported before the deploy that needs them"
-status: impl_reviewed
+status: archived
 roadmap_item: CMP-5
-branch: claude/project-thread-h321jp
+branch: null
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -30,3 +30,4 @@ settings or Ansible asserts can be described without code. Comments are stripped
 
 ## Notes
 - 2026-10-07: opened from roadmap v1.
+- 2026-10-07: implemented on branch claude/project-thread-h321jp (PR #3); archived.

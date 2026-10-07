@@ -29,7 +29,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 | **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | ready |
 | **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | ready |
 | **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | ready |
-| **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | ready |
+| **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | done |
 | **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | ready |
 
 ## Order
@@ -88,7 +88,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-5: Configuration layer
 - **Change ID:** `config-layer`
-- **Status:** ready
+- **Status:** done
 - **Outcome:** keys from compose files, `.env` examples and configured regex sources are compared; a new key
   without a default is `needs-action`.
 - **Prerequisites:** CMP-1.
@@ -114,3 +114,4 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ## Done
 - **CMP-1** `backward-compat-checker`: core CLI (config, `RefTree`, finding model, gate, Markdown/JSON reports, exit codes) and the `openapi` layer on oasdiff, with CI; archived in `archive/2026-10-07-backward-compat-checker/`
+- **CMP-5** `config-layer`: `config` layer over compose interpolation, `.env` examples and configured regex sources; new required keys and removed defaults are `needs-action`, compared file by file and failing closed on silent sources; archived in `archive/2026-10-07-config-layer/`
