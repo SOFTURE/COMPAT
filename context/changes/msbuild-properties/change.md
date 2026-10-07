@@ -1,9 +1,9 @@
 ---
 change_id: msbuild-properties
 title: "Package versions held in MSBuild properties of imported props files are compared"
-status: new
+status: planned
 roadmap_item: CMP-9
-branch: null
+branch: claude/msbuild-properties-5lfpdv
 created: 2026-10-07
 updated: 2026-10-07
 archived_at: null
