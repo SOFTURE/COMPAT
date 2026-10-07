@@ -534,6 +534,21 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
   const detected = [
     openapi.value,
     detectClientUsage(openapi.value),
+    disabled(
+      "error-codes",
+      {
+        codes: [{ name: "api", files: ["src/**/*.cs"], pattern: 'new Error\\(\\s*"(?<code>[\\w.]+)"' }],
+        clients: [
+          {
+            name: "mobile",
+            refs: { tags: "mobile-*" },
+            files: ["app/constants/api.ts"],
+            pattern: '"(?<code>[\\w.]+)"\\s*:',
+          },
+        ],
+      },
+      "error code constructors and client translation maps are project-specific; set the code pattern and each client's map",
+    ),
     detectSqlMigrations(sqlFiles.value, drizzleFolders.value),
     detectSeed(sqlFiles.value, drizzleFolders.value),
     persistedEnums.value,

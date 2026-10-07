@@ -1,7 +1,6 @@
 import { openRefTree, type RefTree } from "../../git/ref-tree.js";
 import type { Finding, LayerResult } from "../../model/finding.js";
-import { resolveRefList } from "../../resolve/ref-list.js";
-import type { ResolvedRef } from "../../resolve/resolve-ref.js";
+import { formatResolvers, resolveRefList } from "../../resolve/ref-list.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer, type FindingRevision, type LayerContext } from "../layer.js";
 import { OPENAPI_LAYER } from "../openapi/classify.js";
@@ -149,17 +148,6 @@ async function readClient(
     ...formatResolvers(client.name, refs.value),
   );
   return ok({ usages, notes });
-}
-
-/** One note per resolver of a client, naming the refs it resolved to: `client "web": github-deployment:prod → 2.3.5`. */
-export function formatResolvers(client: string, refs: readonly ResolvedRef[]): string[] {
-  const byResolver = new Map<string, string[]>();
-  for (const { ref, resolver } of refs) {
-    if (resolver !== undefined) byResolver.set(resolver, [...(byResolver.get(resolver) ?? []), ref]);
-  }
-  return [...byResolver].map(
-    ([resolver, resolved]) => `client "${client}": ${resolver} → ${resolved.join(", ")}`,
-  );
 }
 
 async function readClientRef(
