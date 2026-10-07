@@ -1,5 +1,5 @@
 import type { RefTree } from "../../git/ref-tree.js";
-import type { LayerResult } from "../../model/finding.js";
+import type { Finding, LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer } from "../layer.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./classify.js";
 import { type ConfigSource, compileRegexSource, configLayerConfigSchema } from "./config.js";
 import { getKeyIdentity, type KeyIdentity } from "./keys.js";
+import { applyPresence, hasResolvableFindings, type PresenceSettings, readPresentKeys } from "./presence.js";
 import { scanCompose } from "./scan-compose.js";
 import { scanDotenv } from "./scan-dotenv.js";
 import { scanRegex } from "./scan-regex.js";
@@ -60,7 +61,12 @@ export const configLayer = defineLayer({
       revisionTree: context.revision,
       pairedFiles,
     });
-    const { findings, usage } = applyAccept(classified, context.config.accept ?? [], identify);
+    const resolved = await resolvePresence(classified, {
+      context: { repoDir: context.repoDir, env: context.env, presence: context.config.presence },
+      identify,
+      notes,
+    });
+    const { findings, usage } = applyAccept(resolved, context.config.accept ?? [], identify);
     for (const { entry, count } of usage) {
       notes.push(
         count === 0
@@ -80,6 +86,35 @@ export const configLayer = defineLayer({
     return { layer: CONFIG_LAYER, status: "ran", findings, notes } satisfies LayerResult;
   },
 });
+
+type ResolvePresenceOptions = {
+  context: { repoDir: string; env: NodeJS.ProcessEnv; presence: PresenceSettings | undefined };
+  identify: KeyIdentity;
+  notes: string[];
+};
+
+/**
+ * Runs the presence command once, only when a finding needs a value in production. A failing
+ * command is a note: the findings keep their class.
+ */
+async function resolvePresence(
+  findings: Finding[],
+  { context, identify, notes }: ResolvePresenceOptions,
+): Promise<Finding[]> {
+  if (context.presence === undefined || !hasResolvableFindings(findings)) return findings;
+  const present = await readPresentKeys({
+    presence: context.presence,
+    cwd: context.repoDir,
+    env: context.env,
+    identify,
+  });
+  if (!present.ok) {
+    notes.push(`${present.error}; keys that need a value in production stay unresolved`);
+    return findings;
+  }
+  notes.push(`presence command listed ${present.value.size} key(s) in the target environment`);
+  return applyPresence(findings, present.value);
+}
 
 /**
  * Scans one source at both refs. A source that cannot speak for the revision fails instead of
