@@ -1,3 +1,4 @@
+import { behaviourLayer } from "./behaviour/behaviour-layer.js";
 import { configLayer } from "./config/config-layer.js";
 import { dependenciesLayer } from "./dependencies/dependencies-layer.js";
 import type { Layer } from "./layer.js";
@@ -16,4 +17,5 @@ export const LAYERS: Layer[] = [
   configLayer,
   dependenciesLayer,
   messageContractsLayer,
+  behaviourLayer,
 ];

@@ -346,6 +346,18 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
     config.value,
     dependencies.value,
     messageContracts.value,
+    disabled(
+      "behaviour",
+      {
+        start: { run: "./scripts/start-integration-stack.sh" },
+        test: {
+          run: "dotnet test tests/Integration.Tests --logger trx",
+          results: { kind: "trx", path: "**/*.trx" },
+        },
+        stop: { run: "docker compose -f docker-compose.integration.yml down -v" },
+      },
+      "nothing in a repository says how its stack starts; set start, test and stop to your commands",
+    ),
   ];
   // Registry order, so the file reads like the report; a layer without a detector would be a bug here.
   const ordered: StarterLayer[] = [];
