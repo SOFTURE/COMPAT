@@ -26,14 +26,18 @@ export type NpmSection = (typeof NPM_SECTIONS)[number];
 
 const globs = z.array(z.string().min(1)).min(1);
 
+/** Whether lockfiles next to the manifests are read; `false` compares the declared versions only. */
+const lockfiles = z.boolean().default(true);
+
 /** A package name or a glob over names (`SOFTURE.*`, `@softure-ai/*`); matched case-insensitively. */
 const namePattern = z.string().min(1);
 
 export const dependencySourceSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("nuget"), files: globs.default(DEFAULT_NUGET_FILES) }),
+  z.strictObject({ kind: z.literal("nuget"), files: globs.default(DEFAULT_NUGET_FILES), lockfiles }),
   z.strictObject({
     kind: z.literal("npm"),
     files: globs.default(DEFAULT_NPM_FILES),
+    lockfiles,
     sections: z
       .array(z.enum(NPM_SECTIONS))
       .min(1)
@@ -76,8 +80,8 @@ export const dependenciesConfigSchema = z.strictObject({
       "list each source kind once",
     )
     .default([
-      { kind: "nuget", files: DEFAULT_NUGET_FILES },
-      { kind: "npm", files: DEFAULT_NPM_FILES, sections: ["dependencies"] },
+      { kind: "nuget", files: DEFAULT_NUGET_FILES, lockfiles: true },
+      { kind: "npm", files: DEFAULT_NPM_FILES, lockfiles: true, sections: ["dependencies"] },
     ]),
   watch: z.array(watchEntrySchema).optional(),
   ignore: z.array(namePattern).optional(),
