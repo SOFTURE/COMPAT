@@ -1,25 +1,34 @@
 name: SOFTURE COMPAT - RELEASE
 
-# Modelled on SOFTURE/skills `release.yml`. Pull requests and master are validated by ci.yml; this workflow runs on
-# release tags. Pushing a tag `vX.Y.Z` (matching package.json, on a commit of master) releases that version:
-#   1. npmjs.com       @softure-ai/compat  (trusted publishing over OIDC, with provenance; no stored token)
+# Modelled on SOFTURE/skills `release.yml`, but releases are fully automatic: merging a version bump to master
+# releases it. On every push to master (and on a manual run from master) the workflow validates the commit and, when
+# the `package.json` version is not released yet, publishes it:
+#   1. npmjs.com       @softure-ai/compat  (with provenance; trusted publishing over OIDC, `NPM_TOKEN` as fallback)
 #   2. GitHub Packages @softure/compat     (GitHub Packages requires the scope to equal the org)
-#   3. GitHub Release  vX.Y.Z              (generated notes + the package tarball as an asset)
-# Cut a release with: npm version patch|minor|major && git push --follow-tags
-# Running it by hand (workflow_dispatch) only validates and packs; nothing is published.
+#   3. GitHub Release  vX.Y.Z              (creates the tag on the released commit; generated notes + the tarball)
+# Cut a release by bumping the version in a pull request (`npm version minor --no-git-tag-version`) and merging it.
+# Every step skips what is already published, so re-running the workflow only fills in what is missing.
+#
+# npm auth: when the npm trusted publisher (repository SOFTURE/COMPAT, workflow `release.yml`) is configured, npm uses
+# OIDC and the `NPM_TOKEN` secret is not needed. Until then (the very first version must be published with a token,
+# because npm offers trusted publishing only for a package that exists) the secret is used. Without either, the first
+# version is not published and the run says what to add.
 #
 # Keep this file name: the npm trusted publisher is bound to `release.yml`.
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
+
+env:
+  PACKAGE: "@softure-ai/compat"
 
 jobs:
   validate:
@@ -27,30 +36,47 @@ jobs:
     timeout-minutes: 20
     outputs:
       version: ${{ steps.version.outputs.version }}
+      dist-tag: ${{ steps.version.outputs.dist-tag }}
+      release: ${{ steps.pending.outputs.release }}
     steps:
+      - name: 🛑 Release only from master
+        if: github.ref != 'refs/heads/master'
+        run: |
+          echo "::error::Releases run only from master, not from ${GITHUB_REF}"
+          exit 1
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: 🏷️ Read version (and match it against the tag and master)
+      - name: 🏷️ Read version
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          # A prerelease (1.2.0-rc.1) goes to the `next` dist-tag, so `latest` stays on a stable version.
+          DIST_TAG="latest"
+          case "${VERSION}" in *-*) DIST_TAG="next" ;; esac
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
-              echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION}"
-              exit 1
-            fi
-            git fetch --no-tags origin master
-            if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/master; then
-              echo "::error::Tag ${GITHUB_REF_NAME} points at a commit that is not on master"
-              exit 1
-            fi
+          echo "dist-tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
+      - name: 🔎 Check what is not released yet
+        id: pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          RELEASE="false"
+          if ! npm view "${PACKAGE}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${PACKAGE}@${VERSION} is not on npm yet."
+            RELEASE="true"
           fi
+          if ! gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "GitHub Release v${VERSION} does not exist yet."
+            RELEASE="true"
+          fi
+          if [ "${RELEASE}" = "false" ]; then
+            echo "Version ${VERSION} is fully released; this run only validates."
+          fi
+          echo "release=${RELEASE}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
@@ -76,11 +102,14 @@ jobs:
 
   publish-npm:
     needs: validate
-    if: github.ref_type == 'tag'
+    if: needs.validate.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -92,22 +121,30 @@ jobs:
         run: npm install -g npm@latest
       - run: npm ci
       - name: 🚀 Publish to npmjs.com
+        id: publish
         env:
           VERSION: ${{ needs.validate.outputs.version }}
+          DIST_TAG: ${{ needs.validate.outputs.dist-tag }}
+          # Empty when the secret is not set; npm then authenticates with OIDC (trusted publishing).
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # A prerelease (1.2.0-rc.1) goes to the `next` dist-tag, so `latest` stays on a stable version.
-          DIST_TAG="latest"
-          case "${VERSION}" in *-*) DIST_TAG="next" ;; esac
-          if npm view "@softure-ai/compat@${VERSION}" version >/dev/null 2>&1; then
-            echo "@softure-ai/compat@${VERSION} is already on npm, skipping."
+          if npm view "${PACKAGE}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${PACKAGE}@${VERSION} is already on npm, skipping."
+          elif [ -z "${NODE_AUTH_TOKEN}" ] && ! npm view "${PACKAGE}" name >/dev/null 2>&1; then
+            # Trusted publishing cannot exist for a package that was never published, so OIDC would fail anyway.
+            echo "::warning::${PACKAGE} is not on npm yet and the NPM_TOKEN secret is not set. Add NPM_TOKEN and run this workflow from master to publish ${VERSION}."
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
           else
             npm publish --provenance --access public --tag "${DIST_TAG}"
           fi
+          echo "published=true" >> "$GITHUB_OUTPUT"
 
   publish-github:
-    needs: validate
-    if: github.ref_type == 'tag'
+    needs: [validate, publish-npm]
+    if: needs.publish-npm.outputs.published == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -133,9 +170,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.validate.outputs.version }}
+          DIST_TAG: ${{ needs.validate.outputs.dist-tag }}
         run: |
-          DIST_TAG="latest"
-          case "${VERSION}" in *-*) DIST_TAG="next" ;; esac
           if npm view "@softure/compat@${VERSION}" version >/dev/null 2>&1; then
             echo "@softure/compat@${VERSION} is already on GitHub Packages, skipping."
           else
@@ -144,8 +180,9 @@ jobs:
 
   github-release:
     needs: [validate, publish-npm, publish-github]
-    if: github.ref_type == 'tag'
+    if: needs.publish-npm.outputs.published == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -153,22 +190,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: package
-      - name: 📝 Create the GitHub Release
+      - name: 📝 Create the tag and the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
+          TAG="v${VERSION}"
           NOTES=$(printf '%s\n' \
-            "Install from npm: \`npm i -D @softure-ai/compat@${VERSION}\`" \
+            "Install from npm: \`npm i -D ${PACKAGE}@${VERSION}\`" \
             "" \
-            "Install from this release (no registry, no auth): \`npm i -D https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/softure-ai-compat-${VERSION}.tgz\`" \
+            "Install from this release (no registry, no auth): \`npm i -D https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/softure-ai-compat-${VERSION}.tgz\`" \
             "" \
             "GitHub Packages: \`@softure/compat@${VERSION}\` (requires a token with read:packages)")
           PRERELEASE=""
           case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" softure-ai-compat-*.tgz --clobber
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" softure-ai-compat-*.tgz --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" softure-ai-compat-*.tgz \
-              --verify-tag --generate-notes --title "${GITHUB_REF_NAME}" --notes "${NOTES}" ${PRERELEASE}
+            # Creates the tag on the released commit when it does not exist yet.
+            gh release create "${TAG}" softure-ai-compat-*.tgz \
+              --target "${GITHUB_SHA}" --generate-notes --title "${TAG}" --notes "${NOTES}" ${PRERELEASE}
           fi

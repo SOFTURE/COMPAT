@@ -345,27 +345,30 @@ opened by old app versions, or behaviour of refactored code. Those layers are pl
 
 ## Releasing (maintainers)
 
-Releases are tag-driven, as in `SOFTURE/skills`:
+Releases are automatic: merging a version bump to `master` releases it. Nobody runs `npm publish` or pushes a tag.
 
 ```sh
-npm version patch          # or minor / major: bumps package.json and creates tag vX.Y.Z
-git push --follow-tags
+npm version minor --no-git-tag-version   # or patch / major / 0.2.0-rc.1; in a pull request
 ```
 
-The `v*.*.*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
-1. checks that the tag matches `package.json` and points at a commit of `master`, then runs every gate with a real
-   oasdiff, tests the packed CLI and packs the tarball;
-2. publishes `@softure-ai/compat` to **npmjs.com** through trusted publishing (OIDC, provenance, no stored token);
-3. publishes `@softure/compat` to **GitHub Packages** (GitHub requires the scope to match the org);
-4. creates the **GitHub Release** with generated notes and the package tarball attached.
+Every push to `master` runs [`.github/workflows/release.yml`](.github/workflows/release.yml). It runs every gate with
+a real oasdiff, tests the packed CLI and packs the tarball; when the `package.json` version is not released yet, it
+then:
+1. publishes `@softure-ai/compat` to **npmjs.com** with provenance;
+2. publishes `@softure/compat` to **GitHub Packages** (GitHub requires the scope to match the org);
+3. creates the tag `vX.Y.Z` on the released commit and the **GitHub Release** with generated notes and the tarball.
 
-A version with a prerelease suffix (`0.2.0-rc.1`) goes to the `next` dist-tag. A version already on a registry is
-skipped, so re-running a release only fills in what is missing. Running the workflow by hand only validates and packs.
+A version with a prerelease suffix (`0.2.0-rc.1`) goes to the `next` dist-tag and is marked as a prerelease. A
+version already on a registry is skipped, so re-running the workflow (Actions → *SOFTURE COMPAT - RELEASE* → *Run
+workflow* on `master`) only fills in what is missing. A push that does not change the version only validates.
 
-Trusted publishing is configured once on npmjs.com, in the package settings: publisher GitHub Actions, repository
-`SOFTURE/COMPAT`, workflow `release.yml`. npm offers that setting only for a package that exists, so the very first
-version is published once by hand (`npm publish --access public` from a clean checkout of the tag); the tag's
-workflow then skips npm and still publishes to GitHub Packages and creates the GitHub Release.
+npm authentication, once per repository:
+1. **First version:** add the repository secret `NPM_TOKEN` (an npm granular access token with read and write access
+   to the `@softure-ai` scope; *bypass 2FA* enabled), then run the workflow on `master`. Without the secret the run
+   publishes nothing and warns that the token is missing.
+2. **Afterwards:** configure trusted publishing on npmjs.com, in the package settings: publisher GitHub Actions,
+   organization `SOFTURE`, repository `COMPAT`, workflow `release.yml`. npm then authenticates the workflow over
+   OIDC and the `NPM_TOKEN` secret can be deleted; the workflow does not change.
 
 Ways to install a release:
 
