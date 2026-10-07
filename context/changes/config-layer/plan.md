@@ -161,7 +161,7 @@ exit 1 with `--fail-on needs-action`; exit 0 at `--fail-on needs-action` with ac
 
 ## Decisions (auto)
 - Complexity → small-to-medium with two phases (pure scanners first, wiring second).
-- Findings per key or per source → per key, with every source as evidence (one production setting).
+- Findings per key or per source → per key; sources with the same verdict share one finding (one production setting).
 - Removed key and changed default → reported as `safe` for visibility (research decision).
 - Print default values → never (they may be secrets).
 - Source matching no file at either ref → layer `failed` (fail closed).
@@ -179,9 +179,9 @@ exit 1 with `--fail-on needs-action`; exit 0 at `--fail-on needs-action` with ac
 ### Phase 1: Key declarations from compose, `.env` and regex sources, and the classification
 
 #### Automated
-- [ ] 1.1 Named phase 1 tests pass (comments, compose, dotenv, regex, classify, accept)
-- [ ] 1.2 No finding message produced by the classify tests contains a default value
-- [ ] 1.3 Gates green (typecheck, lint, test)
+- [x] 1.1 Named phase 1 tests pass (comments, compose, dotenv, regex, classify, accept) — 8814d7c
+- [x] 1.2 No finding message produced by the classify tests contains a default value — 8814d7c
+- [x] 1.3 Gates green (typecheck, lint, test) — 8814d7c
 
 ### Phase 2: The `config` layer, its config schema and the F10 acceptance test
 

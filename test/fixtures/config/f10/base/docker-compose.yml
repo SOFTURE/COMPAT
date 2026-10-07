@@ -1,0 +1,7 @@
+services:
+  api:
+    image: petseo/api:${API_TAG:-latest}
+    environment:
+      ConnectionStrings__Default: ${ConnectionStrings__Default:?set the database connection}
+      Logging__Level: ${Logging__Level:-Information}
+      # Legacy__Token: ${Legacy__Token}

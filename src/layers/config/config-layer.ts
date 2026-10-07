@@ -1,0 +1,147 @@
+import type { RefTree } from "../../git/ref-tree.js";
+import type { LayerResult } from "../../model/finding.js";
+import { err, ok, type Result } from "../../result.js";
+import { defineLayer } from "../layer.js";
+import {
+  addDeclarations,
+  applyAccept,
+  CONFIG_LAYER,
+  classifyKeys,
+  type KeyDeclaration,
+  type KeyIndex,
+} from "./classify.js";
+import { type ConfigSource, compileKeyPattern, configLayerConfigSchema } from "./config.js";
+import { scanCompose } from "./scan-compose.js";
+import { scanDotenv } from "./scan-dotenv.js";
+import { scanRegex } from "./scan-regex.js";
+
+type SourceScan = { index: KeyIndex; files: string[] };
+
+const MAX_LISTED_FILES = 5;
+
+export const configLayer = defineLayer({
+  name: CONFIG_LAYER,
+  description:
+    "Configuration keys: compose interpolation, .env examples and configured patterns at both refs",
+  configSchema: configLayerConfigSchema,
+  async run(context) {
+    const base: KeyIndex = new Map();
+    const revision: KeyIndex = new Map();
+    const notes: string[] = [];
+    const errors: string[] = [];
+    // A source is used only when both refs were read; one side alone would invent added or removed keys.
+    for (const source of context.config.sources) {
+      const scanned = await scanSourceAtBothRefs(source, context.base, context.revision);
+      if (!scanned.ok) {
+        errors.push(`source "${source.name}": ${scanned.error}`);
+        continue;
+      }
+      const [atBase, atRevision] = scanned.value;
+      mergeIndex(base, atBase.index);
+      mergeIndex(revision, atRevision.index);
+      notes.push(describeSource(source, atBase, atRevision));
+    }
+    const classified = classifyKeys({
+      base,
+      revision,
+      baseTree: context.base,
+      revisionTree: context.revision,
+    });
+    const { findings, usage } = applyAccept(classified, context.config.accept ?? []);
+    for (const { entry, count } of usage) {
+      notes.push(
+        count === 0
+          ? `accept entry ${entry.id} on ${entry.key} matched nothing; remove it if the change is gone`
+          : `accept entry ${entry.id} on ${entry.key} accepted ${count} finding(s)`,
+      );
+    }
+    if (errors.length > 0) {
+      return {
+        layer: CONFIG_LAYER,
+        status: "failed",
+        error: errors.join("; "),
+        findings,
+        notes,
+      } satisfies LayerResult;
+    }
+    return { layer: CONFIG_LAYER, status: "ran", findings, notes } satisfies LayerResult;
+  },
+});
+
+/**
+ * Scans one source at both refs. A source that cannot speak for the revision fails instead of
+ * returning nothing: no file at either ref, files at the base but none in the revision (moved
+ * out of the globs), or a pattern that finds no key at either ref.
+ */
+async function scanSourceAtBothRefs(
+  source: ConfigSource,
+  baseTree: RefTree,
+  revisionTree: RefTree,
+): Promise<Result<[SourceScan, SourceScan]>> {
+  const scan = getScanner(source);
+  if (!scan.ok) return scan;
+  const atBase = await scanSource(source, baseTree, scan.value);
+  if (!atBase.ok) return atBase;
+  const atRevision = await scanSource(source, revisionTree, scan.value);
+  if (!atRevision.ok) return atRevision;
+  const globs = source.files.map((glob) => `"${glob}"`).join(", ");
+  if (atRevision.value.files.length === 0) {
+    return err(
+      atBase.value.files.length === 0
+        ? `no file matches ${globs} at either ref`
+        : `no file matches ${globs} in the revision, but ${atBase.value.files.length} did at the base; update the globs if the files moved`,
+    );
+  }
+  if (source.kind === "regex" && atBase.value.index.size === 0 && atRevision.value.index.size === 0) {
+    return err(`the pattern matches no key in ${globs} at either ref`);
+  }
+  return ok([atBase.value, atRevision.value]);
+}
+
+async function scanSource(
+  source: ConfigSource,
+  tree: RefTree,
+  scan: (text: string) => KeyDeclaration[],
+): Promise<Result<SourceScan>> {
+  const files = await tree.listFiles(source.files);
+  if (!files.ok) return err(`cannot list files at ${tree.ref}: ${files.error}`);
+  const index: KeyIndex = new Map();
+  for (const path of files.value) {
+    const content = await tree.readFile(path);
+    if (!content.ok) return content;
+    if (content.value === null) continue;
+    addDeclarations(index, scan(content.value), { source: source.name, path });
+  }
+  return ok({ index, files: files.value });
+}
+
+function getScanner(source: ConfigSource): Result<(text: string) => KeyDeclaration[]> {
+  switch (source.kind) {
+    case "compose":
+      return ok(scanCompose);
+    case "dotenv":
+      return ok((text) => scanDotenv(text, { valuesAreDefaults: source.valuesAreDefaults }));
+    case "regex": {
+      // The schema already compiled the pattern; this repeats it only to get the RegExp object.
+      const compiled = compileKeyPattern(source.pattern, source.flags);
+      if ("error" in compiled) return err(`pattern ${compiled.error}`);
+      return ok((text) => scanRegex(text, { regex: compiled.regex, comments: source.comments }));
+    }
+  }
+}
+
+function describeSource(source: ConfigSource, atBase: SourceScan, atRevision: SourceScan): string {
+  const listed = atRevision.files.slice(0, MAX_LISTED_FILES).join(", ");
+  const more =
+    atRevision.files.length > MAX_LISTED_FILES ? `, +${atRevision.files.length - MAX_LISTED_FILES} more` : "";
+  return (
+    `source "${source.name}": ${atBase.index.size} key(s) in ${atBase.files.length} file(s) at base, ` +
+    `${atRevision.index.size} key(s) in ${atRevision.files.length} file(s) at revision (${listed}${more})`
+  );
+}
+
+function mergeIndex(target: KeyIndex, source: KeyIndex): void {
+  for (const [key, declarations] of source) {
+    target.set(key, [...(target.get(key) ?? []), ...declarations]);
+  }
+}
