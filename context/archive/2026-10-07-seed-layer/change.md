@@ -1,12 +1,12 @@
 ---
 change_id: seed-layer
 title: "Seed scripts that run on every deploy are diffed and their effect on existing rows is classified"
-status: new
+status: archived
 roadmap_item: CMP-3
 branch: null
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -30,3 +30,4 @@ as `safe` information (the row stays in the database). Added `UPDATE`, `DELETE`,
 
 ## Notes
 - 2026-10-07: opened from roadmap v1.
+- Archived 2026-10-07: the `seed` layer diffs seed scripts row by row for Postgres and SQL Server; F6 is `safe`, overwrites, deletes and unguarded inserts are `needs-action`.
