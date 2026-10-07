@@ -9,6 +9,8 @@ export type RunProcessOptions = {
   timeoutMs?: number;
   /** Runs `command` through the system shell; `args` must then be empty. */
   shell?: boolean;
+  /** How stdout bytes become a string; `latin1` maps every byte to one char, so callers can recover the bytes. */
+  stdoutEncoding?: "utf8" | "latin1";
 };
 
 export type ProcessOutput = { exitCode: number; stdout: string; stderr: string };
@@ -75,7 +77,7 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
       resolve(result);
     };
     const finish = (code: number | null): void => {
-      const out = Buffer.concat(stdout).toString("utf8");
+      const out = Buffer.concat(stdout).toString(options.stdoutEncoding ?? "utf8");
       const errOut = Buffer.concat(stderr).toString("utf8");
       if (isTimedOut) {
         settle(err({ kind: "timed-out", timeoutMs: options.timeoutMs ?? 0, stdout: out, stderr: errOut }));
