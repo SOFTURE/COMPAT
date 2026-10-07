@@ -11,9 +11,10 @@ const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$/;
 /** Reads `KEY=value` lines of a `.env`-style example file. */
 export function scanDotenv(text: string, { valuesAreDefaults }: ScanDotenvOptions): KeyDeclaration[] {
   const declarations: KeyDeclaration[] = [];
+  // Split on LF and drop a trailing CR, so CRLF files read the same and line numbers still count LFs.
   const lines = stripComments(text, "hash").split("\n");
   lines.forEach((line, index) => {
-    const match = ASSIGNMENT.exec(line);
+    const match = ASSIGNMENT.exec(line.endsWith("\r") ? line.slice(0, -1) : line);
     if (match === null) return;
     const value = unquote((match[2] as string).trim());
     declarations.push({

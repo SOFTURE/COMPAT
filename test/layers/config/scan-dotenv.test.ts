@@ -36,6 +36,15 @@ describe("scanDotenv", () => {
     ]);
   });
 
+  it("reads CRLF files like LF files", () => {
+    const crlf = "A=1\r\nB=\r\nexport C='x'\r\n";
+    expect(scanDotenv(crlf, { valuesAreDefaults: true })).toEqual([
+      { key: "A", line: 1, default: "1" },
+      { key: "B", line: 2, default: null },
+      { key: "C", line: 3, default: "x" },
+    ]);
+  });
+
   it("returns nothing for an empty file", () => {
     expect(scanDotenv("", { valuesAreDefaults: false })).toEqual([]);
   });

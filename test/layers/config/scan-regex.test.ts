@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { compileKeyPattern } from "../../../src/layers/config/config.js";
 import { scanRegex } from "../../../src/layers/config/scan-regex.js";
 
 describe("scanRegex", () => {
@@ -25,6 +26,15 @@ describe("scanRegex", () => {
     const text = "that:\n  - app_env.Shop__BaseUrl is defined\n  # - app_env.Legacy is defined\n";
     expect(scanRegex(text, { regex, comments: "hash" })).toEqual([
       { key: "Shop__BaseUrl", line: 2, default: null },
+    ]);
+  });
+
+  it("reports the line of the key when the match starts on an earlier line", () => {
+    const compiled = compileKeyPattern("^\\s*-\\s*app_env\\.(?<key>\\w+) is defined", "m");
+    if (!("regex" in compiled)) throw new Error(compiled.error);
+    const text = "that:\n\n  - app_env.A is defined\n";
+    expect(scanRegex(text, { regex: compiled.regex, comments: "none" })).toEqual([
+      { key: "A", line: 3, default: null },
     ]);
   });
 

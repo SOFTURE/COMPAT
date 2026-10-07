@@ -4,6 +4,7 @@ import {
   addDeclarations,
   applyAccept,
   classifyKeys,
+  getFileId,
   type KeyDeclaration,
   type KeyIndex,
 } from "../../../src/layers/config/classify.js";
@@ -30,8 +31,8 @@ function index(...entries: Entry[]): KeyIndex {
   return result;
 }
 
-const classify = (base: KeyIndex, revision: KeyIndex) =>
-  classifyKeys({ base, revision, baseTree, revisionTree });
+const classify = (base: KeyIndex, revision: KeyIndex, pairedFiles: ReadonlySet<string> = new Set()) =>
+  classifyKeys({ base, revision, baseTree, revisionTree, pairedFiles });
 const summary = (findings: Finding[]) => findings.map((f) => `${f.subject} ${f.id} ${f.class}`);
 
 describe("classifyKeys", () => {
@@ -137,6 +138,43 @@ describe("classifyKeys", () => {
         { key: "Optional", line: 20, default: "x" },
         { key: "GainsDefault", line: 30, default: "y" },
       ),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("compares files present at both refs one by one, so a test file cannot hide a new production secret", () => {
+    const testFile = { key: "DB_PASSWORD", line: 3, default: null, path: "tests/docker-compose.yml" };
+    const paired = new Set([
+      getFileId("compose", "tests/docker-compose.yml"),
+      getFileId("compose", "deploy/prod.yml"),
+    ]);
+    const findings = classify(
+      index(testFile),
+      index(testFile, { key: "DB_PASSWORD", line: 9, default: null, path: "deploy/prod.yml" }),
+      paired,
+    );
+    expect(summary(findings)).toEqual(["DB_PASSWORD config-key-added-required needs-action"]);
+    expect(findings[0]?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual(["deploy/prod.yml:9"]);
+  });
+
+  it("reports a default removed in one file while another file requires the key", () => {
+    const dev = { key: "LOG", line: 1, default: null, path: "docker-compose.dev.yml" };
+    const paired = new Set([
+      getFileId("compose", "docker-compose.yml"),
+      getFileId("compose", "docker-compose.dev.yml"),
+    ]);
+    const findings = classify(
+      index({ key: "LOG", line: 2, default: "info" }, dev),
+      index({ key: "LOG", line: 2, default: null }, dev),
+      paired,
+    );
+    expect(summary(findings)).toEqual(["LOG config-key-default-removed needs-action"]);
+  });
+
+  it("compares files present at one ref only at source level, so a renamed file adds nothing", () => {
+    const findings = classify(
+      index({ key: "A", line: 1, default: null, path: "old.yml" }),
+      index({ key: "A", line: 1, default: null, path: "new.yml" }),
     );
     expect(findings).toEqual([]);
   });

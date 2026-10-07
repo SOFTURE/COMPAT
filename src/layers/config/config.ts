@@ -14,7 +14,8 @@ const globs = z.array(z.string().min(1)).min(1);
 export function compileKeyPattern(pattern: string, flags: string): { regex: RegExp } | { error: string } {
   let regex: RegExp;
   try {
-    regex = new RegExp(pattern, `${flags}g`);
+    // `d` gives match indices, so evidence points at the line of the key, not the start of the match.
+    regex = new RegExp(pattern, `${flags}dg`);
   } catch (error) {
     return { error: `is not a valid regular expression: ${(error as Error).message}` };
   }

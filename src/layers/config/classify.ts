@@ -30,6 +30,8 @@ export type ClassifyKeysOptions = {
   revision: KeyIndex;
   baseTree: RefTree;
   revisionTree: RefTree;
+  /** Files (`getFileId(source, path)`) a source matched at both refs; their keys are compared file by file. */
+  pairedFiles: ReadonlySet<string>;
 };
 
 const MAX_EVIDENCE_PER_SIDE = 5;
@@ -83,10 +85,10 @@ function getDefaults(declarations: SourcedDeclaration[]): string {
 }
 
 /**
- * Classifies the declarations of one key in one source. A key is required at a ref when one of
+ * Classifies the declarations of one key in one comparison unit (see `groupByUnit`). A key is required at a ref when one of
  * its declarations there has no default.
  */
-function classifyInSource(before: SourcedDeclaration[], after: SourcedDeclaration[]): SourceVerdict | null {
+function classifyInUnit(before: SourcedDeclaration[], after: SourcedDeclaration[]): SourceVerdict | null {
   if (before.length === 0 && after.length === 0) return null;
   if (before.length === 0) {
     const required = withoutDefault(after);
@@ -126,35 +128,57 @@ function toEvidence(tree: RefTree, declarations: SourcedDeclaration[]): Evidence
     }));
 }
 
-function groupBySource(declarations: SourcedDeclaration[] | undefined): Map<string, SourcedDeclaration[]> {
+export function getFileId(source: string, path: string): string {
+  return `${source}\0${path}`;
+}
+
+/**
+ * Groups declarations into comparison units: one per file a source matched at both refs, so one
+ * file cannot mask a change in another (a test compose file must not hide a new production
+ * secret), plus one per source for the files present at one ref only, so a moved file does not
+ * invent added or removed keys.
+ */
+function groupByUnit(
+  declarations: SourcedDeclaration[] | undefined,
+  pairedFiles: ReadonlySet<string>,
+): Map<string, SourcedDeclaration[]> {
   const groups = new Map<string, SourcedDeclaration[]>();
   for (const declaration of declarations ?? []) {
-    groups.set(declaration.source, [...(groups.get(declaration.source) ?? []), declaration]);
+    const fileId = getFileId(declaration.source, declaration.path);
+    const unit = pairedFiles.has(fileId) ? fileId : getFileId(declaration.source, "");
+    groups.set(unit, [...(groups.get(unit) ?? []), declaration]);
   }
   return groups;
 }
 
 /**
- * Compares the keys of both refs. Each source is classified on its own, so one source cannot
- * mask a change in another; sources that reach the same verdict for a key share one finding, and
+ * Compares the keys of both refs. Each comparison unit is classified on its own, so one source
+ * or file cannot mask a change in another; sources that reach the same verdict for a key share one finding, and
  * a key gets only the findings of its most severe class.
  * Messages never carry default values, which may be secrets.
  */
-export function classifyKeys({ base, revision, baseTree, revisionTree }: ClassifyKeysOptions): Finding[] {
+export function classifyKeys({
+  base,
+  revision,
+  baseTree,
+  revisionTree,
+  pairedFiles,
+}: ClassifyKeysOptions): Finding[] {
   const findings: Finding[] = [];
   const keys = [...new Set([...base.keys(), ...revision.keys()])].sort(compareText);
   for (const key of keys) {
-    const before = groupBySource(base.get(key));
-    const after = groupBySource(revision.get(key));
+    const before = groupByUnit(base.get(key), pairedFiles);
+    const after = groupByUnit(revision.get(key), pairedFiles);
     const verdicts = new Map<
       ConfigFindingId,
       { sources: Set<string>; base: SourcedDeclaration[]; revision: SourcedDeclaration[] }
     >();
-    for (const source of new Set([...before.keys(), ...after.keys()])) {
-      const verdict = classifyInSource(before.get(source) ?? [], after.get(source) ?? []);
+    for (const unit of new Set([...before.keys(), ...after.keys()])) {
+      const verdict = classifyInUnit(before.get(unit) ?? [], after.get(unit) ?? []);
       if (verdict === null) continue;
       const merged = verdicts.get(verdict.id) ?? { sources: new Set<string>(), base: [], revision: [] };
-      merged.sources.add(source);
+      for (const declaration of [...verdict.base, ...verdict.revision])
+        merged.sources.add(declaration.source);
       merged.base.push(...verdict.base);
       merged.revision.push(...verdict.revision);
       verdicts.set(verdict.id, merged);

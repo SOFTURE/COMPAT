@@ -2,7 +2,7 @@ import type { KeyDeclaration } from "./classify.js";
 import { type CommentStyle, createLineLocator, stripComments } from "./comments.js";
 
 export type ScanRegexOptions = {
-  /** A global pattern with a named group `key` and an optional named group `default`. */
+  /** A global pattern (with `d` for the key's line) with a named group `key` and an optional named group `default`. */
   regex: RegExp;
   comments: CommentStyle;
 };
@@ -16,7 +16,8 @@ export function scanRegex(text: string, { regex, comments }: ScanRegexOptions): 
     const key = match.groups?.key?.trim();
     if (key === undefined || key === "") continue;
     const value = match.groups?.default;
-    declarations.push({ key, line: getLine(match.index), default: value === undefined ? null : value });
+    const keyOffset = match.indices?.groups?.key?.[0] ?? match.index;
+    declarations.push({ key, line: getLine(keyOffset), default: value === undefined ? null : value });
   }
   return declarations;
 }

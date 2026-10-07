@@ -169,6 +169,11 @@ exit 1 with `--fail-on needs-action`; exit 0 at `--fail-on needs-action` with ac
   added at archive time, with the compose block-scalar and pass-through gaps.
 - Plan review C1 → per-source classification merged per key, most severe class only (Fix A, plus the
   most-severe rule so a documented default adds no noise).
+- Impl review W1 → comparison units per file matched at both refs, plus one per source for files present at one
+  ref only (a test compose file must not hide a new production secret; a renamed file still adds nothing).
+- Impl review W3 and C1 → a source with keys at the base and none in the revision fails; a dotenv source with no key
+  at either ref fails; CRLF lines are read like LF lines.
+- Impl review W2 → regex patterns compile with the `d` flag so evidence names the line of the key.
 - Plan review S7 → `id` required in accept entries (the CMP-1 openapi allowlist made the same call).
 - Regex flavour → JavaScript `RegExp` with named groups `key` and `default`.
 

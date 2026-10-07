@@ -7,6 +7,7 @@ import {
   applyAccept,
   CONFIG_LAYER,
   classifyKeys,
+  getFileId,
   type KeyDeclaration,
   type KeyIndex,
 } from "./classify.js";
@@ -27,6 +28,7 @@ export const configLayer = defineLayer({
   async run(context) {
     const base: KeyIndex = new Map();
     const revision: KeyIndex = new Map();
+    const pairedFiles = new Set<string>();
     const notes: string[] = [];
     const errors: string[] = [];
     // A source is used only when both refs were read; one side alone would invent added or removed keys.
@@ -39,6 +41,10 @@ export const configLayer = defineLayer({
       const [atBase, atRevision] = scanned.value;
       mergeIndex(base, atBase.index);
       mergeIndex(revision, atRevision.index);
+      const atBaseFiles = new Set(atBase.files);
+      for (const path of atRevision.files) {
+        if (atBaseFiles.has(path)) pairedFiles.add(getFileId(source.name, path));
+      }
       notes.push(describeSource(source, atBase, atRevision));
     }
     const classified = classifyKeys({
@@ -46,6 +52,7 @@ export const configLayer = defineLayer({
       revision,
       baseTree: context.base,
       revisionTree: context.revision,
+      pairedFiles,
     });
     const { findings, usage } = applyAccept(classified, context.config.accept ?? []);
     for (const { entry, count } of usage) {
@@ -71,7 +78,9 @@ export const configLayer = defineLayer({
 /**
  * Scans one source at both refs. A source that cannot speak for the revision fails instead of
  * returning nothing: no file at either ref, files at the base but none in the revision (moved
- * out of the globs), or a pattern that finds no key at either ref.
+ * out of the globs), keys at the base but none in the revision (a pattern that stopped matching),
+ * or a dotenv or regex source that finds no key at either ref. A compose file without variables
+ * is legitimate.
  */
 async function scanSourceAtBothRefs(
   source: ConfigSource,
@@ -92,8 +101,17 @@ async function scanSourceAtBothRefs(
         : `no file matches ${globs} in the revision, but ${atBase.value.files.length} did at the base; update the globs if the files moved`,
     );
   }
-  if (source.kind === "regex" && atBase.value.index.size === 0 && atRevision.value.index.size === 0) {
-    return err(`the pattern matches no key in ${globs} at either ref`);
+  if (atRevision.value.index.size === 0 && atBase.value.index.size > 0) {
+    return err(
+      `found ${atBase.value.index.size} key(s) in ${globs} at the base but none in the revision; check the files and the source settings`,
+    );
+  }
+  if (source.kind !== "compose" && atBase.value.index.size === 0 && atRevision.value.index.size === 0) {
+    return err(
+      source.kind === "regex"
+        ? `the pattern matches no key in ${globs} at either ref`
+        : `no key found in ${globs} at either ref`,
+    );
   }
   return ok([atBase.value, atRevision.value]);
 }

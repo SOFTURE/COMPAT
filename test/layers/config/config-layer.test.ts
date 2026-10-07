@@ -113,6 +113,28 @@ describe("config layer", () => {
     });
   });
 
+  it("fails for a source that had keys at the base and finds none in the revision", async () => {
+    const result = await run({
+      sources: [
+        { kind: "regex", name: "old-only", files: ["docker-compose.yml"], pattern: "\\$\\{(?<key>OLD)\\}" },
+      ],
+    });
+    expect(result).toMatchObject({
+      status: "failed",
+      error:
+        'source "old-only": found 1 key(s) in "docker-compose.yml" at the base but none in the revision; check the files and the source settings',
+      findings: [],
+    });
+  });
+
+  it("fails for a dotenv source that finds no key at either ref", async () => {
+    const result = await run({ sources: [{ kind: "dotenv", files: ["notes.txt", "docker-compose.yml"] }] });
+    expect(result).toMatchObject({
+      status: "failed",
+      error: 'source "dotenv": no key found in "notes.txt", "docker-compose.yml" at either ref',
+    });
+  });
+
   it("drops a source that cannot be read at one ref instead of inventing added keys", async () => {
     const broken: RefTree = { ...revision, listFiles: async () => ({ ok: false, error: "git exploded" }) };
     const result = await run(
