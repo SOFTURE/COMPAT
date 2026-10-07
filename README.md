@@ -363,8 +363,13 @@ and revision apps run in parallel without clashing; the app also gets it as `COM
 `COMPAT_REF` and `COMPAT_COMMIT`. The report names the spec by its `url` with `{port}` kept and any query redacted.
 When the spec never arrives, the error names the last answer of the URL (`HTTP 401`, `connection refused`, ...)
 and the end of the app output; an app that exits early is reported with its exit code. Each API with a `serve`
-source starts its own app. `init` proposes a disabled `serve` source for every `*.csproj` that references
-`FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` when the repository has no committed spec.
+source starts its own app. When the repository has no committed spec, `init` proposes a disabled `serve` source for
+every executable `*.csproj` (`Sdk="Microsoft.NET.Sdk.Web"` or `<OutputType>Exe</OutputType>`) that references
+`FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` and whose own C# files call
+`SwaggerDocument(`, `AddSwaggerGen(`, `AddOpenApiDocument(` or `MapOpenApi(`. Class libraries and projects without
+such a call are left out and named on stderr; when no project calls one (the registration sits in a shared
+library), every executable project is kept. Two or more APIs listed by one `*.sln`/`*.slnx` get
+`"setup": { "run": "dotnet build <solution> -c Debug" }` and `dotnet run --no-build`, so each side builds once.
 
 ### client-usage
 
@@ -731,8 +736,19 @@ change (a new retry policy in a messaging client, a new default in an ORM).
 
 | Source | Reads |
 | --- | --- |
-| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved from the same file; a reference without a version takes it from `Directory.Packages.props`; lockfile: `packages.lock.json` (versions 1 and 2) in the folder of a matched file |
+| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved as MSBuild sees it (see below); a reference without a version takes it from `Directory.Packages.props`; lockfile: `packages.lock.json` (versions 1 and 2) in the folder of a matched file |
 | `npm` | `package.json` (default `files`: `**/package.json`); `sections` from `dependencies` (default), `devDependencies`, `peerDependencies`, `optionalDependencies`; lockfile: the nearest `package-lock.json` (versions 1 to 3) or `pnpm-lock.yaml` (5.x, 6.x, 9.x) in the manifest folder or above that installs it (workspaces), `package-lock.json` first |
+
+A NuGet `$(Property)` resolves from the nearest `Directory.Build.props`, the nearest `Directory.Packages.props`, the
+file itself with its `<Import>`s in document order and the nearest `Directory.Build.targets`; the last definition wins,
+as in MSBuild. Only the nearest `Directory.Build.props` is read, as MSBuild does; a parent one counts when the child
+imports it (`$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))`). Import
+paths may be relative or start with `$(MSBuildThisFileDirectory)` or `$(MSBuildProjectDirectory)`. An import with
+another property or a wildcard in its path, outside the repository, or missing without a `Condition` is not followed
+and is named in the finding of a version that stays unresolved. Properties are expanded where they are defined and
+properties inside a `<Target>` are ignored, as in MSBuild. Of `Condition`, only `'$(Name)' == ''` and `!= ''` are
+decided; a property that other conditions give different values (per target framework, per configuration) stays
+unresolved and its finding lists the values. Versions that keep an undefined property are listed in the layer notes.
 
 `sources` defaults to both kinds; files under `node_modules`, `bin` and `obj` are skipped. Packages are compared by
 name over all files of a ref (NuGet names case-insensitively). With a lockfile, a direct dependency compares by the
@@ -754,7 +770,7 @@ Names in both are globs (`*`, `?`, `{a,b}`) matched case-insensitively. `accept[
 | --- | --- |
 | `dependency-upgraded` | `safe` for a patch or minor upgrade; `needs-action` for a major upgrade, a minor upgrade below 1.0 or any upgrade below 0.1 |
 | `dependency-downgraded` | `needs-action` |
-| `dependency-changed` | `needs-action`: the declared version is not a version number at one ref (`latest`, a git URL, an unresolved `$(Property)`) |
+| `dependency-changed` | `needs-action`: the declared version is not a version number at one ref (`latest`, a git URL, an unresolved `$(Property)`, named with the imports that were not followed) |
 | `dependency-added` | `safe` |
 | `dependency-removed` | `safe` |
 ### message-contracts
