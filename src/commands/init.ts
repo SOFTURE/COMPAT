@@ -4,6 +4,7 @@ import { basename, dirname, posix, resolve } from "node:path";
 import { DEFAULT_CONFIG_FILE, parseConfig } from "../config/config.js";
 import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
 import { DEFAULT_COMPOSE_FILES, DEFAULT_DOTENV_FILES } from "../layers/config/config.js";
+import { DEFAULT_NPM_FILES, DEFAULT_NUGET_FILES } from "../layers/dependencies/config.js";
 import { LAYERS } from "../layers/registry.js";
 import { err, ok, type Result } from "../result.js";
 import type { SqlDialect } from "../sql/statements.js";
@@ -228,6 +229,28 @@ async function detectConfig(tree: RefTree): Promise<Result<StarterLayer>> {
   return ok({ name: "config", config: { sources }, summary: found.join(", "), enabled: true });
 }
 
+async function detectDependencies(tree: RefTree): Promise<Result<StarterLayer>> {
+  const nuget = await listSourceFiles(tree, DEFAULT_NUGET_FILES);
+  if (!nuget.ok) return nuget;
+  const npm = await listSourceFiles(tree, DEFAULT_NPM_FILES);
+  if (!npm.ok) return npm;
+  const sources = [
+    ...(nuget.value.length > 0 ? [{ kind: "nuget" }] : []),
+    ...(npm.value.length > 0 ? [{ kind: "npm" }] : []),
+  ];
+  if (sources.length === 0) {
+    return ok(
+      disabled(
+        "dependencies",
+        { sources: [{ kind: "nuget" }, { kind: "npm" }] },
+        "no MSBuild project or props file and no package.json",
+      ),
+    );
+  }
+  const found = [...nuget.value, ...npm.value];
+  return ok({ name: "dependencies", config: { sources }, summary: found.join(", "), enabled: true });
+}
+
 /** Builds the starter config for the committed files of `tree`, one entry per registered layer. */
 export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterLayer[]>> {
   const sqlFiles = await readSqlFiles(tree);
@@ -240,12 +263,15 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
   if (!persistedEnums.ok) return persistedEnums;
   const config = await detectConfig(tree);
   if (!config.ok) return config;
+  const dependencies = await detectDependencies(tree);
+  if (!dependencies.ok) return dependencies;
   const detected = [
     openapi.value,
     detectSqlMigrations(sqlFiles.value, drizzleFolders.value),
     detectSeed(sqlFiles.value, drizzleFolders.value),
     persistedEnums.value,
     config.value,
+    dependencies.value,
   ];
   // Registry order, so the file reads like the report; a layer without a detector would be a bug here.
   const ordered: StarterLayer[] = [];
