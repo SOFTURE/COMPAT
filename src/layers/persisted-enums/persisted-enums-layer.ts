@@ -1,16 +1,19 @@
 import type { RefTree } from "../../git/ref-tree.js";
-import type { Evidence, Finding, LayerResult, Side } from "../../model/finding.js";
+import type { Evidence, Exposure, Finding, LayerResult, Side } from "../../model/finding.js";
 import { describeProcessError, getTailLines, runProcess } from "../../process/run-process.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer } from "../layer.js";
 import { compareEnums, type EnumStorage, type MemberChange } from "./compare-enums.js";
 import {
   type AcceptEntry,
-  type EnumChangeId,
+  type PersistedEnumFindingId,
   type PersistedEnumsConfig,
   persistedEnumsConfigSchema,
 } from "./config.js";
 import { type EnumDeclaration, type EnumMember, parseEnums } from "./parse-enums.js";
+
+export const EXPOSED_ADDED_ID = "enum-member-exposed-added";
+
 import type { SourceLanguage } from "./tokenize.js";
 
 export const PERSISTED_ENUMS_LAYER = "persisted-enums";
@@ -33,7 +36,15 @@ type DiscoverySite = { storage: EnumStorage; side: Side; path: string; line: num
  * One enum to check. `discovery` is where the pattern found it; a target without a named entry
  * (`isNamed: false`) that is declared nowhere is a false discovery match, not a failure.
  */
-type Target = { name: string; storage: EnumStorage; isNamed: boolean; file?: string; discovery?: Evidence };
+type Target = {
+  name: string;
+  storage: EnumStorage;
+  isNamed: boolean;
+  file?: string;
+  discovery?: Evidence;
+  /** DTO fields that send the enum to clients as a plain string. */
+  exposed?: Exposure[];
+};
 
 type Located = { path: string; declaration: EnumDeclaration };
 
@@ -246,6 +257,7 @@ function buildTargets(
         storage: entry.storage,
         isNamed: true,
         ...(entry.file ? { file: entry.file } : {}),
+        ...(entry.exposed ? { exposed: entry.exposed } : {}),
         discovery,
       });
       continue;
@@ -266,6 +278,7 @@ function buildTargets(
       storage: entry.storage,
       isNamed: true,
       ...(entry.file ? { file: entry.file } : {}),
+      ...(entry.exposed ? { exposed: entry.exposed } : {}),
     });
   }
   return [...targets.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -434,11 +447,39 @@ function checkTarget({
     revision: { tree: sides.revision, path: atRevision.value.path },
   };
   return ok(
-    changes.map((change) => {
+    changes.flatMap((change) => {
       const finding = toFinding(change, target, files);
-      return { finding: { ...finding, evidence: withDiscovery(finding.evidence) }, members: change.members };
+      const classified = {
+        finding: { ...finding, evidence: withDiscovery(finding.evidence) },
+        members: change.members,
+      };
+      const exposed = toExposedFinding(change, target, classified.finding);
+      return exposed === undefined
+        ? [classified]
+        : [classified, { finding: exposed, members: change.members }];
     }),
   );
+}
+
+/** The client-side finding for a member added to an enum that DTOs send as a plain string. */
+function toExposedFinding(change: MemberChange, target: Target, added: Finding): Finding | undefined {
+  if (change.id !== "enum-member-added" || target.exposed === undefined || change.revision === undefined) {
+    return undefined;
+  }
+  const value = change.revision.stringValue ?? change.revision.name;
+  const fields = target.exposed
+    .map((exposure) => `${exposure.fields.join(", ")} (API "${exposure.api}")`)
+    .join("; ");
+  return {
+    layer: PERSISTED_ENUMS_LAYER,
+    scope: target.name,
+    id: EXPOSED_ADDED_ID,
+    subject: change.subject,
+    class: "needs-action",
+    message: `old clients receive the unknown value "${value}" in ${fields}; check that they tolerate it`,
+    evidence: added.evidence,
+    exposure: target.exposed.map((exposure) => ({ api: exposure.api, fields: [...exposure.fields] })),
+  };
 }
 
 function toEvidence(tree: RefTree, path: string, line: number): Evidence {
@@ -472,7 +513,7 @@ function applyAccept(classified: ClassifiedFinding[], accept: AcceptEntry[]): Ac
   const findings = classified.map(({ finding, members }) => {
     const position = accept.findIndex(
       (entry) =>
-        entry.id === (finding.id as EnumChangeId) &&
+        entry.id === (finding.id as PersistedEnumFindingId) &&
         entry.enum === finding.scope &&
         (entry.member === undefined ? members.length === 0 : members.includes(entry.member)),
     );

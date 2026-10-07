@@ -25,6 +25,8 @@ export type ClientRefUsage = {
   model: ClientModel;
   /** Identifiers in the client's own sources; `undefined` when no sources are configured. */
   sourceIdentifiers?: Set<string>;
+  /** Branch sites in the client's own sources per enum branch target key; `undefined` without sources. */
+  branches?: Map<string, { path: string; line: number }[]>;
 };
 
 export type RefineSummary = { revisions: FindingRevision[]; toSafe: number; withEvidence: number };
@@ -52,7 +54,7 @@ export function formatRefs(usages: readonly ClientRefUsage[]): string {
   return [...byClient].map(([client, refs]) => `${client}@${refs.join(", ")}`).join("; ");
 }
 
-function toEvidence(usage: ClientRefUsage, line?: number): Evidence {
+export function toEvidence(usage: ClientRefUsage, line?: number): Evidence {
   const evidence: Evidence = { side: "client", ref: usage.ref, commit: usage.commit, path: usage.clientPath };
   if (line !== undefined) evidence.line = line;
   return evidence;

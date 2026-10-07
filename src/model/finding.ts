@@ -15,6 +15,9 @@ export type Evidence = {
   line?: number;
 };
 
+/** An API whose DTO fields (`NotificationDto.type`) carry an enum to clients as a plain string. */
+export type Exposure = { api: string; fields: string[] };
+
 export type Finding = {
   layer: string;
   /** Part of the layer the finding belongs to, for example the API name. */
@@ -29,6 +32,8 @@ export type Finding = {
   accepted?: { reason: string };
   /** Set when a later layer changed `class`, for example `client-usage` on an `openapi` finding. */
   reclassified?: { from: FindingClass; by: string; reason: string };
+  /** Where a `persisted-enums` finding reaches clients; `client-usage` refines it by these fields. */
+  exposure?: Exposure[];
 };
 
 export type LayerResult =

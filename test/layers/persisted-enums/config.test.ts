@@ -32,6 +32,29 @@ describe("persisted-enums config", () => {
     ).toEqual([]);
   });
 
+  it("accepts exposed fields on a named entry and accepts the exposed finding id", () => {
+    expect(
+      issues({
+        sources: "src/**/*.cs",
+        enums: [{ ...named, exposed: [{ api: "b2c", fields: ["NotificationDto.type", "Inbox.Item.kind"] }] }],
+        accept: [{ id: "enum-member-exposed-added", enum: "NotificationType", reason: "clients ignore it" }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects exposed fields that are not Type.property, empty lists and exposure on discover entries", () => {
+    expect(
+      issues({ sources: "a", enums: [{ ...named, exposed: [{ api: "b2c", fields: ["type"] }] }] }),
+    ).toEqual(["enums.0.exposed.0.fields.0: must be Type.property, for example NotificationDto.type"]);
+    expect(
+      issues({ sources: "a", enums: [{ ...named, exposed: [{ api: "b2c", fields: [] }] }] }),
+    ).toHaveLength(1);
+    expect(issues({ sources: "a", enums: [{ ...named, exposed: [] }] })).toHaveLength(1);
+    expect(
+      issues({ sources: "a", enums: [{ ...discover, exposed: [{ api: "b2c", fields: ["A.b"] }] }] }),
+    ).toHaveLength(1);
+  });
+
   it("rejects an unknown key, also inside an entry", () => {
     expect(issues({ sources: "src/**/*.cs", enums: [named], extra: true })).toEqual([
       ': Unrecognized key: "extra"',
