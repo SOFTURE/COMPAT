@@ -199,6 +199,7 @@ describe.skipIf(shouldSkipRealOasdiff(oasdiff))("PETSEO acceptance table, all v1
       ["persisted-enums", "ran"],
       ["config", "ran"],
       ["client-usage", "not-configured"],
+      ["error-codes", "not-configured"],
       ["dependencies", "not-configured"],
       ["message-contracts", "not-configured"],
       ["behaviour", "not-configured"],

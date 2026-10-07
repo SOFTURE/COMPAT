@@ -12,6 +12,7 @@ It works only from git. It never connects to a production server or database.
 | [`openapi`](#openapi) | the HTTP contract, through [oasdiff](https://github.com/oasdiff/oasdiff) |
 | [`sql-migrations`](#sql-migrations) | new SQL migrations (folders such as drizzle, or EF Core idempotent scripts), Postgres and SQL Server |
 | [`seed`](#seed) | seed scripts that run on every deploy, row by row |
+| [`error-codes`](#error-codes) | typed error codes new in the revision that live client builds cannot translate |
 | [`persisted-enums`](#persisted-enums) | enums stored in the database as strings or numbers (C# and TypeScript) |
 | [`config`](#config) | configuration keys a release needs (compose interpolation, `.env` examples, your own patterns) |
 | [`dependencies`](#dependencies) | runtime package versions (NuGet, npm), classified by semver |
@@ -448,6 +449,47 @@ an equality (`===`, `!==`, `==`, `!=`) with an operand ending in the property or
 `Record<Enum, ...>` or `Record<Dto["property"], ...>`, `[key in Enum]`, or an index access `map[x.property]`. A
 line that looks like a branch and holds the property or enum name where the scanner read no code (inside a template
 literal, after a literal it lost) counts as a branch too, so a scanner miss never reads as "does not branch".
+
+### error-codes
+
+A server that returns typed error codes (`new Error("Shop.Cart.NotFound", ...)`) that each client translates in its
+own map can break old clients without any contract change: the spec types the code as a string, so `openapi` cannot
+see a new one, and an old mobile build shows a generic error instead of the message. This layer reads the codes at
+both refs and each client's translation map at the client's live refs.
+
+```json
+{
+  "codes": [{ "name": "api", "files": ["src/**/*.cs"], "pattern": "new Error\\(\\s*\"(?<code>[\\w.]+)\"" }],
+  "clients": [
+    {
+      "name": "mobile",
+      "refs": { "workflowRuns": "eas-prod.yml", "since": "2.0.1" },
+      "files": ["APP/MOBILE/B2C/constants/api.ts"],
+      "pattern": "\"(?<code>[\\w.]+)\"\\s*:"
+    }
+  ],
+  "accept": [{ "code": "Shop.Cart.NotFound", "client": "mobile", "reason": "the cart is web only" }]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `codes[]` | `{ name, files, pattern, flags? }`: server files read at the base and the revision; the named group `code` of `pattern` captures one code |
+| `clients[]` | `{ name, refs, files, pattern, flags? }`: the client's translation map files, read at every live ref; the named group `code` captures one translated code |
+| `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags` and `workflowRuns` selectors) |
+| `flags` | regex flags out of `i`, `m`, `s`, `u` |
+| `accept[]` | `{ code, client?, reason }`: accepts `error-code-unknown-to-client` for that code (and client) |
+
+| Class | Finding ids |
+| --- | --- |
+| `safe` | `error-code-added`, `error-code-removed` |
+| `needs-action` | `error-code-unknown-to-client`: a code new in the revision that at least one live ref of the client does not translate; the message names those refs and the evidence points at the declaration and their map files |
+
+A code the base already returns is live today, so only codes new in the revision count against clients, and a client
+whose every live ref already translates a new code gets no finding. The layer fails closed: a code source that matches
+no file or captures no code at the revision, a client ref missing from the clone, or a map file that is absent or
+yields no code at a client ref fails the layer. Which operations return a code is not checked yet, so a code counts
+for every client even when only operations that client never calls return it.
 
 ### sql-migrations
 

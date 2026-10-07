@@ -2,6 +2,7 @@ import { behaviourLayer } from "./behaviour/behaviour-layer.js";
 import { clientUsageLayer } from "./client-usage/client-usage-layer.js";
 import { configLayer } from "./config/config-layer.js";
 import { dependenciesLayer } from "./dependencies/dependencies-layer.js";
+import { errorCodesLayer } from "./error-codes/error-codes-layer.js";
 import type { Layer } from "./layer.js";
 import { messageContractsLayer } from "./message-contracts/message-contracts-layer.js";
 import { openapiLayer } from "./openapi/openapi-layer.js";
@@ -17,6 +18,7 @@ export const LAYERS: Layer[] = [
   persistedEnumsLayer,
   // Refines openapi and persisted-enums findings, so it runs after both.
   clientUsageLayer,
+  errorCodesLayer,
   configLayer,
   dependenciesLayer,
   messageContractsLayer,

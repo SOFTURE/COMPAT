@@ -114,3 +114,14 @@ async function resolveTags(
   }
   return ok(selected.value.map((ref) => ({ ref })));
 }
+
+/** One note per resolver of a client, naming the refs it resolved to: `client "web": github-deployment:prod → 2.3.5`. */
+export function formatResolvers(client: string, refs: readonly ResolvedRef[]): string[] {
+  const byResolver = new Map<string, string[]>();
+  for (const { ref, resolver } of refs) {
+    if (resolver !== undefined) byResolver.set(resolver, [...(byResolver.get(resolver) ?? []), ref]);
+  }
+  return [...byResolver].map(
+    ([resolver, resolved]) => `client "${client}": ${resolver} → ${resolved.join(", ")}`,
+  );
+}

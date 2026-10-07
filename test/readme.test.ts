@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { BEHAVIOUR_FINDING_IDS } from "../src/layers/behaviour/config.js";
 import { CONFIG_FINDING_IDS } from "../src/layers/config/classify.js";
 import { DEPENDENCY_FINDING_IDS } from "../src/layers/dependencies/config.js";
+import { ERROR_CODE_FINDING_CLASSES } from "../src/layers/error-codes/config.js";
 import { MESSAGE_CONTRACT_FINDING_IDS } from "../src/layers/message-contracts/config.js";
 import { ENUM_CHANGE_IDS } from "../src/layers/persisted-enums/config.js";
 import { LAYERS } from "../src/layers/registry.js";
@@ -60,6 +61,13 @@ describe("README reference", () => {
 
   it("lists every behaviour finding id", () => {
     for (const id of BEHAVIOUR_FINDING_IDS) expect(getSection("behaviour"), id).toContain(`| \`${id}\` |`);
+  });
+
+  it("lists every error-codes finding under its class", () => {
+    const section = getSection("error-codes");
+    for (const [id, findingClass] of Object.entries(ERROR_CODE_FINDING_CLASSES)) {
+      expect(getClassRow(section, findingClass), id).toContain(`\`${id}\``);
+    }
   });
 
   it("lists every dependencies finding id", () => {
