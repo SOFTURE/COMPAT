@@ -176,6 +176,27 @@ describe("softure-compat init", () => {
     });
   });
 
+  it("enables message contracts with one glob per contract folder, ignoring build output", async () => {
+    const none = repoWith({ "src/App/Program.cs": "class Program { }\n" });
+    expect((await init(none)).written?.layers["message-contracts"]?.enabled).toBe(false);
+    const repo = repoWith({
+      "src/PETSEO.Contract.Internal.Messages/Broadcasts/Started.cs": "public record Started(int X);\n",
+      "src/PETSEO.Contract.Internal.Messages/bin/Debug/Gen.cs": "public record Gen(int X);\n",
+      "src/Worker/Messages/Done.cs": "public record Done(int X);\n",
+      "tests/Orders.Contracts.Tests/Fixtures.cs": "public class Fixtures { }\n",
+    });
+    const { written } = await init(repo);
+    expect(written?.layers["message-contracts"]).toEqual({
+      sources: [
+        {
+          name: "contracts",
+          language: "csharp",
+          files: ["src/PETSEO.Contract.Internal.Messages/**/*.cs", "src/Worker/Messages/**/*.cs"],
+        },
+      ],
+    });
+  });
+
   it("refuses to overwrite an existing config without --force", async () => {
     const repo = repoWith({ "compose.yaml": "services: {}\n" });
     writeRepoFile(repo, "compat.config.json", "{}\n");
