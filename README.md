@@ -191,11 +191,25 @@ Compares the OpenAPI spec of each API at both refs with `oasdiff changelog`. oas
 }
 ```
 
+Several APIs built from one solution can share one build per side:
+
+```json
+{
+  "setup": { "run": "dotnet build App.slnx -c Debug", "timeoutSeconds": 900 },
+  "apis": [
+    { "name": "b2c", "source": { "kind": "command", "run": "dotnet run --no-build --project src/B2C -- export openapi.json", "output": "openapi.json" } },
+    { "name": "admin", "source": { "kind": "command", "run": "dotnet run --no-build --project src/Admin -- export admin.json", "output": "admin.json" } }
+  ]
+}
+```
+
 | Key | Meaning |
 | --- | --- |
 | `apis[].name` | unique name (letters, digits, `.`, `_`, `-`) |
 | `apis[].source` | where the spec comes from at each ref, see below |
 | `apis[].accept[]` | `{ id, operation?, reason }`; `operation` is `METHOD /path` as oasdiff reports it |
+| `setup` | `{ run, timeoutSeconds? }`: a command run once per side, before any spec source of that side; see below |
+| `concurrency` | `2` (default) prepares the base and revision sides in parallel; `1` prepares them one after the other |
 | `oasdiff.path` | oasdiff binary; a relative path is resolved against the repository root |
 | `oasdiff.args` | extra arguments for `oasdiff changelog` (not `--format`, `-f`, `--fail-on`, `-o`) |
 
@@ -212,6 +226,13 @@ Spec sources:
   Swashbuckle, FastEndpoints), and make sure the command works on a clean checkout (restore dependencies inside it).
 - `{ "kind": "url", "base": "https://dev.example.com/swagger.json", "revision": "https://..." }`: fetched over
   HTTP(S), for example from a DEV environment.
+
+`setup` runs **once in each materialised ref**, whatever the number of APIs, before their spec sources, with the
+same working directory and environment (`COMPAT_SIDE`, `COMPAT_REF`, `COMPAT_COMMIT`) as a `command` source. Use it
+for a build that every export command shares; the export commands then skip the build (`dotnet run --no-build`).
+The default timeout is 600 seconds (maximum 7200). A failing setup fails the layer with the side, the ref and the
+end of its stderr. The base and revision checkouts are separate, so both sides (setup, then the spec of each API in
+order) run in parallel; set `"concurrency": 1` when one build at a time is all the machine can take.
 
 ### sql-migrations
 
