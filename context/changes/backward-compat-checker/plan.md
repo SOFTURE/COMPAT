@@ -286,14 +286,14 @@ skipped when the binary is absent, unless `COMPAT_REQUIRE_OASDIFF=1`, which make
 ### Phase 2: The `openapi` layer with oasdiff, spec sources and the accept allowlist
 
 #### Automated
-- [x] 2.1 Named phase 2 tests pass (config, classify, accept, spec source, layer with fake oasdiff)
-- [x] 2.2 With real oasdiff, the F1/F2 repository exits 1 with one `breaking` `request-property-became-not-nullable` and two `safe` `endpoint-added`, and exits 0 with the accept entry
-- [x] 2.3 Without oasdiff on `PATH`, the `openapi` layer is `skipped` and the command exits 1, or 0 with `--allow-incomplete`
-- [x] 2.4 Gates green (typecheck, lint, test)
+- [x] 2.1 Named phase 2 tests pass (config, classify, accept, spec source, layer with fake oasdiff) — ac2b0f4
+- [x] 2.2 With real oasdiff, the F1/F2 repository exits 1 with one `breaking` `request-property-became-not-nullable` and two `safe` `endpoint-added`, and exits 0 with the accept entry — ac2b0f4
+- [x] 2.3 Without oasdiff on `PATH`, the `openapi` layer is `skipped` and the command exits 1, or 0 with `--allow-incomplete` — ac2b0f4
+- [x] 2.4 Gates green (typecheck, lint, test) — ac2b0f4
 
 ### Phase 3: Packaging and CI
 
 #### Automated
-- [ ] 3.1 `npm run build` produces `dist/cli.js`, `node dist/cli.js --help` exits 0 and `npm run test:pack` passes
+- [x] 3.1 `npm run build` produces `dist/cli.js`, `node dist/cli.js --help` exits 0 and `npm run test:pack` passes
 - [ ] 3.2 The CI workflow is green on the pull request, including the real-oasdiff tests
-- [ ] 3.3 Gates green (typecheck, lint, test)
+- [x] 3.3 Gates green (typecheck, lint, test)

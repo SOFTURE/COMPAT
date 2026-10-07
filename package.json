@@ -3,12 +3,26 @@
   "version": "0.0.0",
   "private": true,
   "description": "Backward-compatibility check between two git refs: OpenAPI, SQL migrations, seeds, persisted enums, configuration and message contracts",
+  "keywords": [
+    "backward-compatibility",
+    "openapi",
+    "oasdiff",
+    "release",
+    "cli",
+    "ci"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SOFTURE/COMPAT.git"
   },
   "type": "module",
+  "bin": {
+    "softure-compat": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -18,8 +32,12 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "vitest run",
-    "test:pack": "vitest run --dir test/pack --exclude=none",
+    "test:pack": "vitest run --config vitest.pack.config.ts",
     "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "dependencies": {
     "zod": "^4.6.5"
