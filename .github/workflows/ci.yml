@@ -51,7 +51,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -89,7 +88,9 @@ jobs:
           fail-on: needs-action
           working-directory: ${{ steps.fixture.outputs.path }}
           package: ${{ steps.pack.outputs.tarball }}
-          comment-key: self-test
+          # The comment path (create, then update by marker) was verified on the pull request that added the action;
+          # a fixture report on every pull request would only be noise.
+          comment: "false"
           node-version: ""
       - name: Check the outcome
         env:
