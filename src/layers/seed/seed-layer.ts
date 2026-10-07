@@ -2,7 +2,7 @@ import type { RefTree } from "../../git/ref-tree.js";
 import type { Finding, LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer, type LayerContext } from "../layer.js";
-import { applySeedAccept, type ClassifiedFinding, classifySeedFile, SEED_LAYER } from "./classify.js";
+import { applySeedAccept, classifySeedSource, SEED_LAYER, type SeedFile } from "./classify.js";
 import { type SeedConfig, type SeedSource, seedConfigSchema } from "./config.js";
 import { readSeedStatements, type SeedStatement } from "./seed-statements.js";
 
@@ -64,7 +64,7 @@ async function checkSource(
   if (revisionFiles.value.length === 0) {
     return err(`no seed file matches ${source.files.join(", ")} at revision ${revision.ref}`);
   }
-  const classified: ClassifiedFinding[] = [];
+  const files: SeedFile[] = [];
   let statementCount = 0;
   let rowCount = 0;
   const paths = [...new Set([...revisionFiles.value, ...baseFiles.value])].sort();
@@ -79,17 +79,14 @@ async function checkSource(
       statementCount += 1;
       if (statement.kind === "rows") rowCount += statement.rows.length;
     }
-    classified.push(
-      ...classifySeedFile({
-        sourceName: source.name,
-        path,
-        base: before.value,
-        revision: after.value,
-        baseTree: base,
-        revisionTree: revision,
-      }),
-    );
+    files.push({ path, base: before.value, revision: after.value });
   }
+  const classified = classifySeedSource({
+    sourceName: source.name,
+    files,
+    baseTree: base,
+    revisionTree: revision,
+  });
   const { findings, usage } = applySeedAccept(classified, source.accept ?? []);
   const notes = [
     `source "${source.name}": ${revisionFiles.value.length} file(s), ${statementCount} write statement(s), ${rowCount} row(s) read at the revision`,

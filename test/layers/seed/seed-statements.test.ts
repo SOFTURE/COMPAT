@@ -39,7 +39,7 @@ describe("readSeedStatements: inserts", () => {
     expect(rows.line).toBe(2);
     expect(rows.rows).toEqual([
       { key: "501", values: "501, 'TermsChange', 'New terms, (v2)'", line: 4 },
-      { key: "502", values: "502, 'TermsChange', lower('X')", line: 5 },
+      { key: "502", values: "502, 'TermsChange', LOWER('X')", line: 5 },
       { key: "503", values: "503, 'TermsChange', 'It''s here'", line: 6 },
     ]);
   });
@@ -149,12 +149,18 @@ describe("readSeedStatements: other writes", () => {
       "UPDATE t\n  SET a = 'x  y' WHERE id = 1;\nDELETE FROM s WHERE id = 2;\nTRUNCATE TABLE u;\nSELECT 1;",
       "postgres",
     );
-    expect(statements.map((statement) => [statement.kind, statement.table.display, statement.line])).toEqual([
+    expect(
+      statements.map((statement) => [
+        statement.kind,
+        "table" in statement ? statement.table.display : null,
+        statement.line,
+      ]),
+    ).toEqual([
       ["update", "t", 1],
       ["delete", "s", 3],
       ["truncate", "u", 4],
     ]);
-    expect(statements[0]).toMatchObject({ text: "UPDATE t SET a = 'x  y' WHERE id = 1" });
+    expect(statements[0]).toMatchObject({ text: "UPDATE T SET A = 'x  y' WHERE ID = 1" });
   });
 });
 
@@ -224,12 +230,12 @@ describe("readSeedStatements: guards and blocks", () => {
       "IF NOT EXISTS (SELECT 1 FROM Roles)\n  INSERT INTO Roles (Id) VALUES (1);",
       "sqlserver",
     );
-    expect(guarded.guard).toBe("(SELECT 1 FROM Roles)");
+    expect(guarded.guard).toBe("(SELECT 1 FROM ROLES)");
     const upsert = readRows(
       "INSERT INTO t (id, a) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET a = EXCLUDED.a;",
     );
     expect(upsert.guard).toBeNull();
-    expect(upsert.action).toBe("ON CONFLICT (id) DO UPDATE SET a = EXCLUDED.a");
+    expect(upsert.action).toBe("ON CONFLICT (ID) DO UPDATE SET A = EXCLUDED.A");
   });
 
   it("reads past a nested block with its own EXCEPTION in a DO body", () => {
@@ -279,7 +285,7 @@ describe("readSeedStatements: guards and blocks", () => {
     );
     expect(performance.now() - started).toBeLessThan(1000);
     expect(rows.rows).toHaveLength(2000);
-    expect(rows.rows[1999]).toEqual({ key: "1999", values: "1999, 'name 1999', now()", line: 2001 });
+    expect(rows.rows[1999]).toEqual({ key: "1999", values: "1999, 'name 1999', NOW()", line: 2001 });
   });
 
   it("does not end a Postgres E string at an escaped quote", () => {
@@ -289,6 +295,75 @@ describe("readSeedStatements: guards and blocks", () => {
     expect(rows.rows.map((row) => row.key)).toEqual(["1", "2"]);
   });
 
+  it("splits T-SQL statements written without semicolons", () => {
+    const kinds = (text: string) =>
+      readSeedStatements(text, "sqlserver").map((statement) => [
+        statement.kind,
+        "table" in statement ? statement.table.display : null,
+        statement.line,
+      ]);
+    expect(
+      kinds(
+        "SET IDENTITY_INSERT dbo.R ON\nINSERT INTO dbo.R (Id, N) VALUES (1, 'a'),\n(2, 'b')\nSET IDENTITY_INSERT dbo.R OFF\nTRUNCATE TABLE dbo.Z",
+      ),
+    ).toEqual([
+      ["rows", "dbo.R", 2],
+      ["truncate", "dbo.Z", 5],
+    ]);
+    expect(
+      kinds(
+        "SET NOCOUNT ON\nMERGE INTO R AS t\nUSING (VALUES (1, 'x')) AS s (Id, N)\nON t.Id = s.Id\nWHEN MATCHED THEN\n  UPDATE SET N = s.N\nWHEN NOT MATCHED THEN\n  INSERT (Id, N) VALUES (s.Id, s.N)\nPRINT 'done'\nDELETE R WHERE Id = 9",
+      ),
+    ).toEqual([
+      ["rows", "R", 2],
+      ["delete", "R", 10],
+    ]);
+    expect(
+      kinds(
+        "UPDATE t\nSET a = CASE\n  WHEN b = 1 THEN 'x'\n  ELSE 'y'\nEND\nWHERE id = 1\nIF NOT EXISTS (SELECT 1 FROM r WHERE Id = 1)\n  INSERT INTO r (Id) VALUES (1)\nDELETE FROM s",
+      ),
+    ).toEqual([
+      ["update", "t", 1],
+      ["rows", "r", 8],
+      ["delete", "s", 9],
+    ]);
+    const guarded = readSeedStatements(
+      "IF NOT EXISTS (SELECT 1 FROM r WHERE Id = 1)\n  INSERT INTO r (Id) VALUES (1)\nINSERT INTO r (Id) VALUES (2)",
+      "sqlserver",
+    );
+    expect(guarded.map((statement) => (statement as Rows).mode)).toEqual(["ignore", "none"]);
+  });
+
+  it("reads the bodies of T-SQL WHILE and PL/pgSQL loops", () => {
+    expect(
+      readSeedStatements("WHILE @i < 3 BEGIN UPDATE t SET a = @i; SET @i = @i + 1; END", "sqlserver"),
+    ).toMatchObject([{ kind: "update" }]);
+    expect(
+      readSeedStatements(
+        "DO $$ DECLARE r record; BEGIN FOR r IN SELECT id FROM s LOOP UPDATE t SET a = r.id; END LOOP; DELETE FROM u; END $$;",
+        "postgres",
+      ),
+    ).toMatchObject([{ kind: "update" }, { kind: "delete" }]);
+  });
+
+  it("reports writes it cannot read as unknown writes, but not grants or row locks", () => {
+    expect(
+      readSeedStatements(
+        "WITH x AS (SELECT 1 AS id) INSERT INTO t (id) SELECT id FROM x;\nGRANT INSERT, UPDATE ON t TO app;\nSELECT * FROM t FOR UPDATE;\nSELECT 'UPDATE';",
+        "postgres",
+      ),
+    ).toMatchObject([{ kind: "unknown-write", line: 1 }]);
+  });
+
+  it("treats WHERE NOT EXISTS as a guard only when it reads the target table", () => {
+    expect(
+      readSeedStatements(
+        "INSERT INTO a (id) SELECT id FROM x WHERE NOT EXISTS (SELECT 1 FROM b);",
+        "postgres",
+      ),
+    ).toMatchObject([{ kind: "insert-query", mode: "none" }]);
+  });
+
   it("splits SQL Server GO batches", () => {
     const statements = readSeedStatements("UPDATE a SET x = 1\nGO\nDELETE FROM b\nGO\n", "sqlserver");
     expect(statements.map((statement) => statement.kind)).toEqual(["update", "delete"]);
@@ -296,9 +371,9 @@ describe("readSeedStatements: guards and blocks", () => {
 });
 
 describe("normalizeSql", () => {
-  it("collapses whitespace outside quotes and around parentheses and commas", () => {
+  it("collapses whitespace and uppercases outside quotes, and drops spaces around parentheses and commas", () => {
     expect(normalizeSql("INSERT  INTO t ( a ,\n b )  VALUES ('x  y', [a  b])", "sqlserver")).toBe(
-      "INSERT INTO t (a,b) VALUES ('x  y',[a  b])",
+      "INSERT INTO T (A,B) VALUES ('x  y',[a  b])",
     );
   });
 });

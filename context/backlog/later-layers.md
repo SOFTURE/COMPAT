@@ -8,3 +8,4 @@
 - [ ] 2026-10-07 backward-compat-checker: read live client versions from store or Sentry release data instead of a static list (suggestion) context/archive/2026-10-07-backward-compat-checker/research.md
 - [ ] 2026-10-07 seed-layer: dynamic SQL (`EXEC(N'...')`, `EXECUTE format(...)`), `COPY` and `BULK INSERT` in seed scripts stay silent; read them when a consumer needs it (suggestion) src/layers/seed/seed-statements.ts
 - [ ] 2026-10-07 seed-layer: without a conflict target or `MERGE ... ON` pairs the row key falls back to the first column; let a source name the key columns per table if a consumer's seeds lead with something else (suggestion) src/layers/seed/seed-statements.ts
+- [ ] 2026-10-07 seed-layer impl review W3: CTE writes (`WITH ... INSERT/UPDATE/DELETE`) are not parsed; a new one is reported as `unreadable-write` instead of being diffed row by row (suggestion) src/layers/seed/seed-statements.ts

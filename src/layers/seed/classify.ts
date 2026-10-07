@@ -14,6 +14,7 @@ export const SEED_RULE_CLASSES = {
   "row-change-ignored": "needs-action",
   "row-added-skipped": "needs-action",
   "row-deleted": "needs-action",
+  "unreadable-write": "needs-action",
   "insert-unguarded": "needs-action",
   "upsert-query": "needs-action",
   "update-data": "needs-action",
@@ -32,22 +33,35 @@ export type SeedAcceptEntry = { id: string; object?: string | undefined; reason:
 
 type TreeRef = Pick<RefTree, "side" | "ref" | "commit">;
 
-export type ClassifySeedFileOptions = {
-  sourceName: string;
+export type SeedFile = {
   /** Repository-relative path of the seed file. */
   path: string;
   /** Statements of the file at the base; `null` when the file is new in the revision. */
   base: SeedStatement[] | null;
   /** Statements of the file at the revision; `null` when the revision removed the file. */
   revision: SeedStatement[] | null;
+};
+
+export type ClassifySeedSourceOptions = {
+  sourceName: string;
+  /** Every seed file of the source at either ref. */
+  files: SeedFile[];
   baseTree: TreeRef;
   revisionTree: TreeRef;
 };
 
-type RowsStatement = Extract<SeedStatement, { kind: "rows" }>;
-type OtherStatement = Exclude<SeedStatement, RowsStatement>;
+/** A statement with the path of the file it was read from. */
+type Located = SeedStatement & { path: string };
+type RowsStatement = Extract<Located, { kind: "rows" }>;
+type OtherStatement = Exclude<Located, RowsStatement>;
 
-type KeyedRow = SeedRow & { columns: string; mode: ConflictMode; guard: string | null; action: string };
+type KeyedRow = SeedRow & {
+  path: string;
+  columns: string;
+  mode: ConflictMode;
+  guard: string | null;
+  action: string;
+};
 
 type TableRows = {
   table: SqlName;
@@ -60,7 +74,7 @@ type TableRows = {
 };
 
 /** Rows per table key, in order of first appearance. */
-function collectRows(statements: SeedStatement[]): Map<string, TableRows> {
+function collectRows(statements: Located[]): Map<string, TableRows> {
   const tables = new Map<string, TableRows>();
   for (const statement of statements) {
     if (statement.kind !== "rows") continue;
@@ -80,6 +94,7 @@ function collectRows(statements: SeedStatement[]): Map<string, TableRows> {
     for (const row of statement.rows) {
       table.rows.push({
         ...row,
+        path: statement.path,
         columns,
         mode: statement.mode,
         guard: statement.guard,
@@ -147,7 +162,7 @@ function getRowMessage(id: SeedRuleId, table: TableRows, rows: KeyedRow[], byCon
     case "row-removed":
       return `no longer seeds ${count} of ${name} (${keys}); the rows stay in databases that have them`;
     case "row-added-skipped":
-      return `adds ${count} to ${name} (${keys}) inside an IF NOT EXISTS block the base already had: databases where the block already ran skip the whole block, so they never get these rows`;
+      return `adds ${count} to ${name} (${keys}) inside an IF NOT EXISTS block that is already false where the table has rows: those databases skip the whole block, so they never get these rows`;
     case "row-changed":
       return `changes ${count} of ${name} (${keys}), or the upsert that writes them, under an upsert: every deploy overwrites the production rows, old builds read the new values, and a rollback does not restore the old ones`;
     case "row-change-ignored":
@@ -159,18 +174,25 @@ function getRowMessage(id: SeedRuleId, table: TableRows, rows: KeyedRow[], byCon
   }
 }
 
-function buildEvidence(tree: TreeRef, path: string, lines: number[]): Evidence[] {
-  return [...new Set(lines)]
-    .slice(0, MAX_LISTED)
-    .map((line) => ({ side: tree.side, ref: tree.ref, commit: tree.commit, path, line }));
+type Location = { path: string; line: number };
+
+function buildEvidence(tree: TreeRef, locations: Location[]): Evidence[] {
+  const seen = new Set<string>();
+  const evidence: Evidence[] = [];
+  for (const { path, line } of locations) {
+    const key = `${path}:${line}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    evidence.push({ side: tree.side, ref: tree.ref, commit: tree.commit, path, line });
+  }
+  return evidence.slice(0, MAX_LISTED);
 }
 
+type FindingInput = { id: SeedRuleId; object: string; path: string; message: string; evidence: Evidence[] };
+
 function buildFinding(
-  options: ClassifySeedFileOptions,
-  id: SeedRuleId,
-  object: string,
-  message: string,
-  evidence: Evidence[],
+  options: ClassifySeedSourceOptions,
+  { id, object, path, message, evidence }: FindingInput,
 ): ClassifiedFinding {
   return {
     object,
@@ -178,7 +200,7 @@ function buildFinding(
       layer: SEED_LAYER,
       scope: options.sourceName,
       id,
-      subject: `${options.path}: ${object}`,
+      subject: `${path}: ${object}`,
       class: SEED_RULE_CLASSES[id],
       message,
       evidence,
@@ -186,7 +208,12 @@ function buildFinding(
   };
 }
 
-function compareRows(options: ClassifySeedFileOptions, base: SeedStatement[], revision: SeedStatement[]) {
+/** Whether a guard condition names one of the key columns, so it checks a row rather than the whole table. */
+function isRowGuard(guard: string, keyColumns: string[]): boolean {
+  return keyColumns.some((column) => guard.includes(column.toUpperCase()));
+}
+
+function compareRows(options: ClassifySeedSourceOptions, base: Located[], revision: Located[]) {
   const baseTables = collectRows(base);
   const revisionTables = collectRows(revision);
   const findings: ClassifiedFinding[] = [];
@@ -218,7 +245,10 @@ function compareRows(options: ClassifySeedFileOptions, base: SeedStatement[], re
       // Keyed by content, an upsert's changed row cannot be told from a new one; assume the worse.
       else if (byContent && before !== undefined && row.mode === "update")
         add("row-changed", row, options.revisionTree);
-      else if (row.guard !== null && baseGuards.has(row.guard))
+      else if (
+        row.guard !== null &&
+        (baseGuards.has(row.guard) || (before !== undefined && !isRowGuard(row.guard, table.keyColumns)))
+      )
         add("row-added-skipped", row, options.revisionTree);
       else add("row-added", row, options.revisionTree);
     }
@@ -227,36 +257,31 @@ function compareRows(options: ClassifySeedFileOptions, base: SeedStatement[], re
       if (after?.deletesMissing) add("row-deleted", row, options.revisionTree);
       else add("row-removed", row, options.baseTree);
     }
+    const deletingMerges: Location[] = revision.filter(
+      (item) => item.kind === "rows" && item.table.key === tableKey && item.deletesMissing,
+    );
     if (before !== undefined && after?.deletesMissing && !before.deletesMissing) {
-      const lines = revision
-        .filter((item) => item.kind === "rows" && item.table.key === tableKey && item.deletesMissing)
-        .map((item) => item.line);
       findings.push(
-        buildFinding(
-          options,
-          "delete-data",
-          table.table.display,
-          `a MERGE now deletes every row of ${table.table.display} missing from its source: rows that production added or that earlier seeds wrote are deleted on deploy`,
-          buildEvidence(options.revisionTree, options.path, lines),
-        ),
+        buildFinding(options, {
+          id: "delete-data",
+          object: table.table.display,
+          path: (deletingMerges[0] as Location).path,
+          message: `a MERGE now deletes every row of ${table.table.display} missing from its source: rows that production added or that earlier seeds wrote are deleted on deploy`,
+          evidence: buildEvidence(options.revisionTree, deletingMerges),
+        }),
       );
     }
     for (const group of groups.values()) {
       // A deleted row has no revision line of its own; point at the deleting MERGE.
-      const lines =
-        group.id === "row-deleted"
-          ? revision
-              .filter((item) => item.kind === "rows" && item.table.key === tableKey && item.deletesMissing)
-              .map((item) => item.line)
-          : group.rows.map((row) => row.line);
+      const locations = group.id === "row-deleted" ? deletingMerges : group.rows;
       findings.push(
-        buildFinding(
-          options,
-          group.id,
-          table.table.display,
-          getRowMessage(group.id, table, group.rows, byContent),
-          buildEvidence(group.tree, options.path, lines),
-        ),
+        buildFinding(options, {
+          id: group.id,
+          object: table.table.display,
+          path: (locations[0] as Location).path,
+          message: getRowMessage(group.id, table, group.rows, byContent),
+          evidence: buildEvidence(group.tree, locations),
+        }),
       );
     }
   }
@@ -264,6 +289,14 @@ function compareRows(options: ClassifySeedFileOptions, base: SeedStatement[], re
 }
 
 function classifyOther(statement: OtherStatement): { id: SeedRuleId; message: string }[] {
+  if (statement.kind === "unknown-write") {
+    return [
+      {
+        id: "unreadable-write",
+        message: `writes rows in a shape the seed layer cannot read (${statement.text.slice(0, 80)}${statement.text.length > 80 ? "..." : ""}); check what it does to existing rows`,
+      },
+    ];
+  }
   const name = statement.table.display;
   switch (statement.kind) {
     case "update":
@@ -330,8 +363,19 @@ function classifyOther(statement: OtherStatement): { id: SeedRuleId; message: st
   }
 }
 
-function compareOther(options: ClassifySeedFileOptions, base: SeedStatement[], revision: SeedStatement[]) {
+/** A query insert or an insert-only `MERGE`: it only adds rows that are missing. */
+function isInsertOnlyQuery(
+  statement: OtherStatement,
+): statement is Extract<OtherStatement, { table: SqlName }> {
+  return (
+    (statement.kind === "insert-query" && statement.mode === "ignore") ||
+    (statement.kind === "merge-query" && statement.inserts && !statement.updates && !statement.deletes)
+  );
+}
+
+function compareOther(options: ClassifySeedSourceOptions, base: Located[], revision: Located[]) {
   const remaining = new Map<string, number>();
+  // Statements are compared across every file of the source, so moving one between files is no change.
   for (const statement of base) {
     if (statement.kind === "rows") continue;
     const key = getStatementKey(statement);
@@ -345,19 +389,18 @@ function compareOther(options: ClassifySeedFileOptions, base: SeedStatement[], r
     if (count > 0) remaining.set(key, count - 1);
     else added.push(statement);
   }
-  // Tables whose guarded query insert the revision edited or dropped: an edited one skips existing rows.
+  // Tables whose insert-only query the revision edited or dropped: an edited one skips existing rows.
   const editedQueryTables = new Set(
     base
-      .filter((statement) => statement.kind === "insert-query")
+      .filter((statement): statement is OtherStatement => statement.kind !== "rows")
+      .filter(isInsertOnlyQuery)
       .filter((statement) => (remaining.get(getStatementKey(statement)) ?? 0) > 0)
       .map((statement) => statement.table.key),
   );
   const findings: ClassifiedFinding[] = [];
   for (const statement of added) {
     const results =
-      statement.kind === "insert-query" &&
-      statement.mode === "ignore" &&
-      editedQueryTables.has(statement.table.key)
+      isInsertOnlyQuery(statement) && editedQueryTables.has(statement.table.key)
         ? [
             {
               id: "row-change-ignored" as const,
@@ -367,13 +410,13 @@ function compareOther(options: ClassifySeedFileOptions, base: SeedStatement[], r
         : classifyOther(statement);
     for (const { id, message } of results) {
       findings.push(
-        buildFinding(
-          options,
+        buildFinding(options, {
           id,
-          statement.table.display,
+          object: statement.kind === "unknown-write" ? "statement" : statement.table.display,
+          path: statement.path,
           message,
-          buildEvidence(options.revisionTree, options.path, [statement.line]),
-        ),
+          evidence: buildEvidence(options.revisionTree, [statement]),
+        }),
       );
     }
   }
@@ -381,30 +424,37 @@ function compareOther(options: ClassifySeedFileOptions, base: SeedStatement[], r
 }
 
 /**
- * Compares the base and revision versions of one seed file. Rows are compared per table and key,
- * other writes by their normalised text; only what the revision adds or changes is classified.
+ * Compares the base and revision versions of a source's seed files. Rows are compared per table and
+ * key across every file of the source (so moving rows or renaming a file is no change), other writes
+ * by their normalised text; only what the revision adds or changes is classified.
  */
-export function classifySeedFile(options: ClassifySeedFileOptions): ClassifiedFinding[] {
-  if (options.revision === null) {
-    return [
-      buildFinding(
-        options,
-        "seed-file-removed",
-        options.path,
-        "the seed file is gone from the revision: its statements stop running, and the rows it seeded stay in databases that have them",
-        [
+export function classifySeedSource(options: ClassifySeedSourceOptions): ClassifiedFinding[] {
+  const locate = (side: "base" | "revision") =>
+    options.files.flatMap((file) =>
+      (file[side] ?? []).map((statement): Located => ({ ...statement, path: file.path })),
+    );
+  const base = locate("base");
+  const revision = locate("revision");
+  const removedFiles = options.files
+    .filter((file) => file.base !== null && file.revision === null)
+    .map((file) =>
+      buildFinding(options, {
+        id: "seed-file-removed",
+        object: file.path,
+        path: file.path,
+        message:
+          "the seed file is gone from the revision: its statements stop running, and the rows it seeded stay in databases that have them",
+        evidence: [
           {
             side: options.baseTree.side,
             ref: options.baseTree.ref,
             commit: options.baseTree.commit,
-            path: options.path,
+            path: file.path,
           },
         ],
-      ),
-    ];
-  }
-  const base = options.base ?? [];
-  return [...compareOther(options, base, options.revision), ...compareRows(options, base, options.revision)];
+      }),
+    );
+  return [...removedFiles, ...compareOther(options, base, revision), ...compareRows(options, base, revision)];
 }
 
 /**

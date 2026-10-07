@@ -208,6 +208,13 @@ text → `row-changed` `needs-action` and exit 1 with `--fail-on needs-action`.
 - `TRUNCATE` → `needs-action` per change.md, not `breaking`.
 - Dynamic SQL and `COPY` → silent, backlog.
 - Plan review W1-W4, S1-S3 → all fixed in this plan (see `reviews/plan-review.md`).
+- Impl review C1, W1-W3, S1-S2 → fixed after implementation, recorded here as drift from the phases above
+  (see `reviews/impl-review.md`): T-SQL statements without `;` are split at line-leading statement words; rows and
+  statements are compared across every file of a source (`classifySeedSource` replaces `classifySeedFile`); an edited
+  insert-only `MERGE` is `row-change-ignored`; writes the reader cannot parse become `unknown-write` →
+  `unreadable-write` `needs-action`; T-SQL `WHILE` and PL/pgSQL loop bodies are read; `normalizeSql` uppercases text
+  outside quotes; `WHERE NOT EXISTS` guards only when it reads the target table; a row added under a new table-wide
+  guard of an already seeded table is `row-added-skipped`.
 
 ## Progress
 
@@ -216,19 +223,19 @@ text → `row-changed` `needs-action` and exit 1 with `--fail-on needs-action`.
 ### Phase 1: Seed statement reader
 
 #### Automated
-- [x] 1.1 Every listed case passes in `test/layers/seed/seed-statements.test.ts` — 52d9f20
-- [x] 1.2 Gates green (typecheck, lint, test) — 52d9f20
+- [x] 1.1 Every listed case passes in `test/layers/seed/seed-statements.test.ts` — e9ea7f7
+- [x] 1.2 Gates green (typecheck, lint, test) — e9ea7f7
 
 ### Phase 2: Seed diff and classification
 
 #### Automated
-- [x] 2.1 Every listed case passes in `test/layers/seed/classify.test.ts` — 65976dd
-- [x] 2.2 Gates green (typecheck, lint, test) — 65976dd
+- [x] 2.1 Every listed case passes in `test/layers/seed/classify.test.ts` — 2107ce1
+- [x] 2.2 Gates green (typecheck, lint, test) — 2107ce1
 
 ### Phase 3: Seed layer, config and F6 end to end
 
 #### Automated
-- [x] 3.1 Config, layer and end-to-end cases pass under `npm test` — 8e42ac6
-- [x] 3.2 `softure-compat check` on the F6 fixture exits 0 with `--fail-on needs-action` in both dialects — 8e42ac6
-- [x] 3.3 `npm run build` and `npm run test:pack` pass — 8e42ac6
-- [x] 3.4 Gates green (typecheck, lint, test) — 8e42ac6
+- [x] 3.1 Config, layer and end-to-end cases pass under `npm test` — beb2b3a
+- [x] 3.2 `softure-compat check` on the F6 fixture exits 0 with `--fail-on needs-action` in both dialects — beb2b3a
+- [x] 3.3 `npm run build` and `npm run test:pack` pass — beb2b3a
+- [x] 3.4 Gates green (typecheck, lint, test) — beb2b3a

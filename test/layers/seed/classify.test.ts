@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySeedAccept, classifySeedFile } from "../../../src/layers/seed/classify.js";
+import { applySeedAccept, classifySeedSource } from "../../../src/layers/seed/classify.js";
 import { readSeedStatements } from "../../../src/layers/seed/seed-statements.js";
 
 const baseTree = { side: "base" as const, ref: "v1", commit: "a".repeat(40) };
@@ -10,11 +10,15 @@ function classify(
   revision: string | null,
   dialect: "postgres" | "sqlserver" = "postgres",
 ) {
-  return classifySeedFile({
+  return classifySeedSource({
     sourceName: "db",
-    path: "db/seed.sql",
-    base: base === null ? null : readSeedStatements(base, dialect),
-    revision: revision === null ? null : readSeedStatements(revision, dialect),
+    files: [
+      {
+        path: "db/seed.sql",
+        base: base === null ? null : readSeedStatements(base, dialect),
+        revision: revision === null ? null : readSeedStatements(revision, dialect),
+      },
+    ],
     baseTree,
     revisionTree,
   });
@@ -137,6 +141,23 @@ describe("classifySeedFile: rows", () => {
     expect(findings[0]?.finding.message).toContain("cannot be told apart");
   });
 
+  it("ignores a change of keyword case", () => {
+    expect(
+      classify(
+        "insert into t (id, a) values (1, 'x') on conflict do nothing;",
+        "INSERT INTO t (id, a) VALUES (1, 'x') ON CONFLICT DO NOTHING;",
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports a row added under a new table-wide guard of a table the base already seeded", () => {
+    const base = "INSERT INTO Roles (Id) VALUES (1) ON CONFLICT DO NOTHING;";
+    const revision = `${base}\nIF NOT EXISTS (SELECT 1 FROM Roles WHERE Name = 'x') INSERT INTO Roles (Id) VALUES (2);`;
+    expect(summary(classify(base, revision, "sqlserver"))).toEqual([
+      ["row-added-skipped", "needs-action", "db/seed.sql: Roles"],
+    ]);
+  });
+
   it("lists at most 5 keys and 5 evidence lines", () => {
     const tuples = Array.from({ length: 8 }, (_, index) => `(${index + 10}, 'T', 'b')`);
     const findings = classify(upsert("(1, 'A', 'a')"), upsert("(1, 'A', 'a')", ...tuples));
@@ -183,9 +204,45 @@ describe("classifySeedFile: other statements and files", () => {
     ]);
   });
 
+  it("reports an edited insert-only MERGE as a change existing databases skip", () => {
+    const merge = (name: string) =>
+      `MERGE R AS t USING (SELECT 1 AS Id, '${name}' AS N) AS s ON t.Id = s.Id WHEN NOT MATCHED THEN INSERT (Id, N) VALUES (s.Id, s.N);`;
+    expect(summary(classify(merge("a"), merge("b"), "sqlserver"))).toEqual([
+      ["row-change-ignored", "needs-action", "db/seed.sql: R"],
+    ]);
+  });
+
+  it("reports a new write it cannot read", () => {
+    expect(summary(classify("", "WITH x AS (SELECT 1 AS id) UPDATE t SET a = 1 FROM x;"))).toEqual([
+      ["unreadable-write", "needs-action", "db/seed.sql: statement"],
+    ]);
+  });
+
+  it("compares rows across the files of a source", () => {
+    const row = (body: string) =>
+      `INSERT INTO t (id, body) VALUES (1, '${body}') ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body;`;
+    const findings = classifySeedSource({
+      sourceName: "db",
+      files: [
+        { path: "db/seed.sql", base: readSeedStatements(row("a"), "postgres"), revision: null },
+        { path: "db/seeds/01.sql", base: null, revision: readSeedStatements(row("b"), "postgres") },
+      ],
+      baseTree,
+      revisionTree,
+    });
+    expect(summary(findings)).toEqual([
+      ["seed-file-removed", "safe", "db/seed.sql: db/seed.sql"],
+      ["row-changed", "needs-action", "db/seeds/01.sql: t"],
+    ]);
+    expect(findings[1]?.finding.evidence[0]).toMatchObject({ path: "db/seeds/01.sql", line: 1 });
+  });
+
   it("reports a removed file once and treats a new file as all new", () => {
     const removed = classify(upsert("(1, 'A', 'a')"), null);
-    expect(summary(removed)).toEqual([["seed-file-removed", "safe", "db/seed.sql: db/seed.sql"]]);
+    expect(summary(removed)).toEqual([
+      ["seed-file-removed", "safe", "db/seed.sql: db/seed.sql"],
+      ["row-removed", "safe", "db/seed.sql: Templates"],
+    ]);
     expect(removed[0]?.finding.evidence[0]).toMatchObject({ side: "base", path: "db/seed.sql" });
     expect(summary(classify(null, upsert("(1, 'A', 'a')")))).toEqual([
       ["row-added", "safe", "db/seed.sql: Templates"],

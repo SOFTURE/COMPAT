@@ -84,6 +84,7 @@ describe("seed layer", () => {
       ["db", "seed-file-removed", "safe", "db/old.sql: db/old.sql", undefined],
       ["db", "update-data", "needs-action", "db/seed.sql: t", { reason: "one-off fix" }],
       ["db", "row-added", "safe", "db/seed.sql: t", undefined],
+      ["db", "row-removed", "safe", "db/old.sql: o", undefined],
     ]);
     expect(result.findings[0]?.evidence).toEqual([
       { side: "base", ref: "v1", commit: base.commit, path: "db/old.sql" },

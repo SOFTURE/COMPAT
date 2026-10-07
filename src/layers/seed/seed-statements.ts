@@ -5,7 +5,13 @@ import {
   type SqlName,
   unquoteIdentifier,
 } from "../../sql/identifiers.js";
-import { findClosingParen, type SqlDialect, splitStatements, splitTopLevel } from "../../sql/statements.js";
+import {
+  findClosingParen,
+  maskLiterals,
+  type SqlDialect,
+  splitStatements,
+  splitTopLevel,
+} from "../../sql/statements.js";
 
 /**
  * Reads a seed script (a script that runs on every deploy) into the statements that write rows.
@@ -64,7 +70,9 @@ export type SeedStatement =
       text: string;
       line: number;
     }
-  | { kind: "update" | "delete" | "truncate"; table: SqlName; text: string; line: number };
+  | { kind: "update" | "delete" | "truncate"; table: SqlName; text: string; line: number }
+  /** A statement that writes rows in a shape the reader does not know (a CTE, a loop body it cannot reach). */
+  | { kind: "unknown-write"; text: string; line: number };
 
 /** Nested SQL (a `DO` body) is unwrapped at most this deep. */
 const MAX_NESTING = 3;
@@ -90,19 +98,32 @@ const MERGE_CLAUSE =
 const ON_PAIR = new RegExp(`(${IDENT})\\s*\\.\\s*(${IDENT})\\s*=\\s*(${IDENT})\\s*\\.\\s*(${IDENT})`, "g");
 const BEGIN_BLOCK = /^BEGIN\b(?!\s+(?:TRAN|TRANSACTION|DISTRIBUTED)\b)(?:\s+(?:TRY|CATCH)\b)?\s*/i;
 const END_BLOCK: Record<SqlDialect, RegExp> = {
-  postgres: /^END\b(?:\s+IF\b)?\s*/i,
+  postgres: /^END\b(?:\s+(?:IF|LOOP)\b)?\s*/i,
   sqlserver: /^END\b(?:\s+(?:TRY|CATCH)\b)?\s*/i,
 };
 const ELSE = /^ELSE\b\s*/i;
 const ELSIF = /^ELS(?:E\s+)?IF\b/i;
 const IF_NOT_EXISTS = /^IF\s+NOT\s+EXISTS\s*\(/i;
+const LOOP_OPENER = /^(?:WHILE|FOR|FOREACH|LOOP)\b/i;
+/**
+ * Words that start a T-SQL statement at the start of a line. Semicolons are optional in T-SQL, so
+ * a line starting with one of them ends the statement before it. `SET` counts only for session
+ * options and variables, so the `SET` clause of an `UPDATE` on its own line does not split it.
+ */
+const TSQL_LINE_STATEMENT =
+  /^(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|IF|ELSE|WHILE|BEGIN|END|PRINT|DECLARE|EXEC|EXECUTE|RAISERROR|THROW|RETURN|COMMIT|ROLLBACK|GO|SET\s+(?:@|IDENTITY_INSERT\b|NOCOUNT\b|XACT_ABORT\b|ANSI_\w+|QUOTED_IDENTIFIER\b|ARITHABORT\b|LANGUAGE\b|DATEFORMAT\b|DEADLOCK_PRIORITY\b|LOCK_TIMEOUT\b|TRANSACTION\b))\b/i;
+const WRITE_WORD = /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE)\b/i;
+const NOT_A_WRITE = /^(?:GRANT|REVOKE|CREATE|ALTER|DROP|COMMENT|EXPLAIN)\b/i;
 
 /** An open `IF`/`BEGIN` block; `guard` is the normalised `IF NOT EXISTS (...)` condition of a guarding block. */
 type Block = { guard: string | null };
 
 type Piece = { sql: string; line: number };
 
-/** Collapses whitespace outside quotes and drops it around `(`, `)` and `,`, so formatting does not count. */
+/**
+ * Collapses whitespace outside quotes, drops it around `(`, `)` and `,`, and uppercases text outside
+ * quotes, so formatting and keyword case do not count.
+ */
 export function normalizeSql(text: string, dialect: SqlDialect): string {
   let result = "";
   let pendingSpace = false;
@@ -140,7 +161,8 @@ export function normalizeSql(text: string, dialect: SqlDialect): string {
       continue;
     }
     flushSpace(char);
-    result += char;
+    // Keywords and unquoted names are case-insensitive in both dialects.
+    result += char.toUpperCase();
     index += 1;
   }
   return result;
@@ -332,6 +354,15 @@ function readColumns(sql: string, start: number, dialect: SqlDialect): { columns
   };
 }
 
+/** `INSERT ... SELECT ... WHERE NOT EXISTS (...)` whose subquery reads the target table. */
+function isGuardedQuery(query: string, table: SqlName): boolean {
+  const notExists = WHERE_NOT_EXISTS.exec(query);
+  if (!notExists) return false;
+  const name = table.parts[table.parts.length - 1] ?? "";
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^\\w$#@])${escaped}(?:$|[^\\w$#@])`, "i").test(query.slice(notExists.index));
+}
+
 function readInsert(
   piece: Piece,
   match: RegExpExecArray,
@@ -352,7 +383,7 @@ function readInsert(
   const conflict = ON_CONFLICT.exec(tail);
   let mode: ConflictMode = "none";
   if (conflict) mode = (conflict[2] as string).toUpperCase() === "UPDATE" ? "update" : "ignore";
-  else if (guard !== null || (!tuples && WHERE_NOT_EXISTS.test(afterColumns))) mode = "ignore";
+  else if (guard !== null || (!tuples && isGuardedQuery(afterColumns, table))) mode = "ignore";
   if (!tuples) {
     const text = normalizeSql(sql, dialect);
     return {
@@ -509,8 +540,15 @@ function readPiece(reader: Reader, piece: Piece, inlineGuard: string | null = nu
     readPiece(reader, getRest(piece, elseMatch[0].length));
     return;
   }
-  if (/^IF\b/i.test(sql)) {
+  if (/^IF\b/i.test(sql) || (dialect === "sqlserver" && /^WHILE\b/i.test(sql))) {
     readIf(reader, piece);
+    return;
+  }
+  if (dialect === "postgres" && LOOP_OPENER.test(sql)) {
+    const loop = findTopLevelWord(sql, /^LOOP\b/i, dialect);
+    if (loop === -1) return;
+    reader.blocks.push({ guard: null });
+    readPiece(reader, getRest(piece, loop + 4));
     return;
   }
   if (dialect === "postgres") {
@@ -520,14 +558,77 @@ function readPiece(reader: Reader, piece: Piece, inlineGuard: string | null = nu
       return;
     }
   }
+  if (dialect === "sqlserver") {
+    const next = findNextTsqlStatement(sql);
+    if (next !== -1) {
+      readPiece(reader, { sql: sql.slice(0, next).trimEnd(), line: piece.line }, inlineGuard);
+      readPiece(reader, getRest(piece, next));
+      return;
+    }
+  }
   const write = readWrite(piece, inlineGuard ?? getGuard(reader), dialect);
   if (write) reader.out.push(write);
+  else if (
+    !NOT_A_WRITE.test(sql) &&
+    WRITE_WORD.test(maskLiterals(sql, dialect).replace(/\bFOR\s+UPDATE\b/gi, ""))
+  ) {
+    reader.out.push({ kind: "unknown-write", text: normalizeSql(sql, dialect), line: piece.line });
+  }
+}
+
+/**
+ * Offset of the next T-SQL statement inside `sql` (a line starting with a statement word, outside
+ * parentheses, quotes and `CASE ... END`, not right after a `MERGE` clause's `THEN`), or -1.
+ */
+function findNextTsqlStatement(sql: string): number {
+  let depth = 0;
+  let caseDepth = 0;
+  let isLineStart = false;
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index] as string;
+    const quotedEnd = skipQuoted(sql, index, "sqlserver");
+    if (quotedEnd !== -1) {
+      index = quotedEnd;
+      isLineStart = false;
+      continue;
+    }
+    if (char === "\n") {
+      isLineStart = true;
+      index += 1;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+    const rest = sql.slice(index);
+    if (
+      isLineStart &&
+      depth === 0 &&
+      caseDepth === 0 &&
+      TSQL_LINE_STATEMENT.test(rest) &&
+      !/\bTHEN\s*$/i.test(sql.slice(0, index))
+    ) {
+      return index;
+    }
+    isLineStart = false;
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (!/[\w$#@]/.test(sql[index - 1] ?? " ")) {
+      if (/^CASE\b/i.test(rest)) caseDepth += 1;
+      else if (caseDepth > 0 && /^END\b/i.test(rest)) caseDepth -= 1;
+    }
+    index += 1;
+  }
+  return -1;
 }
 
 function readIf(reader: Reader, piece: Piece): void {
   const { dialect } = reader;
   const { sql } = piece;
   let conditionEnd: number;
+  const isWhile = /^WHILE\b/i.test(sql);
   let guard: string | null = null;
   const notExists = IF_NOT_EXISTS.exec(sql);
   if (notExists) {
@@ -541,7 +642,7 @@ function readIf(reader: Reader, piece: Piece): void {
       guard = normalizeSql(sql.slice(open, conditionEnd), dialect);
     }
   } else {
-    conditionEnd = 2;
+    conditionEnd = isWhile ? 5 : 2;
   }
   if (dialect === "postgres") {
     const then = findTopLevelWord(sql.slice(conditionEnd), /^THEN\b/i, dialect);
