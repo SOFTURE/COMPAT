@@ -27,7 +27,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 | --- | --- | --- | --- | --- | --- |
 | **CMP-1** | `backward-compat-checker` | `softure-compat check` runs end to end with the finding model, git refs, reports, exit codes and the `openapi` layer | — | autonomous | done |
 | **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | done |
-| **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | ready |
+| **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | done |
 | **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | ready |
 | **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | ready |
 | **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | ready |
@@ -66,7 +66,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-3: Seed layer
 - **Change ID:** `seed-layer`
-- **Status:** ready
+- **Status:** done
 - **Outcome:** seed files are diffed statement by statement; destructive or overwriting statements are
   `needs-action`, new upserted rows are `safe`.
 - **Prerequisites:** CMP-2 (statement splitter).
@@ -115,3 +115,4 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 ## Done
 - **CMP-1** `backward-compat-checker`: core CLI (config, `RefTree`, finding model, gate, Markdown/JSON reports, exit codes) and the `openapi` layer on oasdiff, with CI; archived in `archive/2026-10-07-backward-compat-checker/`
 - **CMP-2** `sql-migrations-layer`: `sql-migrations` layer (folder and EF Core idempotent sources, Postgres and SQL Server, 26 rules, accept allowlist), shared SQL scanner in `src/sql/` for CMP-3, UTF-16 decoding in `RefTree`; archived in `archive/2026-10-07-sql-migrations-layer/`
+- **CMP-3** `seed-layer`: `seed` layer (seed files diffed per table and row key across a source's files; conflict guards, `MERGE`, `IF NOT EXISTS` blocks, `DO` bodies and T-SQL without semicolons; 14 finding ids, accept allowlist); archived in `archive/2026-10-07-seed-layer/`
