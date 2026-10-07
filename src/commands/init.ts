@@ -28,6 +28,8 @@ export type StarterLayer = {
 
 const IGNORED_SEGMENTS = new Set(["node_modules", "bin", "obj", "dist"]);
 const OPENAPI_GLOBS = ["**/{openapi,swagger}*.{json,yaml,yml}"];
+/** Packages that serve an OpenAPI spec from a running ASP.NET app. */
+const RUNTIME_SPEC_PACKAGE = /Include="(FastEndpoints\.Swagger|NSwag\.AspNetCore|Swashbuckle\.AspNetCore)"/i;
 const EF_HISTORY_TABLE = "__EFMigrationsHistory";
 const DRIZZLE_POSTGRES_DIALECTS = ["postgresql", "pg"];
 const ENUM_CONVENTION = "ConfigureEnum<";
@@ -69,7 +71,31 @@ function disabled(name: string, example: Record<string, unknown>, why: string): 
 async function detectOpenapi(tree: RefTree): Promise<Result<StarterLayer>> {
   const specs = await listSourceFiles(tree, OPENAPI_GLOBS);
   if (!specs.ok) return specs;
-  if (specs.value.length === 0) {
+  if (specs.value.length === 0) return detectServedOpenapi(tree);
+  const used = new Set<string>();
+  const apis = specs.value.map((path) => {
+    const fileName = stripExtension(path);
+    const isGenericName = /^(openapi|swagger)$/i.test(fileName);
+    const wanted = isGenericName && dirname(path) !== "." ? basename(dirname(path)) : fileName;
+    return { name: takeUniqueName(wanted, used), source: { kind: "file", path } };
+  });
+  return ok({ name: "openapi", config: { apis }, summary: specs.value.join(", "), enabled: true });
+}
+
+/**
+ * No committed spec: ASP.NET projects that serve their spec at runtime get a disabled `serve`
+ * source each, since the command line and URL usually need a review.
+ */
+async function detectServedOpenapi(tree: RefTree): Promise<Result<StarterLayer>> {
+  const projects = await listSourceFiles(tree, ["**/*.csproj"]);
+  if (!projects.ok) return projects;
+  const served: string[] = [];
+  for (const path of projects.value) {
+    const text = await tree.readFile(path);
+    if (!text.ok) return text;
+    if (text.value !== null && RUNTIME_SPEC_PACKAGE.test(text.value)) served.push(path);
+  }
+  if (served.length === 0) {
     return ok(
       disabled(
         "openapi",
@@ -86,13 +112,23 @@ async function detectOpenapi(tree: RefTree): Promise<Result<StarterLayer>> {
     );
   }
   const used = new Set<string>();
-  const apis = specs.value.map((path) => {
-    const fileName = stripExtension(path);
-    const isGenericName = /^(openapi|swagger)$/i.test(fileName);
-    const wanted = isGenericName && dirname(path) !== "." ? basename(dirname(path)) : fileName;
-    return { name: takeUniqueName(wanted, used), source: { kind: "file", path } };
-  });
-  return ok({ name: "openapi", config: { apis }, summary: specs.value.join(", "), enabled: true });
+  const apis = served.map((path) => ({
+    name: takeUniqueName(stripExtension(path), used),
+    source: {
+      kind: "serve",
+      run: `dotnet run --no-launch-profile --project ${path}`,
+      url: "http://127.0.0.1:{port}/swagger/v1/swagger.json",
+      env: { ASPNETCORE_URLS: "http://127.0.0.1:{port}", ASPNETCORE_ENVIRONMENT: "Development" },
+      timeoutSeconds: 300,
+    },
+  }));
+  return ok(
+    disabled(
+      "openapi",
+      { apis },
+      `${served.join(", ")} serve the spec at runtime; check the serve sources (URL, headers), then enable the layer`,
+    ),
+  );
 }
 
 type SqlFile = { path: string; text: string };

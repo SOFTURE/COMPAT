@@ -4,6 +4,7 @@ import type { RefTree } from "../../git/ref-tree.js";
 import { err, ok, type Result } from "../../result.js";
 import type { SpecSource } from "./config.js";
 import { redactUrl, resolveInsideTree } from "./safe-path.js";
+import { resolveServeSpec } from "./serve-spec.js";
 import { runTreeCommand } from "./tree-command.js";
 
 const URL_TIMEOUT_MS = 30_000;
@@ -37,6 +38,8 @@ export async function resolveSpec(options: ResolveSpecOptions): Promise<Result<R
       return resolveCommandSpec(options, source);
     case "url":
       return resolveUrlSpec(options, source[options.tree.side]);
+    case "serve":
+      return resolveServedSpec(options, source);
   }
 }
 
@@ -75,6 +78,17 @@ async function resolveCommandSpec(
     return err(`export command at ${tree.side} (${tree.ref}) succeeded but did not write ${source.output}`);
   }
   return ok({ status: "found", file: output.value.path, root: root.value, displayPath: source.output });
+}
+
+async function resolveServedSpec(
+  options: ResolveSpecOptions,
+  source: Extract<SpecSource, { kind: "serve" }>,
+): Promise<Result<ResolvedSpec>> {
+  const root = await options.tree.materialize();
+  if (!root.ok) return root;
+  const served = await resolveServeSpec({ ...options, source, root: root.value });
+  if (!served.ok) return served;
+  return ok({ status: "found", file: served.value.file, root: null, displayPath: served.value.displayPath });
 }
 
 async function resolveUrlSpec(options: ResolveSpecOptions, url: string): Promise<Result<ResolvedSpec>> {

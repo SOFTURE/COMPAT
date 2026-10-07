@@ -12,6 +12,42 @@ const httpUrl = z.url({ protocol: /^https?$/ });
 
 const timeoutSeconds = z.number().int().positive().max(7200);
 
+/** The placeholder replaced by the free port picked for each side of a `serve` source. */
+export const PORT_PLACEHOLDER = "{port}";
+
+const isHttpUrl = (value: string): boolean => {
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+};
+
+/** An http(s) URL that may contain `{port}`. */
+const portUrl = z
+  .string()
+  .refine(
+    (url) => isHttpUrl(url.replaceAll(PORT_PLACEHOLDER, "1")),
+    "must be an http(s) URL; '{port}' is allowed",
+  );
+
+const serveSourceSchema = z.strictObject({
+  kind: z.literal("serve"),
+  /** Shell command that starts the app and keeps running. */
+  run: z.string().min(1),
+  /** Where the running app serves the spec. */
+  url: portUrl,
+  /** Polled until 2xx before `url`, for example a health check. */
+  ready: portUrl.optional(),
+  env: z
+    .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name"), z.string())
+    .optional(),
+  /** Sent with every request; `${VAR}` reads the environment. Values are never printed. */
+  headers: z.record(z.string().min(1), z.string()).optional(),
+  /** From the start of the app until the spec is fetched. */
+  timeoutSeconds: timeoutSeconds.optional(),
+});
+
 export const specSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("file"), path: relativePath }),
   z.strictObject({
@@ -21,9 +57,11 @@ export const specSourceSchema = z.discriminatedUnion("kind", [
     timeoutSeconds: timeoutSeconds.optional(),
   }),
   z.strictObject({ kind: z.literal("url"), base: httpUrl, revision: httpUrl }),
+  serveSourceSchema,
 ]);
 
 export type SpecSource = z.infer<typeof specSourceSchema>;
+export type ServeSource = z.infer<typeof serveSourceSchema>;
 
 export const acceptEntrySchema = z.strictObject({
   /** oasdiff check id, for example `request-property-became-not-nullable`. */
