@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { err, ok, type Result } from "../result.js";
-import { killGroup, signalGroup, trackProcessGroup, untrackProcessGroup } from "./process-groups.js";
+import {
+  killGroup,
+  signalGroup,
+  trackProcessGroup,
+  untrackProcessGroup,
+  waitForGroupExit,
+} from "./process-groups.js";
 
 export type BackgroundProcessOptions = {
   /** Shell command line. */
@@ -20,11 +26,13 @@ export type BackgroundProcess = {
   getOutput(): string;
   /** `null` while the process runs. */
   getExit(): BackgroundExit | null;
-  /** Stops the process and everything in its group; safe to call more than once. */
+  /** Stops the process and everything in its group and resolves once they are gone; safe to call more than once. */
   stop(): Promise<void>;
 };
 
 const DEFAULT_STOP_GRACE_MS = 3_000;
+/** How long `stop()` waits for the killed group to disappear; a member stuck in the kernel must not hang the CLI. */
+const GROUP_EXIT_TIMEOUT_MS = 2_000;
 /** Output kept per process; a chatty app must not grow the CLI's memory without bound. */
 const MAX_OUTPUT_CHARS = 64_000;
 
@@ -80,6 +88,7 @@ export function startBackgroundProcess(
         // Also when the leader is gone: a grandchild may still hold the port.
         killGroup(pid);
         if (exit === null) await exited;
+        await waitForGroupExit(pid, GROUP_EXIT_TIMEOUT_MS);
         untrackProcessGroup(pid);
         child.stdout.destroy();
         child.stderr.destroy();
