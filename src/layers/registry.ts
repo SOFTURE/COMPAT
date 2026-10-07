@@ -1,4 +1,5 @@
 import { configLayer } from "./config/config-layer.js";
+import { dependenciesLayer } from "./dependencies/dependencies-layer.js";
 import type { Layer } from "./layer.js";
 import { openapiLayer } from "./openapi/openapi-layer.js";
 import { persistedEnumsLayer } from "./persisted-enums/persisted-enums-layer.js";
@@ -12,4 +13,5 @@ export const LAYERS: Layer[] = [
   seedLayer,
   persistedEnumsLayer,
   configLayer,
+  dependenciesLayer,
 ];
