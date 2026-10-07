@@ -46,18 +46,81 @@ function checkPattern(source: { pattern: string; flags: string }, context: z.Ref
   if ("error" in compiled) context.addIssue({ code: "custom", path: ["pattern"], message: compiled.error });
 }
 
-export const codeSourceSchema = z
+export const regexCodeSourceSchema = z
   .strictObject({
+    /** Optional, so configs written before `composed` sources keep working. */
+    kind: z.literal("regex").default("regex"),
     name,
     /** Server files that declare the codes, read at the base and the revision. */
     files: globs,
     /** Regex whose named group `code` captures one error code. */
     pattern: z.string().min(1),
     flags,
+    /** `false` for a source that only feeds a `composed` source: read, never reported, may capture nothing. */
+    report: z.boolean().default(true),
   })
   .superRefine(checkPattern);
 
+export type RegexCodeSource = z.infer<typeof regexCodeSourceSchema>;
+
+const PLACEHOLDER = /\{([A-Za-z0-9_-]+)\}/g;
+
+/** The placeholder names of a composed template, in order of appearance. */
+export function getTemplateParts(template: string): string[] {
+  return [...template.matchAll(PLACEHOLDER)].map((match) => match[1] as string);
+}
+
+export const composedCodeSourceSchema = z
+  .strictObject({
+    kind: z.literal("composed"),
+    name,
+    /** The code with `{part}` placeholders, for example `{entity}Repository.NotFound`. */
+    template: z.string().min(1),
+    /** Each placeholder's `regex` code source; every code it captures at a ref is one value of the part. */
+    parts: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), name),
+  })
+  .superRefine((source, context) => {
+    const used = new Set(getTemplateParts(source.template));
+    if (used.size === 0) {
+      context.addIssue({ code: "custom", path: ["template"], message: "must contain a {part} placeholder" });
+    }
+    for (const part of used) {
+      if (!Object.hasOwn(source.parts, part)) {
+        context.addIssue({ code: "custom", path: ["parts"], message: `placeholder {${part}} has no part` });
+      }
+    }
+    for (const part of Object.keys(source.parts)) {
+      if (!used.has(part)) {
+        context.addIssue({ code: "custom", path: ["parts", part], message: "is not used in the template" });
+      }
+    }
+  });
+
+export type ComposedCodeSource = z.infer<typeof composedCodeSourceSchema>;
+
+export const codeSourceSchema = z.union([regexCodeSourceSchema, composedCodeSourceSchema]);
+
 export type CodeSource = z.infer<typeof codeSourceSchema>;
+
+/** Every composed part must name a `regex` source declared in the same `codes` list. */
+function checkComposedParts(codes: CodeSource[], context: z.RefinementCtx): void {
+  const kinds = new Map(codes.map((source) => [source.name, source.kind]));
+  for (const [position, source] of codes.entries()) {
+    if (source.kind !== "composed") continue;
+    for (const [part, partSource] of Object.entries(source.parts)) {
+      const kind = kinds.get(partSource);
+      if (kind === "regex") continue;
+      context.addIssue({
+        code: "custom",
+        path: [position, "parts", part],
+        message:
+          kind === undefined
+            ? `names "${partSource}", which is not a code source`
+            : `names "${partSource}", a composed source; parts read regex sources only`,
+      });
+    }
+  }
+}
 
 export const errorCodeClientSchema = z
   .strictObject({
@@ -87,7 +150,11 @@ const uniqueNames = (entries: { name: string }[]) =>
   new Set(entries.map((entry) => entry.name)).size === entries.length;
 
 export const errorCodesConfigSchema = z.strictObject({
-  codes: z.array(codeSourceSchema).min(1).refine(uniqueNames, "code source names must be unique"),
+  codes: z
+    .array(codeSourceSchema)
+    .min(1)
+    .refine(uniqueNames, "code source names must be unique")
+    .superRefine(checkComposedParts),
   clients: z.array(errorCodeClientSchema).min(1).refine(uniqueNames, "client names must be unique"),
   accept: z.array(errorCodeAcceptSchema).optional(),
 });

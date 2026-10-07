@@ -474,7 +474,8 @@ both refs and each client's translation map at the client's live refs.
 
 | Key | Meaning |
 | --- | --- |
-| `codes[]` | `{ name, files, pattern, flags? }`: server files read at the base and the revision; the named group `code` of `pattern` captures one code |
+| `codes[]` | `{ kind?: "regex", name, files, pattern, flags?, report? }`: server files read at the base and the revision; the named group `code` of `pattern` captures one code; `report: false` for a source that only feeds a `composed` one |
+| `codes[]` | `{ kind: "composed", name, template, parts }`: codes built at runtime, see below |
 | `clients[]` | `{ name, refs, files, pattern, flags? }`: the client's translation map files, read at every live ref; the named group `code` captures one translated code |
 | `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags` and `workflowRuns` selectors) |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
@@ -490,6 +491,25 @@ whose every live ref already translates a new code gets no finding. The layer fa
 no file or captures no code at the revision, a client ref missing from the clone, or a map file that is absent or
 yields no code at a client ref fails the layer. Which operations return a code is not checked yet, so a code counts
 for every client even when only operations that client never calls return it.
+
+Some codes are built at runtime, for example a generic `RepositoryErrors<TEntity>.NotFound` declared as
+`$"{typeof(TEntity).Name}Repository.NotFound"`. A `composed` source builds those codes from what `regex` sources
+capture, and they count like literal ones:
+
+```json
+{
+  "codes": [
+    { "name": "literal", "files": ["src/**/*.cs"], "pattern": "static readonly Error \\w+ = new\\(\\s*\"(?<code>[\\w.]+)\"" },
+    { "kind": "regex", "name": "repository-entities", "files": ["src/**/*.cs"], "pattern": "RepositoryErrors<\\s*(?<code>(?!TEntity)\\w+)\\s*>", "report": false },
+    { "kind": "composed", "name": "repository-not-found", "template": "{entity}Repository.NotFound", "parts": { "entity": "repository-entities" } }
+  ]
+}
+```
+
+Every `{part}` of the template names a `regex` code source in `parts`; the source gives one code per combination of
+the codes its parts capture at that ref, and fails above 1000 of them. Its evidence points at the usage that supplied
+the last part in template order (`RepositoryErrors<FeatureFlag>`). A `report: false` source gives no finding and may
+capture nothing at a ref; the `composed` source fails when it builds no code at the revision.
 
 ### sql-migrations
 

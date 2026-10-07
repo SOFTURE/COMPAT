@@ -18,7 +18,7 @@ describe("error-codes config", () => {
       clients: [{ ...client, refs: { tags: "mobile-*", since: "2.0.1" }, flags: "i" }],
       accept: [{ code: "Shop.Cart.NotFound", client: "mobile", reason: "web only" }],
     });
-    expect(parsed.codes[0]?.flags).toBe("");
+    expect(parsed.codes[0]).toMatchObject({ flags: "" });
     expect(parsed.clients[0]?.flags).toBe("i");
   });
 
@@ -47,6 +47,40 @@ describe("error-codes config", () => {
     ]);
     expect(getIssues({ codes: [source], clients: [] })).toEqual([
       "clients: Too small: expected array to have >=1 items",
+    ]);
+  });
+
+  it("defaults a code source to kind regex with report true", () => {
+    const parsed = errorCodesConfigSchema.parse({ codes: [source], clients: [client] });
+    expect(parsed.codes[0]).toMatchObject({ kind: "regex", report: true });
+  });
+
+  it("accepts a composed source and rejects parts that do not match a regex source or the template", () => {
+    const entities = { ...source, name: "entities", report: false };
+    const composed = {
+      kind: "composed",
+      name: "not-found",
+      template: "{entity}.NotFound",
+      parts: { entity: "entities" },
+    };
+    expect(getIssues({ codes: [entities, composed], clients: [client] })).toEqual([]);
+    expect(
+      getIssues({ codes: [entities, { ...composed, parts: { entity: "missing" } }], clients: [client] }),
+    ).toEqual(['codes.1.parts.entity: names "missing", which is not a code source']);
+    expect(
+      getIssues({
+        codes: [entities, composed, { ...composed, name: "nested", parts: { entity: "not-found" } }],
+        clients: [client],
+      }),
+    ).toEqual(['codes.2.parts.entity: names "not-found", a composed source; parts read regex sources only']);
+    expect(
+      getIssues({
+        codes: [entities, { ...composed, template: "{kind}.NotFound", parts: { entity: "entities" } }],
+        clients: [client],
+      }),
+    ).toEqual([
+      "codes.1.parts: placeholder {kind} has no part",
+      "codes.1.parts.entity: is not used in the template",
     ]);
   });
 

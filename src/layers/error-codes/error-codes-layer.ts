@@ -8,19 +8,24 @@ import {
   type ClientCodes,
   type ClientRefCodes,
   type CodeDeclaration,
+  type CodeSet,
   classifyErrorCodes,
 } from "./classify.js";
+import { composeCodes } from "./compose-codes.js";
 import {
-  type CodeSource,
+  type ComposedCodeSource,
   compileCodePattern,
   ERROR_CODES_LAYER,
   type ErrorCodeClient,
   type ErrorCodesConfig,
   errorCodesConfigSchema,
+  type RegexCodeSource,
 } from "./config.js";
 import { readCodes } from "./read-codes.js";
 
 type FileCodes = { path: string; codes: ReturnType<typeof readCodes> };
+
+type CodeSides = { base: Map<string, CodeDeclaration>; revision: Map<string, CodeDeclaration> };
 
 export const errorCodesLayer = defineLayer({
   name: ERROR_CODES_LAYER,
@@ -32,9 +37,30 @@ export const errorCodesLayer = defineLayer({
     const base = new Map<string, CodeDeclaration>();
     const revision = new Map<string, CodeDeclaration>();
     let canCompare = true;
+    const found = { base: new Map<string, CodeSet>(), revision: new Map<string, CodeSet>() };
     // Every source and client is read even when one fails, so the others still reach the report.
     for (const source of context.config.codes) {
+      if (source.kind !== "regex") continue;
       const outcome = await readSource(context, source);
+      if (!outcome.ok) {
+        errors.push(`code source "${source.name}": ${outcome.error}`);
+        canCompare = false;
+        continue;
+      }
+      found.base.set(source.name, outcome.value.base);
+      found.revision.set(source.name, outcome.value.revision);
+      if (source.report) {
+        addFirst(base, outcome.value.base);
+        addFirst(revision, outcome.value.revision);
+      }
+      notes.push(
+        `code source "${source.name}": ${outcome.value.base.size} code(s) at base, ${outcome.value.revision.size} at revision` +
+          (source.report ? "" : " (a part, not reported)"),
+      );
+    }
+    for (const source of context.config.codes) {
+      if (source.kind !== "composed") continue;
+      const outcome = composeSource(context, source, found);
       if (!outcome.ok) {
         errors.push(`code source "${source.name}": ${outcome.error}`);
         canCompare = false;
@@ -119,8 +145,8 @@ function getRegex(entry: { pattern: string; flags: string }): RegExp {
 
 async function readSource(
   context: LayerContext<ErrorCodesConfig>,
-  source: CodeSource,
-): Promise<Result<{ base: Map<string, CodeDeclaration>; revision: Map<string, CodeDeclaration> }>> {
+  source: RegexCodeSource,
+): Promise<Result<CodeSides>> {
   const regex = getRegex(source);
   const [before, after] = await Promise.all([
     readFiles(context.base, source.files, regex),
@@ -132,10 +158,27 @@ async function readSource(
   if (after.value.length === 0)
     return err(`no file matches ${source.files.join(", ")} at revision ${revision.ref}`);
   const declarations = toDeclarations(revision, source.name, after.value);
-  if (declarations.size === 0) {
+  // A part may capture nothing at a ref; the composed source checks the codes it builds.
+  if (declarations.size === 0 && source.report) {
     return err(`pattern captured no code in ${after.value.length} file(s) at revision ${revision.ref}`);
   }
   return ok({ base: toDeclarations(context.base, source.name, before.value), revision: declarations });
+}
+
+/** Builds the codes of a composed source at both refs from what its part sources captured. */
+function composeSource(
+  context: LayerContext<ErrorCodesConfig>,
+  source: ComposedCodeSource,
+  found: Record<"base" | "revision", ReadonlyMap<string, CodeSet>>,
+): Result<CodeSides> {
+  const failed = Object.values(source.parts).find((part) => !found.revision.has(part));
+  if (failed !== undefined) return err(`skipped because part source "${failed}" failed`);
+  const base = composeCodes(source, found.base);
+  if (!base.ok) return err(`at ${context.base.ref} ${base.error}`);
+  const revision = composeCodes(source, found.revision);
+  if (!revision.ok) return err(`at ${context.revision.ref} ${revision.error}`);
+  if (revision.value.size === 0) return err(`builds no code at revision ${context.revision.ref}`);
+  return ok({ base: base.value, revision: revision.value });
 }
 
 async function readClient(
