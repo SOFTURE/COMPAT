@@ -1,13 +1,15 @@
-import { chmodSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { openRefTree, type RefTree } from "../../../src/git/ref-tree.js";
+import { getAssetSuffix } from "../../../src/layers/openapi/oasdiff-download.js";
 import { openapiLayer } from "../../../src/layers/openapi/openapi-layer.js";
 import type { LayerResult } from "../../../src/model/finding.js";
 import { createRepo, type TestRepo } from "../../helpers/git-repo.js";
 import { FAKE_OASDIFF } from "../../helpers/oasdiff.js";
+import { createTarGz } from "../../helpers/tar.js";
 
 let repo: TestRepo;
 let tempRoot: string;
@@ -52,30 +54,14 @@ function run(config: Record<string, unknown>, env: NodeJS.ProcessEnv = {}): Prom
   });
 }
 
+const FAKE_NOTE = `oasdiff oasdiff version fake at ${FAKE_OASDIFF} (from layers.openapi.oasdiff.path)`;
+
 const changes = (items: object[]) => ({
   FAKE_OASDIFF_MODE: "changes",
   FAKE_OASDIFF_OUTPUT: JSON.stringify(items),
 });
 
 describe("openapi layer", () => {
-  it("is skipped with an install hint when oasdiff is not on PATH", async () => {
-    const result = await openapiLayer.run({
-      config: { apis: [fileApi("b2c", "api/b2c.yaml")] },
-      base,
-      revision,
-      repoDir: repo.dir,
-      tempDir: tempRoot,
-      env: { ...process.env, PATH: "/nonexistent", SOFTURE_COMPAT_OASDIFF: undefined },
-      log: () => {},
-    });
-    expect(result).toEqual({
-      layer: "openapi",
-      status: "skipped",
-      reason:
-        "oasdiff not found on PATH (set layers.openapi.oasdiff.path or SOFTURE_COMPAT_OASDIFF, or install it with `go install github.com/oasdiff/oasdiff@v1.33.0`)",
-    });
-  });
-
   it("fails when a configured oasdiff path does not exist", async () => {
     const result = await run({
       apis: [fileApi("b2c", "api/b2c.yaml")],
@@ -130,7 +116,7 @@ describe("openapi layer", () => {
       status: "failed",
       error: 'API "b2b": spec api/b2b.yaml exists at neither ref',
       findings: [expect.objectContaining({ id: "endpoint-removed", class: "breaking", scope: "b2c" })],
-      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
+      notes: [FAKE_NOTE],
     });
   });
 
@@ -144,7 +130,12 @@ describe("openapi layer", () => {
       env: { ...process.env, SOFTURE_COMPAT_OASDIFF: FAKE_OASDIFF, ...changes([]) },
       log: () => {},
     });
-    expect(result.status).toBe("ran");
+    expect(result).toEqual({
+      layer: "openapi",
+      status: "ran",
+      findings: [],
+      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF} (from SOFTURE_COMPAT_OASDIFF)`],
+    });
   });
 
   it("fails naming the API when oasdiff exits non-zero", async () => {
@@ -154,7 +145,7 @@ describe("openapi layer", () => {
       status: "failed",
       error: 'API "b2c": oasdiff changelog exited 3: Error: failed to load base spec',
       findings: [],
-      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
+      notes: [FAKE_NOTE],
     });
   });
 
@@ -165,7 +156,7 @@ describe("openapi layer", () => {
       status: "failed",
       error: 'API "b2c": oasdiff changelog printed output that is not JSON',
       findings: [],
-      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
+      notes: [FAKE_NOTE],
     });
   });
 
@@ -195,7 +186,7 @@ describe("openapi layer", () => {
       ["endpoint-added", "safe", undefined],
     ]);
     expect(result.notes).toEqual([
-      `oasdiff oasdiff version fake at ${FAKE_OASDIFF}`,
+      FAKE_NOTE,
       'API "b2c": accept entry endpoint-removed on GET /a accepted 1 finding(s)',
       'API "b2c": accept entry never-seen matched nothing; remove it if the change is gone',
     ]);
@@ -234,7 +225,103 @@ describe("openapi layer", () => {
       status: "failed",
       error: 'API "b2b": spec api/b2b.yaml exists at neither ref',
       findings: [],
-      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF}`],
+      notes: [FAKE_NOTE],
     });
   });
+});
+
+describe("openapi layer without oasdiff on PATH", () => {
+  const suffix = getAssetSuffix(process.platform, process.arch);
+  const binaryName = process.platform === "win32" ? "oasdiff.exe" : "oasdiff";
+  let cacheDir: string;
+
+  beforeEach(async () => {
+    cacheDir = await mkdtemp(join(tmpdir(), "compat-openapi-cache-"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await rm(cacheDir, { recursive: true, force: true });
+  });
+
+  function runWithoutOasdiff(config: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = {}) {
+    return openapiLayer.run({
+      config: { apis: [fileApi("b2c", "api/b2c.yaml")], ...config },
+      base,
+      revision,
+      repoDir: repo.dir,
+      tempDir: tempRoot,
+      env: {
+        ...process.env,
+        PATH: "/nonexistent",
+        SOFTURE_COMPAT_OASDIFF: undefined,
+        SOFTURE_COMPAT_NO_DOWNLOAD: undefined,
+        SOFTURE_COMPAT_CACHE_DIR: cacheDir,
+        ...env,
+      },
+      log: () => {},
+    });
+  }
+
+  const skippedReason =
+    "oasdiff not found on PATH and downloading is turned off (set layers.openapi.oasdiff.path or SOFTURE_COMPAT_OASDIFF, or install it with `go install github.com/oasdiff/oasdiff@v1.33.0`)";
+
+  it("is skipped with an install hint when downloading is turned off in the config", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    expect(await runWithoutOasdiff({ oasdiff: { download: false } })).toEqual({
+      layer: "openapi",
+      status: "skipped",
+      reason: skippedReason,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("is skipped when SOFTURE_COMPAT_NO_DOWNLOAD is set", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    expect(await runWithoutOasdiff({}, { SOFTURE_COMPAT_NO_DOWNLOAD: "1" })).toEqual({
+      layer: "openapi",
+      status: "skipped",
+      reason: skippedReason,
+    });
+  });
+
+  it.runIf(suffix !== undefined)(
+    "fails, never passes, when the downloaded archive is tampered with",
+    async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(new Uint8Array(createTarGz({ oasdiff: "#!/bin/sh\necho evil\n" })))),
+      );
+      const result = await runWithoutOasdiff();
+      expect(result).toEqual({
+        layer: "openapi",
+        status: "failed",
+        error: expect.stringContaining("failed the checksum check"),
+        findings: [],
+        notes: [],
+      });
+      expect(existsSync(join(cacheDir, "oasdiff"))).toBe(false);
+    },
+  );
+
+  it.runIf(suffix !== undefined && process.platform !== "win32")(
+    "uses the cached pinned release without network access",
+    async () => {
+      const cached = join(cacheDir, "oasdiff", "1.33.0", suffix ?? "", binaryName);
+      await mkdir(dirname(cached), { recursive: true });
+      await copyFile(FAKE_OASDIFF, cached);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      // The fake is a node script; PATH must still find node for its shebang.
+      const result = await runWithoutOasdiff({}, { PATH: dirname(process.execPath), ...changes([]) });
+      expect(result).toEqual({
+        layer: "openapi",
+        status: "ran",
+        findings: [],
+        notes: [`oasdiff oasdiff version fake at ${cached} (pinned release from the cache)`],
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
 });
