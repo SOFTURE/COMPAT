@@ -1,10 +1,11 @@
 import { openRefTree, type RefTree } from "../../git/ref-tree.js";
 import type { Finding, LayerResult } from "../../model/finding.js";
+import { resolveRefList } from "../../resolve/ref-list.js";
+import type { ResolvedRef } from "../../resolve/resolve-ref.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer, type FindingRevision, type LayerContext } from "../layer.js";
 import { OPENAPI_LAYER } from "../openapi/classify.js";
 import { PERSISTED_ENUMS_LAYER } from "../persisted-enums/persisted-enums-layer.js";
-import { resolveClientRefs } from "./client-refs.js";
 import {
   CLIENT_USAGE_LAYER,
   type ClientConfig,
@@ -114,18 +115,29 @@ async function readClient(
   client: ClientConfig,
   targets: BranchTarget[],
 ): Promise<Result<ClientOutcome>> {
-  const refs = await resolveClientRefs(client.refs, { repoDir: context.repoDir, env: context.env });
+  const refs = await resolveRefList(client.refs, {
+    repoDir: context.repoDir,
+    env: context.env,
+    fetch: context.fetch,
+  });
   if (!refs.ok) return refs;
   const usages: ClientRefUsage[] = [];
   const notes: string[] = [];
-  for (const ref of refs.value) {
+  for (const { ref, commit, resolver } of refs.value) {
     const tree = await openRefTree({
       repoDir: context.repoDir,
-      ref,
+      ref: commit ?? ref,
+      label: ref,
       side: "base",
       tempRoot: context.tempDir,
     });
-    if (!tree.ok) return err(`${tree.error}; fetch the client refs (actions/checkout with fetch-depth: 0)`);
+    if (!tree.ok) {
+      const cause =
+        resolver === undefined
+          ? tree.error
+          : `${resolver} resolved to ${ref} (${commit ?? ref}), which is not in the local clone`;
+      return err(`${cause}; fetch the client refs (actions/checkout with fetch-depth: 0)`);
+    }
     const usage = await readClientRef(tree.value, client, targets);
     if (!usage.ok) return err(`${ref}: ${usage.error}`);
     usages.push(usage.value.usage);
@@ -134,8 +146,20 @@ async function readClient(
   const counts = usages.map((usage) => usage.model.operations.length).join("/");
   notes.unshift(
     `client "${client.name}" (API "${client.api}"): ${formatRefs(usages)}; ${counts} operation(s) read`,
+    ...formatResolvers(client.name, refs.value),
   );
   return ok({ usages, notes });
+}
+
+/** One note per resolver of a client, naming the refs it resolved to: `client "web": github-deployment:prod → 2.3.5`. */
+export function formatResolvers(client: string, refs: readonly ResolvedRef[]): string[] {
+  const byResolver = new Map<string, string[]>();
+  for (const { ref, resolver } of refs) {
+    if (resolver !== undefined) byResolver.set(resolver, [...(byResolver.get(resolver) ?? []), ref]);
+  }
+  return [...byResolver].map(
+    ([resolver, resolved]) => `client "${client}": ${resolver} → ${resolved.join(", ")}`,
+  );
 }
 
 async function readClientRef(
