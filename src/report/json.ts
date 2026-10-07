@@ -10,8 +10,18 @@ export function renderJson(report: Report): string {
     revision: report.revision,
     failOn: report.failOn,
     allowIncomplete: report.allowIncomplete,
+    required: report.required,
     gate: report.gate,
-    layers: report.layers.map((result) => ({ ...result, verdict: getLayerVerdict(result) })),
+    layers: [
+      ...report.layers.map((result) => ({ ...result, verdict: getLayerVerdict(result) })),
+      ...report.inactive.map(({ layer, status }) => ({
+        layer,
+        status,
+        verdict: status,
+        findings: [],
+        notes: [],
+      })),
+    ],
   };
   return `${JSON.stringify(document, null, 2)}\n`;
 }
