@@ -34,7 +34,7 @@ opens.
 | ID | Change | Outcome | Depends on | Mode | Status |
 | --- | --- | --- | --- | --- | --- |
 | **CMP-7** | `seed-silent-writes` | seed writes inside dynamic SQL are diffed; `COPY` and unreadable dynamic SQL are reported instead of silent | — | autonomous | done |
-| **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | new |
+| **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | done |
 | **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | new |
 | **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | new |
 | **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | new |
@@ -62,7 +62,7 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ### CMP-8: Compose scanning gaps
 - **Change ID:** `compose-scanning-gaps`
-- **Status:** new
+- **Status:** done
 - **Outcome:** `${VAR}` inside block scalars (also after ` #`), pass-through `environment: [KEY]` and valueless
   `KEY:` entries (required from the host), multi-line quoted scalars, apostrophes in plain scalars.
 - **Why it matters:** each miss lets a release that needs a new production secret pass the gate; pass-through
