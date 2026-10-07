@@ -216,14 +216,14 @@ text → `row-changed` `needs-action` and exit 1 with `--fail-on needs-action`.
 ### Phase 1: Seed statement reader
 
 #### Automated
-- [ ] 1.1 Every listed case passes in `test/layers/seed/seed-statements.test.ts`
-- [ ] 1.2 Gates green (typecheck, lint, test)
+- [x] 1.1 Every listed case passes in `test/layers/seed/seed-statements.test.ts` — 52d9f20
+- [x] 1.2 Gates green (typecheck, lint, test) — 52d9f20
 
 ### Phase 2: Seed diff and classification
 
 #### Automated
-- [ ] 2.1 Every listed case passes in `test/layers/seed/classify.test.ts`
-- [ ] 2.2 Gates green (typecheck, lint, test)
+- [x] 2.1 Every listed case passes in `test/layers/seed/classify.test.ts` — 65976dd
+- [x] 2.2 Gates green (typecheck, lint, test) — 65976dd
 
 ### Phase 3: Seed layer, config and F6 end to end
 
