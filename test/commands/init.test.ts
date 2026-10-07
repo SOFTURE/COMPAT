@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_DEPENDENCY_IGNORE } from "../../src/commands/init-selection.js";
 import { parseConfig } from "../../src/config/config.js";
 import { LAYERS } from "../../src/layers/registry.js";
 import { main } from "../../src/main.js";
@@ -34,6 +35,35 @@ async function init(repo: TestRepo, ...extra: string[]) {
 const EF_POSTGRES = `CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" ("MigrationId" character varying(150) NOT NULL);\n`;
 const EF_SQLSERVER = `IF OBJECT_ID(N'[__EFMigrationsHistory]') IS NULL\nBEGIN\n    CREATE TABLE [__EFMigrationsHistory] ([MigrationId] nvarchar(150) NOT NULL);\nEND;\nGO\n`;
 
+const DEPLOY_REPO: Record<string, string> = {
+  "APP/docker-compose.yml":
+    "services:\n  api:\n    environment:\n      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}\n",
+  "VPS/DOCKER/PROD/docker-compose.yml": "services:\n  api:\n    environment:\n      API_KEY: ${API_KEY}\n",
+  "VPS/ANSIBLE/roles/app/templates/app.env.j2": "# generated\nAPI_KEY={{ api_key }}\n",
+  "VPS/ANSIBLE/roles/app/defaults/main.yml": "api_key: \"{{ lookup('env', 'API_KEY') }}\"\n",
+  "VPS/ANSIBLE/roles/app/tasks/main.yml": [
+    "- name: Check the configuration",
+    "  ansible.builtin.assert:",
+    "    that:",
+    "      - api_key | length > 0",
+    "- ansible.builtin.copy:",
+    '    src: "{{ playbook_dir }}/../DOCKER/PROD/docker-compose.yml"',
+    "    dest: /opt/app/docker-compose.yml",
+    "",
+  ].join("\n"),
+  ".github/workflows/deploy.yml": [
+    "jobs:",
+    "  deploy:",
+    "    environment: production",
+    "    steps:",
+    "      - run: ansible-playbook VPS/ANSIBLE/site.yml",
+    "        env:",
+    "          API_KEY: ${{ secrets.API_KEY }}",
+    "          token: ${{ secrets.GITHUB_TOKEN }}",
+    "",
+  ].join("\n"),
+};
+
 describe("softure-compat init", () => {
   it("writes every layer disabled with an example when nothing is detected, and the file is a valid config", async () => {
     const repo = repoWith({ "README.md": "# app\n" });
@@ -53,7 +83,32 @@ describe("softure-compat init", () => {
       "web/node_modules/pkg/package.json": "{}",
     });
     const { written } = await init(repo);
-    expect(written?.layers.dependencies).toEqual({ sources: [{ kind: "nuget" }] });
+    expect(written?.layers.dependencies).toEqual({
+      sources: [{ kind: "nuget" }],
+      ignore: DEFAULT_DEPENDENCY_IGNORE,
+    });
+  });
+
+  it("skips React Native and Expo apps in dependencies and writes no NuGet ignore without NuGet", async () => {
+    const repo = repoWith({
+      "APP/WEB/package.json": '{ "dependencies": { "next": "15.0.0" } }\n',
+      "APP/MOBILE/B2C/package.json": '{ "dependencies": { "expo": "52.0.0" } }\n',
+      "APP/MOBILE/B2B/package.json": '{ "devDependencies": { "react-native": "0.76.0" } }\n',
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.dependencies).toEqual({
+      sources: [{ kind: "npm", files: ["APP/WEB/package.json"] }],
+    });
+    expect(stderr).toContain(
+      "skipped React Native/Expo apps APP/MOBILE/B2B/package.json, APP/MOBILE/B2C/package.json",
+    );
+  });
+
+  it("disables dependencies when the only package.json is a mobile app, and says so", async () => {
+    const repo = repoWith({ "app/package.json": '{ "dependencies": { "expo": "52.0.0" } }\n' });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.dependencies?.enabled).toBe(false);
+    expect(stderr).toContain("skipped React Native/Expo apps app/package.json");
   });
 
   it("proposes a disabled serve source for ASP.NET projects that serve their spec at runtime", async () => {
@@ -202,6 +257,124 @@ describe("softure-compat init", () => {
     expect((await init(both)).written?.layers.config).toEqual({
       sources: [{ kind: "compose" }, { kind: "dotenv" }],
     });
+  });
+
+  it("leaves out compose and .env files of tests and mobile apps", async () => {
+    const repo = repoWith({
+      "APP/docker-compose.yml": "services: {}\n",
+      "VPS/DOCKER/TESTS/docker-compose.integration-tests.yml": "services: {}\n",
+      "deploy/compose.e2e.yml": "services: {}\n",
+      "APP/API/.env.example": "A=\n",
+      "APP/MOBILE/B2C/.env.example": "EXPO_PUBLIC_API=\n",
+      "APP/MOBILE/B2C/package.json": '{ "dependencies": { "expo": "52.0.0" } }\n',
+    });
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.config).toEqual({
+      sources: [
+        { kind: "compose", files: ["APP/docker-compose.yml"] },
+        { kind: "dotenv", files: ["APP/API/.env.example"] },
+      ],
+    });
+    expect(stderr).toContain(
+      "skipped test files VPS/DOCKER/TESTS/docker-compose.integration-tests.yml, deploy/compose.e2e.yml",
+    );
+    expect(stderr).toContain("mobile app files APP/MOBILE/B2C/.env.example");
+  });
+
+  it("reads the deploy chain: Ansible and workflow regex sources, a chain with the assert required, presence", async () => {
+    const repo = repoWith(DEPLOY_REPO);
+    const { written, stderr } = await init(repo);
+    expect(written?.layers.config).toEqual({
+      sources: [
+        { kind: "compose", files: ["VPS/DOCKER/PROD/docker-compose.yml"] },
+        {
+          kind: "regex",
+          name: "ansible-template",
+          files: ["VPS/ANSIBLE/roles/app/templates/app.env.j2"],
+          pattern: "^[ \\t]*(?:export[ \\t]+)?(?<key>[A-Za-z_][A-Za-z0-9_]*)[ \\t]*=[ \\t]*[\"']?\\{\\{",
+          flags: "m",
+          comments: "hash",
+        },
+        {
+          kind: "regex",
+          name: "ansible-env",
+          files: ["VPS/ANSIBLE/roles/app/defaults/main.yml"],
+          pattern: "lookup\\([ \\t]*[\"']env[\"'][ \\t]*,[ \\t]*[\"'](?<key>[A-Za-z_][A-Za-z0-9_]*)[\"']",
+          flags: "",
+          comments: "hash",
+        },
+        {
+          kind: "regex",
+          name: "ansible-assert",
+          files: ["VPS/ANSIBLE/roles/app/tasks/main.yml"],
+          pattern:
+            "^[ \\t]*-[ \\t]*[\"']?(?<key>[A-Za-z_][A-Za-z0-9_]*)[ \\t]*(?:\\|[ \\t]*length[ \\t]*>[ \\t]*0|is[ \\t]+defined)",
+          flags: "m",
+          comments: "hash",
+        },
+        {
+          kind: "regex",
+          name: "workflow-secrets",
+          files: [".github/workflows/deploy.yml"],
+          pattern: "^[ \\t]*(?<key>[A-Z][A-Z0-9_]*)[ \\t]*:[ \\t]*[\"']?\\$\\{\\{[ \\t]*secrets\\.",
+          flags: "m",
+          comments: "hash",
+        },
+      ],
+      chains: [
+        {
+          name: "deploy",
+          sources: ["compose", "ansible-template", "ansible-env", "workflow-secrets"],
+          required: ["ansible-assert"],
+        },
+      ],
+      presence: { run: "gh secret list --env production --json name --jq '.[].name'" },
+    });
+    expect(parseConfig(written, LAYERS, "compat.config.json").ok).toBe(true);
+    expect(stderr).toContain("compose files the deploy does not use APP/docker-compose.yml");
+  });
+
+  it("matches a bare compose file name to the nearest file and reads project_src folders", async () => {
+    const repo = repoWith({
+      "APP/docker-compose.yml": "services: {}\n",
+      "ops/files/docker-compose.yml": "services: {}\n",
+      "ops/stack/compose.yaml": "services: {}\n",
+      "ops/roles/app/tasks/main.yml": [
+        "- ansible.builtin.copy:",
+        "    src: docker-compose.yml",
+        "    dest: /opt/app/docker-compose.yml",
+        "- community.docker.docker_compose_v2:",
+        '    project_src: "{{ repo_dir }}/ops/stack"',
+        "",
+      ].join("\n"),
+    });
+    const { written } = await init(repo);
+    expect(written?.layers.config).toEqual({
+      sources: [{ kind: "compose", files: ["ops/files/docker-compose.yml", "ops/stack/compose.yaml"] }],
+    });
+  });
+
+  it("gives a deploy chain that check runs: a key added to the template but not to the assert breaks", async () => {
+    const { ".github/workflows/deploy.yml": _workflow, ...withoutWorkflow } = DEPLOY_REPO;
+    const repo = repoWith(withoutWorkflow);
+    expect((await init(repo)).exitCode).toBe(0);
+    writeRepoFile(
+      repo,
+      "VPS/ANSIBLE/roles/app/templates/app.env.j2",
+      "API_KEY={{ api_key }}\nNEW_KEY={{ new_key }}\n",
+    );
+    repo.git("add", "-A");
+    repo.git("commit", "-q", "-m", "v2");
+    const run = createIo(repo.dir);
+    const exitCode = await main(["check", "--base", "v1", "--revision", "HEAD", "--format", "json"], run.io);
+    const report = JSON.parse(run.stdout()) as {
+      layers: { layer: string; status: string; findings: { subject: string; id: string; class: string }[] }[];
+    };
+    const config = report.layers.find((layer) => layer.layer === "config");
+    expect(config?.status).toBe("ran");
+    const chain = config?.findings.filter((finding) => finding.id === "config-chain-missing") ?? [];
+    expect(chain.map((finding) => `${finding.subject} ${finding.class}`)).toContain("NEW_KEY breaking");
+    expect(exitCode).toBe(1);
   });
 
   it("enables message contracts with one glob per contract folder, ignoring build output", async () => {
