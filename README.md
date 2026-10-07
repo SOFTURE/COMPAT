@@ -15,6 +15,7 @@ It works only from git. It never connects to a production server or database.
 | [`persisted-enums`](#persisted-enums) | enums stored in the database as strings or numbers (C# and TypeScript) |
 | [`config`](#config) | configuration keys a release needs (compose interpolation, `.env` examples, your own patterns) |
 | [`dependencies`](#dependencies) | runtime package versions (NuGet, npm), classified by semver |
+| [`message-contracts`](#message-contracts) | C# message contracts (types, wire properties, enums) and queue names, for messages in flight |
 
 ## Install
 
@@ -53,6 +54,7 @@ What `init` detects:
 | `seed` | `.sql` files with `seed` in the name that are not migrations |
 | `persisted-enums` | a `*DbContext.cs` calling `ConfigureEnum<T>()` (string storage) |
 | `config` | compose files and `.env` examples at the default globs |
+| `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`; one glob per such folder |
 
 Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A SQL file is read as SQL Server when it has `GO`
 batch lines or `[dbo]` names, otherwise as Postgres.
@@ -496,13 +498,71 @@ Names in both are globs (`*`, `?`, `{a,b}`) matched case-insensitively. `accept[
 | `dependency-changed` | `needs-action`: the declared version is not a version number at one ref (`latest`, a git URL, an unresolved `$(Property)`) |
 | `dependency-added` | `safe` |
 | `dependency-removed` | `safe` |
+### message-contracts
+
+Messages that wait in a broker queue during a deploy are produced by one build and consumed by the other. The layer
+parses the C# contracts of both refs at source level (no build) and compares them the way MassTransit with
+System.Text.Json reads them, and compares the queue names your patterns find.
+
+```json
+{
+  "sources": [
+    { "name": "internal", "language": "csharp", "files": "src/PETSEO.Contract.Internal.Messages/**/*.cs" }
+  ],
+  "queues": [
+    { "kind": "regex", "name": "consumers", "files": "**/ConsumerGroups.cs", "pattern": "\"(?<queue>PETSEO\\.[\\w.]+)\"" }
+  ],
+  "accept": [{ "id": "message-property-added", "subject": "PETSEO.Messages.OrderPlaced.Total", "reason": "consumers deployed first" }]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
+| `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none` |
+| `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
+
+What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
+identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire
+properties are the public instance properties with a public getter and the positional parameters of a record; fields,
+static and computed (`=>`) properties, methods and `[JsonIgnore]` members are not. `[JsonPropertyName]` sets the wire
+name; names are compared case-insensitively. Properties of base types declared in the sources are inherited. Public
+enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`.
+
+| Finding id | Class |
+| --- | --- |
+| `message-added` | `safe` |
+| `message-removed` | `needs-action`: drain its queues before the deploy |
+| `message-renamed` | `breaking`: a new full name or namespace changes the message URN; paired by simple name, else by an identical wire shape |
+| `message-entity-name-changed` | `breaking`: `[EntityName]` changed, the builds publish to different exchanges |
+| `message-base-added` | `safe` |
+| `message-base-removed` | `breaking`: consumers of the base type or interface stop receiving it |
+| `message-property-added` | `safe` when nullable (`T?`) or initialized (`= null!` and `= default` do not count); `rollback-risk` otherwise; `breaking` when `required` or `[JsonRequired]` |
+| `message-property-removed` | `breaking` |
+| `message-property-type-changed` | `breaking` (`System.` qualifiers, `global::`, `Nullable<T>` and type aliases are normalized first) |
+| `message-property-nullability-changed` | `rollback-risk`: only `?` changed |
+| `message-property-required` | `breaking`: an existing property became `required` or `[JsonRequired]` |
+| `queue-added` | `safe` |
+| `queue-removed` | `needs-action`: drain it before the deploy |
+| `enum-member-added`, `enum-member-removed`, `enum-member-renamed`, `enum-member-renumbered`, `enum-member-unresolved`, `enum-added`, `enum-removed` | as in `persisted-enums` |
+
+The layer fails, keeping its findings, when a source or queue source matches no file at either ref or loses all its
+files in the revision, when a source declares no public type or a queue source finds no queue, and when a
+declaration cannot be read: a `#if` in a type body, unbalanced brackets, an unrecognised public member, a
+`[JsonPropertyName]`, `[MessageUrn]` or `[EntityName]` without a constant string literal (an interpolated string
+does not count), a type declared twice without `partial`, or a declaration-looking line outside comments that the
+parser did not reach (a line inside a multi-line string counts too). It does not follow base types outside the
+sources, custom `[JsonConverter]`s, or serializer settings other than MassTransit's defaults. A removed type and an
+added one with the same unique wire shape are paired as a rename, reported as `breaking` even when the two messages
+are unrelated.
 
 ## What it does not check yet
 
 The v1 acceptance case is the PETSEO 2.2.4 → 2.3.4 release. The tool reproduces its HTTP contract, schema, data
-migration, seed, persisted enum, configuration and dependency findings (covered by `test/e2e/acceptance.test.ts`). It does not
-yet check query-string binding changes, message contracts and queues, messaging library behaviour beyond the version change, push payloads
-opened by old app versions, or behaviour of refactored code. Those layers are planned in
+migration, seed, persisted enum, configuration and dependency findings (covered by `test/e2e/acceptance.test.ts`), and
+its message contracts and queues (`test/e2e/message-contracts.test.ts`). It does not yet check query-string binding
+changes, messaging library behaviour beyond the version change, push payloads opened by old app versions, or
+behaviour of refactored code. Those layers are planned in
 [`context/backlog/later-layers.md`](context/backlog/later-layers.md).
 
 ## Releasing (maintainers)

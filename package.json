@@ -1,7 +1,7 @@
 {
   "name": "@softure-ai/compat",
   "version": "0.1.1",
-  "description": "Backward-compatibility check between two git refs of a server release: OpenAPI, SQL migrations, seed scripts, persisted enums and configuration",
+  "description": "Backward-compatibility check between two git refs of a server release: OpenAPI, SQL migrations, seed scripts, persisted enums, configuration and message contracts",
   "keywords": [
     "backward-compatibility",
     "openapi",
