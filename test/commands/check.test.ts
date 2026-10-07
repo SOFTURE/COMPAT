@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CheckOptions, runCheck } from "../../src/commands/check.js";
+import { createFakeGitHub, GITHUB_ENV } from "../helpers/fake-github.js";
 import { createRepo, type TestRepo, writeRepoFile } from "../helpers/git-repo.js";
 import { createIo, createStubLayer } from "../helpers/stub-layer.js";
 
@@ -106,5 +107,65 @@ describe("runCheck", () => {
     expect(await runCheck(options(), createIo(repo.dir, [recording]).io)).toBe(0);
     expect(layerTempDir).not.toBe("");
     expect(existsSync(layerTempDir)).toBe(false);
+  });
+});
+
+describe("runCheck with ref resolvers", () => {
+  const DEPLOYMENTS = "/deployments?environment=prod&per_page=100";
+
+  it("resolves latest-tag and shows the resolver in the report", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(
+      await runCheck(options({ base: "v1", revision: "latest-tag:v*", configPath: "safe.json" }), run.io),
+    ).toBe(0);
+    expect(run.stdout()).toContain("# Backward compatibility: v1 → v2");
+    expect(run.stdout()).toMatch(/revision latest-tag:v\* → v2 `[0-9a-f]{12}`/);
+  });
+
+  it("compares the commit of the latest successful deployment", async () => {
+    const v1 = repo.git("rev-parse", "v1").trim();
+    const github = createFakeGitHub({
+      [DEPLOYMENTS]: [{ id: 1, sha: v1, ref: "1.0.0" }],
+      "/deployments/1/statuses?per_page=1": [{ state: "success" }],
+    });
+    const run = createIo(repo.dir, [createStubLayer()]);
+    const io = { ...run.io, env: GITHUB_ENV, fetch: github.fetch };
+    expect(
+      await runCheck(
+        options({ base: "github-deployment:prod", format: "json", configPath: "safe.json" }),
+        io,
+      ),
+    ).toBe(0);
+    expect(JSON.parse(run.stdout()).base).toEqual({
+      ref: "1.0.0",
+      commit: v1,
+      resolver: "github-deployment:prod",
+    });
+  });
+
+  it("returns 2 and asks for a fetch when the deployed commit is not in the clone", async () => {
+    const github = createFakeGitHub({
+      [DEPLOYMENTS]: [{ id: 1, sha: "f".repeat(40), ref: "9.9.9" }],
+      "/deployments/1/statuses?per_page=1": [{ state: "success" }],
+    });
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(
+      await runCheck(options({ base: "github-deployment:prod" }), {
+        ...run.io,
+        env: GITHUB_ENV,
+        fetch: github.fetch,
+      }),
+    ).toBe(2);
+    expect(run.stderr()).toContain(
+      `softure-compat: github-deployment:prod resolved to 9.9.9 (${"f".repeat(40)}), which is not in the local clone; fetch it (actions/checkout with fetch-depth: 0)`,
+    );
+  });
+
+  it("returns 2 when a resolver finds nothing", async () => {
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(options({ base: "latest-tag:release-*" }), run.io)).toBe(2);
+    expect(run.stderr()).toContain(
+      'softure-compat: cannot resolve latest-tag:release-*: no tag matches "release-*"',
+    );
   });
 });
