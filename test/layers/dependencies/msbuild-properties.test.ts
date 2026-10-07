@@ -18,6 +18,7 @@ async function evaluate(path: string, files: Record<string, string>) {
   if (!evaluated.ok) throw new Error(evaluated.error);
   return {
     properties: Object.fromEntries(evaluated.value.properties),
+    ambiguous: Object.fromEntries(evaluated.value.ambiguous),
     skippedImports: evaluated.value.skippedImports,
   };
 }
@@ -124,6 +125,46 @@ describe("evaluateMsbuildProperties", () => {
       "Versions.props": props("<Polly>8.0.0</Polly>"),
     });
     expect(properties).toEqual({ polly: "8.0.0", own: "1.0.0" });
+  });
+
+  it("ignores property groups inside targets, which run after items are evaluated", async () => {
+    const { properties } = await evaluate("src/A.csproj", {
+      "Directory.Build.targets":
+        '<Project><Target Name="X"><PropertyGroup><EfVersion>1.0.0</EfVersion></PropertyGroup></Target></Project>',
+      "src/A.csproj": props("<EfVersion>8.0.0</EfVersion>"),
+    });
+    expect(properties).toEqual({ efversion: "8.0.0" });
+  });
+
+  it("expands a property when it is defined, not with the final values", async () => {
+    const { properties } = await evaluate("src/A.csproj", {
+      "Directory.Build.props": props("<Base>7.0.0</Base><EfVersion>$(Base)</EfVersion><V>1.0</V>"),
+      "src/A.csproj": props("<Base>8.0.0</Base><V>$(V)-preview</V><Later>$(Unknown)</Later>"),
+    });
+    expect(properties).toEqual({ base: "8.0.0", efversion: "7.0.0", v: "1.0-preview", later: "$(Unknown)" });
+  });
+
+  it("decides empty checks and marks values that other conditions choose between as ambiguous", async () => {
+    const { properties, ambiguous } = await evaluate("src/A.csproj", {
+      "Directory.Build.props": [
+        "<Project>",
+        "  <PropertyGroup Condition=\"'$(TargetFramework)' == 'net6.0'\"><Tfm>6.0.0</Tfm></PropertyGroup>",
+        "  <PropertyGroup Condition=\"'$(TargetFramework)' == 'net8.0'\"><Tfm>8.0.0</Tfm></PropertyGroup>",
+        "  <PropertyGroup><Same Condition=\"'$(Configuration)' == 'Debug'\">1.0.0</Same><Same>1.0.0</Same></PropertyGroup>",
+        "  <PropertyGroup><Settled Condition=\"'$(X)' == 'y'\">1.0.0</Settled><Settled>2.0.0</Settled></PropertyGroup>",
+        "  <PropertyGroup><Derived>$(Tfm)-1</Derived></PropertyGroup>",
+        "</Project>",
+      ].join("\n"),
+      "src/A.csproj": props("<EfVersion>8.0.0</EfVersion>"),
+      "src/Directory.Build.targets": [
+        "<Project>",
+        "  <PropertyGroup><EfVersion Condition=\"'$(EfVersion)' == ''\">6.0.0</EfVersion></PropertyGroup>",
+        "  <PropertyGroup Condition=\"'$(Missing)' != ''\"><EfVersion>5.0.0</EfVersion></PropertyGroup>",
+        "</Project>",
+      ].join("\n"),
+    });
+    expect(properties).toMatchObject({ efversion: "8.0.0", same: "1.0.0", settled: "2.0.0" });
+    expect(ambiguous).toEqual({ tfm: ["6.0.0", "8.0.0"], derived: ["6.0.0-1", "8.0.0-1"] });
   });
 
   it("applies each file once when imports form a cycle", async () => {

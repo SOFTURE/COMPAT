@@ -17,25 +17,36 @@ function readChild(body: string | undefined, name: string): string | undefined {
   return match === null ? undefined : decodeEntities(match[1] as string).trim();
 }
 
-/** Expands `$(Name)` from the evaluated properties; unknown properties stay as written. */
-function expandProperties(value: string, properties: Map<string, string>): string {
-  let expanded = value;
-  // A property may refer to another one; a few rounds cover real files without looping on cycles.
-  for (let round = 0; round < 5 && expanded.includes("$("); round++) {
-    expanded = expanded.replace(
-      PROPERTY_REFERENCE,
-      (reference, name: string) => properties.get(name.toLowerCase()) ?? reference,
-    );
-  }
-  return expanded;
+/** Expands `$(Name)` from the evaluated properties once; unknown and ambiguous names stay as written. */
+function expandProperties(value: string, evaluated: EvaluatedProperties): string {
+  return value.replace(PROPERTY_REFERENCE, (reference, name: string) => {
+    const key = name.toLowerCase();
+    return evaluated.ambiguous.has(key) ? reference : (evaluated.properties.get(key) ?? reference);
+  });
 }
 
 /** Why a version still holds `$(...)` after expansion. */
-function describeUnresolved(version: string, path: string, skippedImports: string[]): string {
-  const names = [...new Set([...version.matchAll(PROPERTY_REFERENCE)].map((match) => `$(${match[1]})`))];
-  const subject = names.length === 0 ? "a property function" : names.join(", ");
-  const skipped = skippedImports.length === 0 ? "" : `; imports not followed: ${skippedImports.join("; ")}`;
-  return `${subject} is not defined in ${path}, its Directory.Build.props, Directory.Packages.props, Directory.Build.targets or in-repository imports${skipped}`;
+function describeUnresolved(version: string, path: string, evaluated: EvaluatedProperties): string {
+  const names = [...new Set([...version.matchAll(PROPERTY_REFERENCE)].map((match) => match[1] as string))];
+  if (names.length === 0) return "a property function is not evaluated";
+  const reasons: string[] = [];
+  const undefinedNames = names.filter((name) => !evaluated.ambiguous.has(name.toLowerCase()));
+  for (const name of names) {
+    const values = evaluated.ambiguous.get(name.toLowerCase());
+    if (values !== undefined)
+      reasons.push(`$(${name}) has different values under conditions (${values.join(" | ")})`);
+  }
+  if (undefinedNames.length > 0) {
+    const skipped =
+      evaluated.skippedImports.length === 0
+        ? ""
+        : `; imports not followed: ${evaluated.skippedImports.join("; ")}`;
+    reasons.push(
+      `${undefinedNames.map((name) => `$(${name})`).join(", ")} is not defined in ${path}, its Directory.Build.props, ` +
+        `Directory.Packages.props, Directory.Build.targets or in-repository imports${skipped}`,
+    );
+  }
+  return reasons.join("; ");
 }
 
 /**
@@ -46,8 +57,7 @@ function describeUnresolved(version: string, path: string, skippedImports: strin
  */
 export function readNuget(text: string, path: string, evaluated?: EvaluatedProperties): Declaration[] {
   const source = blankComments(text);
-  const properties = evaluated?.properties ?? readOwnProperties(source);
-  const skippedImports = evaluated?.skippedImports ?? [];
+  const properties = evaluated ?? readOwnProperties(source);
   const declarations: Declaration[] = [];
   for (const match of source.matchAll(ITEM)) {
     const attributes = readAttributes(match[2] as string);
@@ -67,7 +77,7 @@ export function readNuget(text: string, path: string, evaluated?: EvaluatedPrope
       path,
       line: getLineAt(source, match.index),
     };
-    if (expanded.includes("$(")) declaration.unresolved = describeUnresolved(expanded, path, skippedImports);
+    if (expanded.includes("$(")) declaration.unresolved = describeUnresolved(expanded, path, properties);
     declarations.push(declaration);
   }
   return declarations;

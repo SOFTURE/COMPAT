@@ -605,8 +605,10 @@ as in MSBuild. Only the nearest `Directory.Build.props` is read, as MSBuild does
 imports it (`$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))`). Import
 paths may be relative or start with `$(MSBuildThisFileDirectory)` or `$(MSBuildProjectDirectory)`. An import with
 another property or a wildcard in its path, outside the repository, or missing without a `Condition` is not followed
-and is named in the finding of a version that stays unresolved; `Condition` is not evaluated. Versions that keep an
-undefined property are listed in the layer notes.
+and is named in the finding of a version that stays unresolved. Properties are expanded where they are defined and
+properties inside a `<Target>` are ignored, as in MSBuild. Of `Condition`, only `'$(Name)' == ''` and `!= ''` are
+decided; a property that other conditions give different values (per target framework, per configuration) stays
+unresolved and its finding lists the values. Versions that keep an undefined property are listed in the layer notes.
 
 `sources` defaults to both kinds; files under `node_modules`, `bin` and `obj` are skipped. Packages are compared by
 name over all files of a ref (NuGet names case-insensitively); a range compares by its lower bound (`^1.2.3`,

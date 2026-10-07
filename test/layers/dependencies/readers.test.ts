@@ -58,6 +58,7 @@ describe("readNuget with evaluated properties", () => {
     '    <PackageReference Include="MassTransit" Version="$(MassTransitVersion)" />',
     '    <PackageReference Include="Polly" Version="$(Polly)" />',
     '    <PackageReference Include="Npgsql" Version="$(NpgsqlVersion)" />',
+    '    <PackageReference Include="Ef" Version="$(EfVersion)" />',
     "  </ItemGroup>",
     "</Project>",
   ].join("\n");
@@ -67,13 +68,16 @@ describe("readNuget with evaluated properties", () => {
       properties: new Map([
         ["masstransitversion", "8.2.0"],
         ["polly", "8.5.0"],
+        ["efversion", "8.0.0"],
       ]),
+      ambiguous: new Map([["efversion", ["6.0.0", "8.0.0"]]]),
       skippedImports: ["src/Api/Api.csproj: $(RepoRoot)eng/Versions.props (a property in the path)"],
     });
     expect(summary(declarations)).toEqual([
       "MassTransit@8.2.0:4",
       "Polly@8.5.0:5",
       "Npgsql@$(NpgsqlVersion):6",
+      "Ef@$(EfVersion):7",
     ]);
     expect(declarations.map((declaration) => declaration.unresolved)).toEqual([
       undefined,
@@ -81,6 +85,7 @@ describe("readNuget with evaluated properties", () => {
       "$(NpgsqlVersion) is not defined in src/Api/Api.csproj, its Directory.Build.props, Directory.Packages.props, " +
         "Directory.Build.targets or in-repository imports; imports not followed: " +
         "src/Api/Api.csproj: $(RepoRoot)eng/Versions.props (a property in the path)",
+      "$(EfVersion) has different values under conditions (6.0.0 | 8.0.0)",
     ]);
   });
 
@@ -89,6 +94,7 @@ describe("readNuget with evaluated properties", () => {
       "MassTransit@$(MassTransitVersion):4",
       "Polly@8.4.0:5",
       "Npgsql@$(NpgsqlVersion):6",
+      "Ef@$(EfVersion):7",
     ]);
   });
 });
