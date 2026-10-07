@@ -186,7 +186,7 @@ exit 1 with `--fail-on needs-action`; exit 0 at `--fail-on needs-action` with ac
 ### Phase 2: The `config` layer, its config schema and the F10 acceptance test
 
 #### Automated
-- [ ] 2.1 Named phase 2 tests pass (config schema, layer, end to end)
-- [ ] 2.2 On the F10 repository, `check --fail-on needs-action` exits 1 with `Shop__BaseUrl` and `Shop__ApiKey` as `needs-action`, and exits 0 when every `needs-action` key is accepted
-- [ ] 2.3 `src/layers/registry.ts` gains exactly one import and one array entry, and `src/config/config.ts` is unchanged
-- [ ] 2.4 Gates green (typecheck, lint, test)
+- [x] 2.1 Named phase 2 tests pass (config schema, layer, end to end) — e364e28
+- [x] 2.2 On the F10 repository, `check --fail-on needs-action` exits 1 with `Shop__BaseUrl` and `Shop__ApiKey` as `needs-action`, and exits 0 when every `needs-action` key is accepted — e364e28
+- [x] 2.3 `src/layers/registry.ts` gains exactly one import and one array entry, and `src/config/config.ts` is unchanged — e364e28
+- [x] 2.4 Gates green (typecheck, lint, test) — e364e28

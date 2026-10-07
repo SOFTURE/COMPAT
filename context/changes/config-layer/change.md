@@ -1,7 +1,7 @@
 ---
 change_id: config-layer
 title: "New required configuration keys are reported before the deploy that needs them"
-status: implementing
+status: implemented
 roadmap_item: CMP-5
 branch: claude/project-thread-h321jp
 created: 2026-10-07
