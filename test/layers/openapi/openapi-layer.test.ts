@@ -228,6 +228,108 @@ describe("openapi layer", () => {
       notes: [FAKE_NOTE],
     });
   });
+
+  describe("setup and concurrency", () => {
+    let workDir: string;
+
+    beforeEach(async () => {
+      workDir = await mkdtemp(join(tmpdir(), "compat-openapi-setup-"));
+    });
+
+    afterEach(async () => {
+      await rm(workDir, { recursive: true, force: true });
+    });
+
+    const commandApi = (name: string) => ({
+      name,
+      // Fails unless the setup of the same side already ran in this tree.
+      source: {
+        kind: "command",
+        run: `test -f "$WORK_DIR/setup-$COMPAT_SIDE" && cp api/b2c.yaml out-${name}.yaml`,
+        output: `out-${name}.yaml`,
+      },
+    });
+
+    const readLines = async (file: string) =>
+      (await readFile(file, "utf8").catch(() => ""))
+        .split("\n")
+        .filter((line) => line !== "")
+        .sort();
+
+    // Each side records that it started, then waits up to 2 s for the other side to start too.
+    const BARRIER_SETUP = [
+      'touch "$WORK_DIR/started-$COMPAT_SIDE"',
+      'other=base; [ "$COMPAT_SIDE" = base ] && other=revision',
+      "i=0",
+      'while [ $i -lt 20 ]; do if [ -f "$WORK_DIR/started-$other" ]; then echo "$COMPAT_SIDE" >> "$WORK_DIR/overlap"; break; fi; sleep 0.1; i=$((i+1)); done',
+    ].join("; ");
+
+    it("runs the setup command once per side, before the spec commands, whatever the number of APIs", async () => {
+      const result = await run(
+        {
+          setup: {
+            run: 'echo "$COMPAT_SIDE $COMPAT_REF" >> "$WORK_DIR/count"; touch "$WORK_DIR/setup-$COMPAT_SIDE"',
+          },
+          apis: [commandApi("b2c"), commandApi("b2b"), commandApi("admin")],
+        },
+        { ...changes([]), WORK_DIR: workDir },
+      );
+      expect(result).toEqual({
+        layer: "openapi",
+        status: "ran",
+        findings: [],
+        notes: [FAKE_NOTE],
+      });
+      expect(await readLines(join(workDir, "count"))).toEqual(["base v1", "revision v2"]);
+    });
+
+    it("fails the layer naming the side and ref when the setup command fails at one side", async () => {
+      const result = await run(
+        {
+          setup: { run: '[ "$COMPAT_SIDE" = revision ] && { echo build broke >&2; exit 2; }; true' },
+          apis: [fileApi("b2c", "api/b2c.yaml")],
+        },
+        changes([]),
+      );
+      expect(result).toEqual({
+        layer: "openapi",
+        status: "failed",
+        error: "setup command at revision (v2) exited 2: build broke",
+        findings: [],
+        notes: [FAKE_NOTE],
+      });
+    });
+
+    it("names both sides when the setup command fails at both", async () => {
+      const result = await run(
+        { setup: { run: "echo no sdk >&2; exit 1" }, apis: [fileApi("b2c", "api/b2c.yaml")] },
+        changes([]),
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: "setup command at base (v1) exited 1: no sdk; setup command at revision (v2) exited 1: no sdk",
+      });
+    });
+
+    it("prepares base and revision in parallel by default", async () => {
+      const result = await run(
+        { setup: { run: BARRIER_SETUP }, apis: [fileApi("b2c", "api/b2c.yaml")] },
+        { ...changes([]), WORK_DIR: workDir },
+      );
+      expect(result.status).toBe("ran");
+      expect(await readLines(join(workDir, "overlap"))).toEqual(["base", "revision"]);
+    });
+
+    it("prepares base and revision one after the other with concurrency 1", async () => {
+      const result = await run(
+        { setup: { run: BARRIER_SETUP }, concurrency: 1, apis: [fileApi("b2c", "api/b2c.yaml")] },
+        { ...changes([]), WORK_DIR: workDir },
+      );
+      expect(result.status).toBe("ran");
+      // Base finished waiting before the revision started, so only the revision saw the other side.
+      expect(await readLines(join(workDir, "overlap"))).toEqual(["revision"]);
+    });
+  });
 });
 
 describe("openapi layer without oasdiff on PATH", () => {

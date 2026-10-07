@@ -10,13 +10,15 @@ const relativePath = z
 
 const httpUrl = z.url({ protocol: /^https?$/ });
 
+const timeoutSeconds = z.number().int().positive().max(7200);
+
 export const specSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("file"), path: relativePath }),
   z.strictObject({
     kind: z.literal("command"),
     run: z.string().min(1),
     output: relativePath,
-    timeoutSeconds: z.number().int().positive().max(7200).optional(),
+    timeoutSeconds: timeoutSeconds.optional(),
   }),
   z.strictObject({ kind: z.literal("url"), base: httpUrl, revision: httpUrl }),
 ]);
@@ -42,7 +44,18 @@ export const apiSchema = z.strictObject({
   accept: z.array(acceptEntrySchema).optional(),
 });
 
+/** Runs once per side, in the materialized ref, before any spec source of that side. */
+export const setupSchema = z.strictObject({
+  run: z.string().min(1),
+  timeoutSeconds: timeoutSeconds.optional(),
+});
+
+export type SetupCommand = z.infer<typeof setupSchema>;
+
 export const openapiConfigSchema = z.strictObject({
+  setup: setupSchema.optional(),
+  /** How many sides (base, revision) are prepared at once: 2 (default) in parallel, 1 one after the other. */
+  concurrency: z.number().int().min(1).max(2).optional(),
   apis: z
     .array(apiSchema)
     .min(1)

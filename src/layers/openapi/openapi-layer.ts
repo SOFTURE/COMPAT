@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { RefTree } from "../../git/ref-tree.js";
 import type { Finding, LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer, type LayerContext } from "../layer.js";
@@ -15,9 +16,13 @@ import {
   runOasdiffChangelog,
 } from "./oasdiff.js";
 import { isDownloadTurnedOff, PINNED_OASDIFF, provideOasdiff } from "./oasdiff-download.js";
-import { resolveSpec } from "./spec-source.js";
+import { type ResolvedSpec, resolveSpec } from "./spec-source.js";
+import { runTreeCommand } from "./tree-command.js";
 
 type ApiOutcome = { findings: Finding[]; notes: string[] };
+
+/** The spec of every API at one side, by API name; one API failing does not stop the others. */
+type SideSpecs = Map<string, Result<ResolvedSpec>>;
 
 export const openapiLayer = defineLayer({
   name: OPENAPI_LAYER,
@@ -35,10 +40,27 @@ export const openapiLayer = defineLayer({
     const notes = [
       `oasdiff ${oasdiff.version || "(no version)"} at ${oasdiff.path} (${OASDIFF_SOURCE_LABELS[oasdiff.source]})`,
     ];
+    const sides = await prepareSides(context);
+    if (!sides.ok) {
+      return {
+        layer: OPENAPI_LAYER,
+        status: "failed",
+        error: sides.error,
+        findings,
+        notes,
+      } satisfies LayerResult;
+    }
+    const [baseSpecs, revisionSpecs] = sides.value;
     const errors: string[] = [];
     // Every API is checked even when one fails, so the findings of the others still reach the gate.
     for (const api of context.config.apis) {
-      const outcome = await checkApi(context, api, oasdiff);
+      const outcome = await checkApi({
+        context,
+        api,
+        oasdiff,
+        baseSpec: baseSpecs.get(api.name),
+        revisionSpec: revisionSpecs.get(api.name),
+      });
       if (!outcome.ok) {
         errors.push(`API "${api.name}": ${outcome.error}`);
         continue;
@@ -103,18 +125,68 @@ async function findOasdiff(context: LayerContext<OpenapiConfig>): Promise<Result
   return ok({ status: "found", oasdiff: probed.value });
 }
 
-async function checkApi(
-  context: LayerContext<OpenapiConfig>,
-  api: ApiConfig,
-  oasdiff: Oasdiff,
-): Promise<Result<ApiOutcome>> {
-  const tempDir = join(context.tempDir, api.name);
-  await mkdir(tempDir, { recursive: true });
-  const specOptions = { source: api.source, tempDir, apiName: api.name, env: context.env };
-  const baseSpec = await resolveSpec({ ...specOptions, tree: context.base });
-  if (!baseSpec.ok) return { ok: false, error: `base spec: ${baseSpec.error}` };
-  const revisionSpec = await resolveSpec({ ...specOptions, tree: context.revision });
-  if (!revisionSpec.ok) return { ok: false, error: `revision spec: ${revisionSpec.error}` };
+/**
+ * Prepares both sides: base and revision live in separate trees, so they run in parallel unless
+ * `concurrency` is 1. Both sides finish before any failure is reported, so a setup that fails on
+ * both sides names both.
+ */
+async function prepareSides(context: LayerContext<OpenapiConfig>): Promise<Result<[SideSpecs, SideSpecs]>> {
+  const trees = [context.base, context.revision] as const;
+  let prepared: Result<SideSpecs>[];
+  if (context.config.concurrency === 1) {
+    prepared = [];
+    for (const tree of trees) prepared.push(await prepareSide(context, tree));
+  } else {
+    prepared = await Promise.all(trees.map((tree) => prepareSide(context, tree)));
+  }
+  const [base, revision] = prepared as [Result<SideSpecs>, Result<SideSpecs>];
+  const errors = [base, revision].flatMap((side) => (side.ok ? [] : [side.error]));
+  if (!base.ok || !revision.ok) return err(errors.join("; "));
+  return ok([base.value, revision.value]);
+}
+
+/** Runs the setup command of one side, then resolves the spec of every API at that side, in order. */
+async function prepareSide(context: LayerContext<OpenapiConfig>, tree: RefTree): Promise<Result<SideSpecs>> {
+  const { setup } = context.config;
+  if (setup) {
+    const root = await tree.materialize();
+    if (!root.ok) return root;
+    context.log(`openapi: running setup at ${tree.side} (${tree.ref})`);
+    const ran = await runTreeCommand({
+      run: setup.run,
+      tree,
+      root: root.value,
+      timeoutSeconds: setup.timeoutSeconds,
+      env: context.env,
+      label: "setup command",
+    });
+    if (!ran.ok) return ran;
+  }
+  const specs: SideSpecs = new Map();
+  for (const api of context.config.apis) {
+    const tempDir = join(context.tempDir, api.name);
+    await mkdir(tempDir, { recursive: true });
+    specs.set(
+      api.name,
+      await resolveSpec({ source: api.source, tree, tempDir, apiName: api.name, env: context.env }),
+    );
+  }
+  return ok(specs);
+}
+
+type CheckApiOptions = {
+  context: LayerContext<OpenapiConfig>;
+  api: ApiConfig;
+  oasdiff: Oasdiff;
+  baseSpec: Result<ResolvedSpec> | undefined;
+  revisionSpec: Result<ResolvedSpec> | undefined;
+};
+
+async function checkApi(options: CheckApiOptions): Promise<Result<ApiOutcome>> {
+  const { context, api, oasdiff, baseSpec, revisionSpec } = options;
+  if (!baseSpec || !revisionSpec) return err("spec was not resolved");
+  if (!baseSpec.ok) return err(`base spec: ${baseSpec.error}`);
+  if (!revisionSpec.ok) return err(`revision spec: ${revisionSpec.error}`);
 
   const base = baseSpec.value;
   const revision = revisionSpec.value;
