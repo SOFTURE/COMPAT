@@ -1,3 +1,4 @@
+import { matchesGlob } from "../../git/glob.js";
 import type { Evidence, Finding } from "../../model/finding.js";
 import {
   ERROR_CODE_FINDING_CLASSES,
@@ -84,17 +85,21 @@ export function classifyErrorCodes({ base, revision, clients }: ClassifyErrorCod
   return findings;
 }
 
-/** Marks the `error-code-unknown-to-client` findings an entry accepts and notes each entry's use. */
+/**
+ * Marks the `error-code-unknown-to-client` findings an entry accepts (its code may be a glob) and notes
+ * each entry's use. A `safe` finding is left alone, so an entry that `returnedBy` made redundant reads as unused.
+ */
 export function applyErrorCodeAccept(
   findings: Finding[],
   accept: readonly ErrorCodeAccept[],
 ): { findings: Finding[]; notes: string[] } {
   const counts = accept.map(() => 0);
   const result = findings.map((finding) => {
-    if (finding.id !== "error-code-unknown-to-client") return finding;
+    if (finding.id !== "error-code-unknown-to-client" || finding.class === "safe") return finding;
     const position = accept.findIndex(
       (entry) =>
-        entry.code === finding.subject && (entry.client === undefined || entry.client === finding.scope),
+        matchesGlob(finding.subject, entry.code) &&
+        (entry.client === undefined || entry.client === finding.scope),
     );
     if (position === -1) return finding;
     counts[position] = (counts[position] ?? 0) + 1;

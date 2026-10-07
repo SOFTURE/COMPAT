@@ -69,12 +69,15 @@ export const errorCodeClientSchema = z
     /** Regex whose named group `code` captures one translated code. */
     pattern: z.string().min(1),
     flags,
+    /** The `client-usage` clients whose calls are this client's; defaults to the one with the same name. */
+    usage: z.array(name).min(1).optional(),
   })
   .superRefine(checkPattern);
 
 export type ErrorCodeClient = z.infer<typeof errorCodeClientSchema>;
 
 export const errorCodeAcceptSchema = z.strictObject({
+  /** A code or a glob over codes (`Shop.*`). */
   code: z.string().min(1),
   /** Without it the entry accepts the code for every client. */
   client: name.optional(),
@@ -83,6 +86,25 @@ export const errorCodeAcceptSchema = z.strictObject({
 
 export type ErrorCodeAccept = z.infer<typeof errorCodeAcceptSchema>;
 
+/** One value or a non-empty list of them, read as a list. */
+const oneOrMore = <T extends z.ZodType>(item: T) =>
+  z.preprocess((value) => (typeof value === "string" ? [value] : value), z.array(item).min(1));
+
+/** `METHOD /path/glob`; the method may be `*`. */
+const operationGlob = z
+  .string()
+  .regex(/^(\*|[A-Za-z]+) \/\S*$/, 'use "METHOD /path/glob", for example "* /api/shop/**"');
+
+export const returnedBySchema = z.strictObject({
+  /** Codes or globs over codes (`Shop.*`) that only these operations return. */
+  codes: oneOrMore(z.string().min(1)),
+  /** Name of the `openapi` API, as `client-usage` clients name it. */
+  api: z.string().min(1),
+  operations: oneOrMore(operationGlob),
+});
+
+export type ReturnedBy = z.infer<typeof returnedBySchema>;
+
 const uniqueNames = (entries: { name: string }[]) =>
   new Set(entries.map((entry) => entry.name)).size === entries.length;
 
@@ -90,6 +112,7 @@ export const errorCodesConfigSchema = z.strictObject({
   codes: z.array(codeSourceSchema).min(1).refine(uniqueNames, "code source names must be unique"),
   clients: z.array(errorCodeClientSchema).min(1).refine(uniqueNames, "client names must be unique"),
   accept: z.array(errorCodeAcceptSchema).optional(),
+  returnedBy: z.array(returnedBySchema).optional(),
 });
 
 export type ErrorCodesConfig = z.infer<typeof errorCodesConfigSchema>;

@@ -85,6 +85,24 @@ describe("client-usage layer", () => {
     ]);
   });
 
+  it("shares the operations each client ref calls for later layers", async () => {
+    const output = await run({ refs: ["app-1", "app-3"], sources: ["app/screens/**/*.ts"] });
+    expect(output.calls).toEqual([
+      {
+        client: "mobile",
+        api: "b2c",
+        ref: "app-1",
+        operations: [{ method: "delete", path: "/api/pets/{}" }],
+      },
+      {
+        client: "mobile",
+        api: "b2c",
+        ref: "app-3",
+        operations: [{ method: "delete", path: "/api/pets/{}" }],
+      },
+    ]);
+  });
+
   it("reads the refs a resolver chose and names them in a note", async () => {
     const output = await run({ refs: ["latest-tag:app-[1-3]"] });
     expect(output.status === "failed" ? output.error : output.status).toBe("ran");

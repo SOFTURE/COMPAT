@@ -19,6 +19,7 @@ import {
   errorCodesConfigSchema,
 } from "./config.js";
 import { readCodes } from "./read-codes.js";
+import { scopeErrorCodes } from "./scope.js";
 
 type FileCodes = { path: string; codes: ReturnType<typeof readCodes> };
 
@@ -58,9 +59,15 @@ export const errorCodesLayer = defineLayer({
     }
     // Without every code source, an absent code could read as removed or added; report nothing then.
     const classified = canCompare ? classifyErrorCodes({ base, revision, clients }) : [];
-    const accepted = applyErrorCodeAccept(classified, context.config.accept ?? []);
+    const scoped = scopeErrorCodes(classified, {
+      returnedBy: context.config.returnedBy ?? [],
+      clients: context.config.clients,
+      calls: context.calls,
+      results: context.results,
+    });
+    const accepted = applyErrorCodeAccept(scoped.findings, context.config.accept ?? []);
     // With no comparison every entry would read as unused, which is not true.
-    if (canCompare) notes.push(...accepted.notes);
+    if (canCompare) notes.push(...scoped.notes, ...accepted.notes);
     if (errors.length > 0) {
       return {
         layer: ERROR_CODES_LAYER,
