@@ -9,6 +9,7 @@ import {
   matchStatement,
   mergeExplicitIds,
   RULE_CLASSES,
+  type RuleId,
   type RuleMatch,
 } from "./rules.js";
 
@@ -91,7 +92,38 @@ export function getCreatedTables(migrations: Migration[], dialect: SqlDialect): 
 }
 
 /** Rules that describe the creation itself; they are never downgraded. */
-const ADDITIVE_RULES = new Set(["create-schema", "create-table", "create-index", "add-column"]);
+const ADDITIVE_RULE_IDS = ["create-schema", "create-table", "create-index", "add-column"] as const;
+type AdditiveRuleId = (typeof ADDITIVE_RULE_IDS)[number];
+const ADDITIVE_RULES: ReadonlySet<RuleId> = new Set(ADDITIVE_RULE_IDS);
+
+/**
+ * What a statement does, without its risk, for findings on a table created by the same migrations:
+ * no old build uses that table, so the risk text of the rule does not apply.
+ */
+const NEW_TABLE_ACTIONS: Record<Exclude<RuleId, AdditiveRuleId>, string> = {
+  "add-required-column": "adds required column",
+  "add-unique-index": "adds a unique index on",
+  "add-constraint": "adds a constraint on",
+  "drop-table": "drops table",
+  "drop-column": "drops column",
+  "drop-object": "drops",
+  "rename-table": "renames table",
+  "rename-column": "renames column",
+  "move-table": "moves table",
+  "change-column-type": "changes the type of",
+  "alter-column": "alters column",
+  "set-not-null": "sets NOT NULL on",
+  "drop-not-null": "drops NOT NULL on",
+  "drop-default": "drops the default of",
+  "enum-value-added": "adds an enum value to",
+  "enum-value-renamed": "renames an enum value of",
+  truncate: "truncates",
+  "update-data": "updates rows in",
+  "delete-data": "deletes rows from",
+  "merge-data": "merges rows into",
+  "insert-explicit-id": "inserts rows with explicit ids into",
+  "object-redefined": "drops and creates again",
+};
 
 type MergedInsert = { item: ClassifiedFinding; table: SqlName; ids: ExplicitIds; isNewTable: boolean };
 
@@ -142,13 +174,17 @@ export function classifyMigrations(options: ClassifyOptions): ClassifiedFinding[
     }
   }
   for (const { item, table, ids, isNewTable } of merged.values()) {
-    item.finding.message = describeMessage(describeExplicitIds(table, ids), isNewTable);
+    if (!isNewTable) item.finding.message = describeExplicitIds(table, ids);
   }
   return classified;
 }
 
-function describeMessage(message: string, isNewTable: boolean): string {
-  return isNewTable ? `on a table created by these migrations, so no old build uses it: ${message}` : message;
+function describeNewTableFinding(ruleId: Exclude<RuleId, AdditiveRuleId>, object: string): string {
+  return `${NEW_TABLE_ACTIONS[ruleId]} ${object}; the table is created by these migrations, so no old build uses it`;
+}
+
+function isAdditiveRule(ruleId: RuleId): ruleId is AdditiveRuleId {
+  return ADDITIVE_RULES.has(ruleId);
 }
 
 type BuildFindingOptions = {
@@ -169,9 +205,7 @@ function buildFinding({
   isRedefined,
 }: BuildFindingOptions): Finding {
   const id = isRedefined ? "object-redefined" : match.rule;
-  const message = isRedefined
-    ? `drops and creates ${match.object} again: old builds get the new definition; check that it still gives them what they expect`
-    : describeMessage(match.message, isNewTable);
+  const message = getFindingMessage(id, match, isNewTable);
   return {
     layer: SQL_MIGRATIONS_LAYER,
     scope: options.sourceName,
@@ -189,6 +223,14 @@ function buildFinding({
       },
     ],
   };
+}
+
+function getFindingMessage(id: RuleId, match: RuleMatch, isNewTable: boolean): string {
+  if (isNewTable && !isAdditiveRule(id)) return describeNewTableFinding(id, match.object);
+  if (id === "object-redefined") {
+    return `drops and creates ${match.object} again: old builds get the new definition; check that it still gives them what they expect`;
+  }
+  return match.message;
 }
 
 /**
