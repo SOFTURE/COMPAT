@@ -36,7 +36,7 @@ opens.
 | **CMP-7** | `seed-silent-writes` | seed writes inside dynamic SQL are diffed; `COPY` and unreadable dynamic SQL are reported instead of silent | — | autonomous | done |
 | **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | done |
 | **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | done |
-| **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | new |
+| **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | done |
 | **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | done |
 | **CMP-12** | `release-0-3-0` | README and backlog brought up to date, version `0.3.0` released | CMP-7..CMP-11 | autonomous | new |
 
@@ -82,7 +82,7 @@ entry point; whichever merges second merges `master` in. No item touches the lay
 
 ### CMP-10: Dependency lockfiles
 - **Change ID:** `dependency-lockfiles`
-- **Status:** new
+- **Status:** done
 - **Outcome:** with `package-lock.json`, `pnpm-lock.yaml` or NuGet `packages.lock.json` next to a manifest, direct
   dependencies compare by resolved version and `watch` packages are also reported when they change transitively.
 - **Why it matters:** ranges compare by lower bound, so a lockfile-only upgrade (`^4.1.0` from 4.1.0 to 4.9.0) or a

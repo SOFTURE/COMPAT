@@ -65,11 +65,15 @@ What `init` detects:
 | `sql-migrations` | `.sql` files mentioning `__EFMigrationsHistory` (EF Core idempotent scripts), or drizzle `meta/_journal.json` folders for PostgreSQL |
 | `seed` | `.sql` files with `seed` in the name that are not migrations |
 | `persisted-enums` | a `*DbContext.cs` calling `ConfigureEnum<T>()` (string storage) |
-| `config` | compose files and `.env` examples at the default globs |
+| `config` | compose files and `.env` examples at the default globs, without test and mobile app files; compose files the deploy tooling references win over the rest. Ansible templates (`KEY={{ var }}`), `lookup('env', 'KEY')`, `assert` tasks and workflow `env:` entries from `secrets.*` become `regex` sources joined in a `deploy` chain (the assert is `required`); a workflow `environment:` adds a `gh secret list` presence command |
+| `dependencies` | MSBuild files and `package.json` files, without React Native and Expo apps; with NuGet, test packages (`Microsoft.NET.Test.Sdk`, `xunit*`, `nunit*`, `MSTest*`, `coverlet.*`, `*.Analyzers`, `Microsoft.CodeAnalysis.*`) are written as `ignore` |
 | `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`, one glob per such folder, kept when the folder name ends with `Messages` or `Events` or when an `IConsumer<T>`, `ConsumeContext<T>`, `IRequestClient<T>`, `Publish`/`Send<T>` or `Publish`/`Send(new T ...)` in the repository names one of its types; request DTO folders are left to `openapi`, and with none kept the layer is written disabled |
 | `behaviour` | never: it is written disabled with example commands, since nothing in a repository says how its stack starts |
 
-Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A SQL file is read as SQL Server when it has `GO`
+Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A test file is one under a `test`, `tests`,
+`e2e`, `mocks` or `*.Tests` folder, or with such a word in its name (`docker-compose.integration-tests.yml`); a
+mobile app is the folder of a `package.json` that depends on `expo` or `react-native`. Ansible files are those under
+an `ansible`, `roles` or `playbooks` folder or next to an `ansible.cfg`; `stderr` lists every file `init` skipped. A SQL file is read as SQL Server when it has `GO`
 batch lines or `[dbo]` names, otherwise as Postgres.
 
 ## Command line
@@ -659,8 +663,8 @@ change (a new retry policy in a messaging client, a new default in an ORM).
 
 | Source | Reads |
 | --- | --- |
-| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved as MSBuild sees it (see below); a reference without a version takes it from `Directory.Packages.props` |
-| `npm` | `package.json` (default `files`: `**/package.json`); `sections` from `dependencies` (default), `devDependencies`, `peerDependencies`, `optionalDependencies` |
+| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved as MSBuild sees it (see below); a reference without a version takes it from `Directory.Packages.props`; lockfile: `packages.lock.json` (versions 1 and 2) in the folder of a matched file |
+| `npm` | `package.json` (default `files`: `**/package.json`); `sections` from `dependencies` (default), `devDependencies`, `peerDependencies`, `optionalDependencies`; lockfile: the nearest `package-lock.json` (versions 1 to 3) or `pnpm-lock.yaml` (5.x, 6.x, 9.x) in the manifest folder or above that installs it (workspaces), `package-lock.json` first |
 
 A NuGet `$(Property)` resolves from the nearest `Directory.Build.props`, the nearest `Directory.Packages.props`, the
 file itself with its `<Import>`s in document order and the nearest `Directory.Build.targets`; the last definition wins,
@@ -674,10 +678,16 @@ decided; a property that other conditions give different values (per target fram
 unresolved and its finding lists the values. Versions that keep an undefined property are listed in the layer notes.
 
 `sources` defaults to both kinds; files under `node_modules`, `bin` and `obj` are skipped. Packages are compared by
-name over all files of a ref (NuGet names case-insensitively); a range compares by its lower bound (`^1.2.3`,
-`[1.2,2.0)`). When projects declare several versions of one package, a version that went down anywhere is a
+name over all files of a ref (NuGet names case-insensitively). With a lockfile, a direct dependency compares by the
+version the lockfile resolves, so `npm update` that moves `^4.1.0` from 4.1.0 to 4.9.0 in the lockfile only is
+reported, and a `watch` package installed only as a dependency of another one is reported when its version changes
+(the message says `resolved from lockfile` or `transitive, resolved from lockfile`; evidence points at the
+lockfile entry). Other transitive packages are not read. When a lockfile resolves a package at a ref, its declared
+versions at that ref are not compared. Without a lockfile, or with `lockfiles: false` on a source, a range compares
+by its lower bound (`^1.2.3`, `[1.2,2.0)`). When projects declare several versions of one package, a version that went down anywhere is a
 downgrade, otherwise the jump from the lowest base version to the highest revision version decides the class. The
-layer fails when no dependency file matches at either ref or a `package.json` is not valid JSON.
+layer fails when no dependency file matches at either ref, a `package.json` is not valid JSON, or a lockfile cannot
+be read or has a version this list does not support (set `lockfiles: false` on the source to skip lockfiles).
 
 `watch[]` entries are `{ name, class?, releaseNotes? }`: every finding of a matching package gets at least `class`,
 and `releaseNotes` is printed with it (nothing is fetched). `ignore[]` lists packages that produce no finding.

@@ -1,12 +1,12 @@
 ---
 change_id: dependency-lockfiles
 title: "The dependencies layer compares resolved versions from lockfiles"
-status: new
+status: archived
 roadmap_item: CMP-10
-branch: null
+branch: claude/dependency-lockfiles-j39sst
 created: 2026-10-07
 updated: 2026-10-07
-archived_at: null
+archived_at: 2026-10-07
 ---
 
 ## Intent
@@ -22,3 +22,4 @@ Roadmap v2 item CMP-10. Backlog dependencies-layer entry. Today a range compares
 
 ## Notes
 - 2026-10-07: opened from roadmap v2.
+- 2026-10-07: implemented and archived; lockfile readers in `src/layers/dependencies/read-*-lock.ts`.
