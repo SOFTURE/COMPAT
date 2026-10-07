@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { compareVersions, parseVersion, selectTags } from "../../../src/layers/client-usage/client-refs.js";
+import { compareVersions, parseVersion, selectTags } from "../../src/resolve/versions.js";
 
-describe("client refs", () => {
+describe("versions", () => {
   it("parses the first version of a tag", () => {
     expect(parseVersion("v2.10.1-rc1")).toEqual([2, 10, 1]);
     expect(parseVersion("mobile-2.0")).toEqual([2, 0]);

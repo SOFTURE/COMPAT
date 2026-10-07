@@ -320,9 +320,24 @@ of them enabled; it adds no findings of its own.
 | --- | --- |
 | `clients[].name` | unique name (letters, digits, `.`, `_`, `-`), shown in reasons as `mobile@2.0.1` |
 | `clients[].api` | the `openapi` API name this client calls |
-| `clients[].refs` | the live client builds: a list of git refs, or `{ tags, since? }`: local tags matching the `git tag --list` pattern, at or above the `since` version |
+| `clients[].refs` | the live client builds: a list of entries, or one selector on its own (see below) |
 | `clients[].generatedClient` | `{ kind: "typescript", path }`: the generated client, read at every client ref |
 | `clients[].sources` | optional globs of the client's own code; an operation then counts as called only when its client function is referenced there |
+
+An entry of `refs` is one of:
+
+| Entry | Resolves to |
+| --- | --- |
+| a git ref, e.g. `"2.2.4"` | that ref |
+| a [resolver](#finding-the-production-ref): `"github-deployment:<environment>"`, `"github-workflow:<file>"`, `"latest-tag[:<glob>]"` | one ref, as for `--base`; a web client deployed with the server is `"github-deployment:prod"` |
+| `{ "tags": "<pattern>", "since"?: "<version>" }` | local tags matching the `git tag --list` pattern, at or above the `since` version |
+| `{ "workflowRuns": "<file>", "since"?: "<version or YYYY-MM-DD>" }` | the head commit of every successful run of that workflow, labelled by the run's tag or branch (the newest run per label); `since` keeps labels at or above a version, or runs created on or after a date |
+
+For a mobile client built by a workflow on its tags, `{ "workflowRuns": "eas-prod.yml", "since": "2.0.1" }` lists
+exactly the shipped builds, even when server tags are interleaved with them. The GitHub entries use the token and
+repository of the `--base` resolvers, and more than 1000 successful runs need a date `since`. A resolver that finds
+nothing, or a resolved commit missing from the clone, fails the layer. The layer notes name what each resolver
+resolved to, e.g. `client "mobile": workflowRuns:eas-prod.yml since 2.0.1 → 2.0.1, 2.0.2, 2.1.1, 2.1.2, 2.2.4`.
 
 What changes, per `openapi` finding of the client's API that is not accepted and not `safe`, for an operation
 (`METHOD /path`):

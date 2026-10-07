@@ -104,6 +104,7 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
             repoDir: repoRoot.value,
             tempDir,
             env: io.env,
+            fetch: io.fetch,
             log: (message) => io.stderr(`[${layer.name}] ${message}\n`),
             results: [...results],
           }),
