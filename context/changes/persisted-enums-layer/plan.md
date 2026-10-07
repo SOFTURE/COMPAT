@@ -166,9 +166,9 @@ evidence includes `PetseoDbContext.cs:188` and a note for the undeclared `T`; it
 ### Phase 1: Enum parser and storage-aware comparison
 
 #### Automated
-- [ ] 1.1 The parser tests pass for the C# and TypeScript cases listed in phase 1
-- [ ] 1.2 The comparison tests pass for every string and int rule listed in phase 1
-- [ ] 1.3 Gates green (typecheck, lint, test)
+- [x] 1.1 The parser tests pass for the C# and TypeScript cases listed in phase 1 — fd033ea
+- [x] 1.2 The comparison tests pass for every string and int rule listed in phase 1 — fd033ea
+- [x] 1.3 Gates green (typecheck, lint, test) — fd033ea
 
 ### Phase 2: The `persisted-enums` layer with discovery, accept and the F7 acceptance case
 

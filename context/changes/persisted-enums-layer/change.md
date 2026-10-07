@@ -1,7 +1,7 @@
 ---
 change_id: persisted-enums-layer
 title: "Changes to enums persisted in the database are classified by how they are stored"
-status: plan_reviewed
+status: implementing
 roadmap_item: CMP-4
 branch: claude/project-thread-ijh43y
 created: 2026-10-07
