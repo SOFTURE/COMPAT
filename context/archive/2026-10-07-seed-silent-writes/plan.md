@@ -53,5 +53,5 @@ Rejected: a separate pre-pass that rewrites the script text - it would lose offs
 ### Phase 1: Dynamic SQL, COPY and bulk loads in the seed reader
 
 #### Automated
-- [x] 1.1 Every listed case passes in `test/layers/seed/seed-statements.test.ts` and `classify.test.ts` — PENDING
-- [x] 1.2 Gates green (typecheck, lint, test) — PENDING
+- [x] 1.1 Every listed case passes in `test/layers/seed/seed-statements.test.ts` and `classify.test.ts` — 2d4d5a5
+- [x] 1.2 Gates green (typecheck, lint, test) — 2d4d5a5
