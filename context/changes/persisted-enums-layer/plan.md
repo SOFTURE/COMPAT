@@ -173,7 +173,7 @@ evidence includes `PetseoDbContext.cs:188` and a note for the undeclared `T`; it
 ### Phase 2: The `persisted-enums` layer with discovery, accept and the F7 acceptance case
 
 #### Automated
-- [ ] 2.1 The config and layer tests listed in phase 2 pass
-- [ ] 2.2 The F7 end-to-end test with `--fail-on rollback-risk` exits 1 with exactly one `rollback-risk` finding with evidence at the member line and `PetseoDbContext.cs:188`, and exits 0 with the accept entry
-- [ ] 2.3 `persisted-enums` is in `LAYERS` and `src/config/config.ts` is unchanged
-- [ ] 2.4 Gates green (typecheck, lint, test)
+- [x] 2.1 The config and layer tests listed in phase 2 pass — 5364d58
+- [x] 2.2 The F7 end-to-end test with `--fail-on rollback-risk` exits 1 with exactly one `rollback-risk` finding with evidence at the member line and `PetseoDbContext.cs:188`, and exits 0 with the accept entry — 5364d58
+- [x] 2.3 `persisted-enums` is in `LAYERS` and `src/config/config.ts` is unchanged — 5364d58
+- [x] 2.4 Gates green (typecheck, lint, test) — 5364d58
