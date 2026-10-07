@@ -10,6 +10,13 @@ import { createFinding } from "../../helpers/stub-layer.js";
 
 const CLIENT = `export const deletePet = (id: string) => fetch(\`/api/pets/\${id}\`, { method: "DELETE" });\n`;
 
+const MEDICATION_CLIENT = [
+  "export const addMedication = (body: AddMedication, petId: string) =>",
+  '  fetch(`/api/pets/${petId}/medications`, { method: "POST", body: JSON.stringify(body) });',
+  "export interface AddMedication { daysOfWeek?: DayOfWeek[] }",
+  "",
+].join("\n");
+
 let repo: TestRepo;
 
 beforeAll(() => {
@@ -44,6 +51,15 @@ beforeAll(() => {
         "app/screens/inbox.ts": "switch (n.type) {\n  case 'Unknown': break;\n}\n",
       },
       tag: "app-6",
+    },
+    {
+      files: {
+        "app/client.ts": MEDICATION_CLIENT,
+        "app/screens/inbox.ts": null,
+        "app/screens/medications.ts":
+          "export const save = (petId: string, days: DayOfWeek[]) =>\n  addMedication({ daysOfWeek: days }, petId);\n",
+      },
+      tag: "app-7",
     },
   ]);
 });
@@ -356,5 +372,33 @@ describe("client-usage config", () => {
       clientUsageConfigSchema.safeParse({ clients: [{ ...base, refs: { tags: "2.*", since: "2.0.1" } }] })
         .success,
     ).toBe(true);
+  });
+});
+
+describe("client-usage layer with call sites (issue #75)", () => {
+  it("drops a not-nullable finding to safe from the literal the sources send", async () => {
+    const notNullable: LayerResult = {
+      layer: "openapi",
+      status: "ran",
+      findings: [
+        createFinding("breaking", {
+          layer: "openapi",
+          scope: "b2c",
+          id: "request-property-became-not-nullable",
+          subject: "POST /api/pets/{petId}/medications",
+          message: "the request property `daysOfWeek` became not nullable",
+        }),
+      ],
+      notes: [],
+    };
+    const output = await run({ refs: ["app-7"], sources: ["app/screens/**/*.ts"] }, [notNullable]);
+    expect(output.revisions?.[0]?.finding).toMatchObject({
+      class: "safe",
+      reclassified: { reason: "`daysOfWeek` is always sent non-null by the call sites of mobile@app-7" },
+    });
+    expect(output.revisions?.[0]?.finding.evidence.at(-1)).toMatchObject({
+      path: "app/screens/medications.ts",
+      line: 2,
+    });
   });
 });

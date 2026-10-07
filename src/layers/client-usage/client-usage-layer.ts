@@ -12,6 +12,7 @@ import {
   clientUsageConfigSchema,
 } from "./config.js";
 import { type BranchTarget, findEnumBranches } from "./find-enum-branches.js";
+import type { SourceFile } from "./find-sent-literals.js";
 import { readIdentifiers, readTypescriptClient } from "./read-typescript-client.js";
 import { type ClientRefUsage, formatRefs, isCalled, refineFindings } from "./refine.js";
 import { findExposedFindings, getBranchKey, refineExposedFindings, toBranchTarget } from "./refine-enums.js";
@@ -196,6 +197,7 @@ async function readClientRef(
     const sources = await readSources({ tree, globs: client.sources, clientPath: path, targets });
     if (!sources.ok) return sources;
     usage.sourceIdentifiers = sources.value.identifiers;
+    usage.sources = sources.value.files;
     usage.branches = sources.value.branches;
   }
   return ok({ usage, notes });
@@ -203,9 +205,13 @@ async function readClientRef(
 
 type ReadSourcesOptions = { tree: RefTree; globs: string[]; clientPath: string; targets: BranchTarget[] };
 
-type SourceReads = { identifiers: Set<string>; branches: Map<string, { path: string; line: number }[]> };
+type SourceReads = {
+  identifiers: Set<string>;
+  branches: Map<string, { path: string; line: number }[]>;
+  files: SourceFile[];
+};
 
-/** Identifiers of the client's own sources, and the lines that branch on each exposed enum. */
+/** The client's own sources, their identifiers, and the lines that branch on each exposed enum. */
 async function readSources({
   tree,
   globs,
@@ -217,6 +223,7 @@ async function readSources({
   const sources = files.value.filter((file) => file !== clientPath);
   if (sources.length === 0) return err(`sources ${globs.join(", ")} match no file`);
   const identifiers = new Set<string>();
+  const read: SourceFile[] = [];
   const branches = new Map(
     targets.map((target) => [getBranchKey(target), [] as { path: string; line: number }[]]),
   );
@@ -224,11 +231,12 @@ async function readSources({
     const text = await tree.readFile(file);
     if (!text.ok) return text;
     const content = text.value ?? "";
+    read.push({ path: file, text: content });
     for (const identifier of readIdentifiers(content)) identifiers.add(identifier);
     for (const target of targets) {
       const sites = branches.get(getBranchKey(target)) ?? [];
       for (const line of findEnumBranches(content, target)) sites.push({ path: file, line });
     }
   }
-  return ok({ identifiers, branches });
+  return ok({ identifiers, branches, files: read });
 }

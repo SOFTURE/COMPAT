@@ -9,8 +9,8 @@ export type ClientOperation = {
   line: number;
   /** The client function that makes the call, when it could be read. */
   functionName?: string;
-  /** The type of the parameter sent as the request body, when it could be read. */
-  body?: { typeName: string; isOptional: boolean };
+  /** The type of the parameter sent as the request body and its position, when it could be read. */
+  body?: { typeName: string; isOptional: boolean; index: number };
 };
 
 export type TypeMember = {
@@ -51,7 +51,7 @@ const LEADING_HOLES = /^(\$\{\})+(?=\/)/;
 /** Variables and keys that hold a request URL: `const url = ...`, `let url_ = ...`, `{ url: ... }`. */
 const URL_NAME = /^(url|uri|path|endpoint)_?$/i;
 
-type Scan = {
+export type Scan = {
   tokens: Token[];
   /** Index of the matching bracket for `(`, `{`, `[` and their closers; -1 for other tokens. */
   match: Int32Array;
@@ -61,7 +61,7 @@ type Scan = {
   paren: Int32Array;
 };
 
-function scan(text: string): Scan {
+export function scan(text: string): Scan {
   const tokens = tokenize(text, "typescript");
   const match = new Int32Array(tokens.length).fill(-1);
   const block = new Int32Array(tokens.length).fill(-1);
@@ -95,7 +95,7 @@ function scan(text: string): Scan {
   return { tokens, match, block, paren };
 }
 
-const isPunctuation = (token: Token | undefined, text: string) =>
+export const isPunctuation = (token: Token | undefined, text: string) =>
   token?.kind === "punctuation" && token.text === text;
 
 function toMethod(text: string | undefined): HttpMethod | undefined {
@@ -292,7 +292,7 @@ function readParameters(s: Scan, open: number, close: number): Parameter[] {
 }
 
 /** Index of the `,` ending a list item that starts at `start`, or `close`; skips brackets and generics. */
-function findListEnd(s: Scan, start: number, close: number): number {
+export function findListEnd(s: Scan, start: number, close: number): number {
   let angles = 0;
   for (let index = start; index < close; index++) {
     const token = s.tokens[index] as Token;
@@ -308,10 +308,10 @@ function findListEnd(s: Scan, start: number, close: number): number {
   return close;
 }
 
-type TypeShape = { typeName?: string; isNullable: boolean; isUndefinable: boolean };
+export type TypeShape = { typeName?: string; isNullable: boolean; isUndefinable: boolean };
 
 /** Reads `Foo`, `Foo[]`, `Array<Foo>`, `Foo | null | undefined`; anything else has no type name. */
-function readTypeShape(tokens: Token[]): TypeShape {
+export function readTypeShape(tokens: Token[]): TypeShape {
   const isNullable = tokens.some((token) => token.kind === "identifier" && token.text === "null");
   const isUndefinable = tokens.some((token) => token.kind === "identifier" && token.text === "undefined");
   const alternatives: Token[][] = [[]];
@@ -354,13 +354,15 @@ function readBody(s: Scan, declaration: Declaration): ClientOperation["body"] {
     const isKeyed = isPunctuation(previous, ":") && BODY_KEYS.has(s.tokens[index - 2]?.text ?? "");
     if (isStringified || isKeyed) sent = token.text;
   }
-  const parameter = parameters.find((candidate) => candidate.name === (sent ?? "body"));
+  const index = parameters.findIndex((candidate) => candidate.name === (sent ?? "body"));
+  const parameter = parameters[index];
   if (parameter === undefined) return undefined;
   const shape = readTypeShape(parameter.typeTokens);
   if (shape.typeName === undefined) return undefined;
   return {
     typeName: shape.typeName,
     isOptional: parameter.isOptional || shape.isUndefinable || shape.isNullable,
+    index,
   };
 }
 
@@ -581,7 +583,7 @@ function resolveIntersections(
  * `interface X ... {`, `class X ... {`, `type X = {`: the members by type name. `type X = A & { ... }`
  * (how a generated client writes an allOf) gets the members of every part.
  */
-function readTypes(s: Scan): Map<string, Map<string, TypeMember>> {
+export function readTypes(s: Scan): Map<string, Map<string, TypeMember>> {
   const types = new Map<string, Map<string, TypeMember>>();
   const intersections = new Map<string, IntersectionPart[]>();
   for (let index = 0; index < s.tokens.length; index++) {
