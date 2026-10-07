@@ -9,8 +9,8 @@ import { createFinding } from "../helpers/stub-layer.js";
 function buildReport(layers: LayerResult[], inactive: InactiveLayer[] = [], required: string[] = []): Report {
   const options = { failOn: "breaking" as const, allowIncomplete: false, required };
   return {
-    base: { ref: "2.2.4", commit: "a".repeat(40) },
-    revision: { ref: "2.3.4", commit: "b".repeat(40) },
+    base: { ref: "2.2.4", commit: "a".repeat(40), source: "flag" },
+    revision: { ref: "2.3.4", commit: "b".repeat(40), source: "flag" },
     ...options,
     gate: evaluateGate(layers, options, inactive),
     layers,
@@ -61,7 +61,7 @@ describe("renderMarkdown", () => {
       [
         "# Backward compatibility: 2.2.4 → 2.3.4",
         "",
-        "Base `aaaaaaaaaaaa`, revision `bbbbbbbbbbbb`, fail on `breaking`.",
+        "Base `aaaaaaaaaaaa` (--base), revision `bbbbbbbbbbbb` (--revision), fail on `breaking`.",
         "",
         "**Gate: PASS**",
         "",
@@ -96,11 +96,22 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain("## needs-action (1)\n\n- **config / api** `key-added` Shop__ApiKey");
   });
 
-  it("names the resolver and what it resolved to in the header", () => {
+  it("names the resolver, what it resolved to and where each ref was set in the header", () => {
     const report = buildReport([]);
-    report.base = { ref: "2.2.4", commit: "a".repeat(40), resolver: "github-deployment:prod" };
+    report.base = {
+      ref: "2.2.4",
+      commit: "a".repeat(40),
+      resolver: "github-deployment:prod",
+      source: "config",
+    };
     expect(renderMarkdown(report).split("\n")[2]).toBe(
-      "Base github-deployment:prod → 2.2.4 `aaaaaaaaaaaa`, revision `bbbbbbbbbbbb`, fail on `breaking`.",
+      "Base github-deployment:prod → 2.2.4 `aaaaaaaaaaaa` (config), revision `bbbbbbbbbbbb` (--revision), fail on `breaking`.",
+    );
+  });
+
+  it("says a ref came from the command line with the flag that set it", () => {
+    expect(renderMarkdown(buildReport([])).split("\n")[2]).toBe(
+      "Base `aaaaaaaaaaaa` (--base), revision `bbbbbbbbbbbb` (--revision), fail on `breaking`.",
     );
   });
 
@@ -119,7 +130,7 @@ describe("renderMarkdown with layers that did not run", () => {
       [
         "# Backward compatibility: 2.2.4 → 2.3.4",
         "",
-        "Base `aaaaaaaaaaaa`, revision `bbbbbbbbbbbb`, fail on `breaking`.",
+        "Base `aaaaaaaaaaaa` (--base), revision `bbbbbbbbbbbb` (--revision), fail on `breaking`.",
         "",
         "**Gate: PASS**",
         "",
@@ -149,7 +160,7 @@ describe("renderJson", () => {
     const document = JSON.parse(renderJson(buildReport(mixed)));
     expect(document.schemaVersion).toBe(1);
     expect(document.gate.exitCode).toBe(1);
-    expect(document.base).toEqual({ ref: "2.2.4", commit: "a".repeat(40) });
+    expect(document.base).toEqual({ ref: "2.2.4", commit: "a".repeat(40), source: "flag" });
     expect(
       document.layers.map((layer: { layer: string; verdict: string }) => [layer.layer, layer.verdict]),
     ).toEqual([
@@ -170,16 +181,22 @@ describe("renderJson", () => {
     expect(document.gate.reasons).toEqual(["openapi: layer disabled, but --require names it"]);
   });
 
-  it("includes the resolver of a resolved ref", () => {
+  it("includes the resolver and the source of each ref", () => {
     const report = buildReport([]);
-    report.base = { ref: "2.2.4", commit: "a".repeat(40), resolver: "github-deployment:prod" };
+    report.base = {
+      ref: "2.2.4",
+      commit: "a".repeat(40),
+      resolver: "github-deployment:prod",
+      source: "config",
+    };
     const document = JSON.parse(renderJson(report));
     expect(document.base).toEqual({
       ref: "2.2.4",
       commit: "a".repeat(40),
       resolver: "github-deployment:prod",
+      source: "config",
     });
-    expect(document.revision).toEqual({ ref: "2.3.4", commit: "b".repeat(40) });
+    expect(document.revision).toEqual({ ref: "2.3.4", commit: "b".repeat(40), source: "flag" });
   });
 
   it("renders an empty report", () => {

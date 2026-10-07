@@ -1,4 +1,10 @@
-import { type Evidence, FINDING_CLASSES, type Finding, type LayerResult } from "../model/finding.js";
+import {
+  type Evidence,
+  FINDING_CLASSES,
+  type Finding,
+  type LayerResult,
+  type Side,
+} from "../model/finding.js";
 import { getLayerVerdict, type InactiveLayer } from "../model/gate.js";
 import type { RefInfo, Report } from "./report.js";
 
@@ -52,11 +58,15 @@ function formatRequired(required: string[]): string {
   return `, required: ${required.map((layer) => `\`${layer.replace(/`/g, "'")}\``).join(", ")}`;
 }
 
-/** `\`aaaa\`` for a plain ref, `github-deployment:prod → 2.2.4 \`aaaa\`` for a resolved one. */
-function formatRefInfo(info: RefInfo): string {
+/**
+ * `\`aaaa\` (--base)` for a plain ref, `github-deployment:prod → 2.2.4 \`aaaa\` (config)` for a resolved one;
+ * the parentheses say where the ref was set.
+ */
+function formatRefInfo(info: RefInfo, side: Side): string {
   const commit = `\`${shortCommit(info.commit)}\``;
-  if (info.resolver === undefined) return commit;
-  return `${escapeMarkdown(info.resolver)} → ${escapeMarkdown(info.ref)} ${commit}`;
+  const source = info.source === "config" ? "(config)" : `(--${side})`;
+  if (info.resolver === undefined) return `${commit} ${source}`;
+  return `${escapeMarkdown(info.resolver)} → ${escapeMarkdown(info.ref)} ${commit} ${source}`;
 }
 
 function formatInactiveStatus(layer: InactiveLayer): string {
@@ -68,7 +78,7 @@ export function renderMarkdown(report: Report): string {
   lines.push(
     `# Backward compatibility: ${escapeMarkdown(report.base.ref)} → ${escapeMarkdown(report.revision.ref)}`,
     "",
-    `Base ${formatRefInfo(report.base)}, revision ${formatRefInfo(report.revision)}, fail on \`${report.failOn}\`${formatRequired(report.required)}${report.allowIncomplete ? ", incomplete layers allowed" : ""}.`,
+    `Base ${formatRefInfo(report.base, "base")}, revision ${formatRefInfo(report.revision, "revision")}, fail on \`${report.failOn}\`${formatRequired(report.required)}${report.allowIncomplete ? ", incomplete layers allowed" : ""}.`,
     "",
   );
   lines.push(report.gate.passed ? "**Gate: PASS**" : "**Gate: FAIL**");

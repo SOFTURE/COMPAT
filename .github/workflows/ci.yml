@@ -69,7 +69,8 @@ jobs:
           FIXTURE="${RUNNER_TEMP}/fixture"
           mkdir -p "${FIXTURE}/db"
           cp test/fixtures/seed/f6-postgres/base.sql "${FIXTURE}/db/seed.sql"
-          echo '{ "layers": { "seed": { "sources": [{ "name": "db", "dialect": "postgres", "files": ["db/seed.sql"] }] } } }' \
+          # `check.revision` comes from the config: the action passes only the inputs it was given.
+          echo '{ "check": { "revision": "HEAD" }, "layers": { "seed": { "sources": [{ "name": "db", "dialect": "postgres", "files": ["db/seed.sql"] }] } } }' \
             > "${FIXTURE}/compat.config.json"
           cd "${FIXTURE}"
           git init -q -b main
