@@ -1,5 +1,7 @@
 import type { KeyDeclaration } from "./classify.js";
-import { createLineLocator, stripComments } from "./comments.js";
+import { createLineLocator } from "./comments.js";
+import { findPassThroughKeys } from "./compose-environment.js";
+import { maskYamlComments } from "./yaml-text.js";
 
 const NAME_START = /[A-Za-z_]/;
 const NAME_CHAR = /[A-Za-z0-9_]/;
@@ -8,15 +10,17 @@ const NAME_CHAR = /[A-Za-z0-9_]/;
  * Finds the variables a Compose file interpolates. `$VAR`, `${VAR}` and `${VAR:?err}` give no
  * default; `${VAR:-d}` gives `d`; `${VAR:+alt}` gives an empty default, since the value is
  * only used when set. References nested inside another reference's text get an empty default:
- * they are read only when the outer variable is unset.
+ * they are read only when the outer variable is unset. Pass-through `environment` entries
+ * (`- KEY`, `KEY:`) give no default: the host supplies the value.
  */
 export function scanCompose(text: string): KeyDeclaration[] {
-  const stripped = stripComments(text, "hash");
-  const getLine = createLineLocator(stripped);
+  const masked = maskYamlComments(text);
+  const getLine = createLineLocator(masked.text);
   const declarations: KeyDeclaration[] = [];
-  scanRange(stripped, 0, stripped.length, false, (key, offset, value) =>
+  scanRange(masked.text, 0, masked.text.length, false, (key, offset, value) =>
     declarations.push({ key, line: getLine(offset), default: value }),
   );
+  declarations.push(...findPassThroughKeys(masked));
   return declarations;
 }
 
