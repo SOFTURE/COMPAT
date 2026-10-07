@@ -30,7 +30,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 | **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | done |
 | **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | done |
 | **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | done |
-| **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | ready |
+| **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | done_code (2026-10-07; waiting: owner publishes v0.1.0 and sets up npm trusted publishing) |
 
 ## Order
 CMP-1 builds the core every layer plugs into, so it goes first. CMP-3 reuses the SQL statement splitter of CMP-2.
@@ -99,7 +99,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-6: Release readiness
 - **Change ID:** `release-readiness`
-- **Status:** ready
+- **Status:** done_code (2026-10-07; waiting: owner publishes v0.1.0 and sets up npm trusted publishing)
 - **Outcome:** README with a quick start and the config reference, `softure-compat init`, GitHub Actions for CI
   and npm publish with provenance, and an end-to-end test that reproduces the in-scope PETSEO findings.
 - **Prerequisites:** CMP-2, CMP-3, CMP-4, CMP-5.
@@ -109,8 +109,11 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 - **PRD refs:** change.md Constraints (distribution).
 
 ## Before the next release
+- [ ] Merge to `master`; publish `0.1.0` to npm once by hand, configure npm trusted publishing (repository `SOFTURE/COMPAT`, workflow `release.yml`), then push tag `v0.1.0`; `release.yml` publishes to GitHub Packages and creates the GitHub Release (README "Releasing") (**CMP-6**)
 
 ## Owner decisions and checks
+- [ ] **CMP-6**: The owner publishes `0.1.0` and pushes tag `v0.1.0` (Manual 3.5; the workflow was replaced after archive by `release.yml` modelled on SOFTURE/skills: trusted publishing instead of `NPM_TOKEN`). archive/2026-10-07-release-readiness/plan.md
+- [ ] **CMP-6**: The owner can configure PETSEO from the README alone (Manual 4.3). archive/2026-10-07-release-readiness/plan.md
 
 ## Done
 - **CMP-1** `backward-compat-checker`: core CLI (config, `RefTree`, finding model, gate, Markdown/JSON reports, exit codes) and the `openapi` layer on oasdiff, with CI; archived in `archive/2026-10-07-backward-compat-checker/`
@@ -118,3 +121,4 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 - **CMP-3** `seed-layer`: `seed` layer (seed files diffed per table and row key across a source's files; conflict guards, `MERGE`, `IF NOT EXISTS` blocks, `DO` bodies and T-SQL without semicolons; 14 finding ids, accept allowlist); archived in `archive/2026-10-07-seed-layer/`
 - **CMP-5** `config-layer`: `config` layer over compose interpolation, `.env` examples and configured regex sources; new required keys and removed defaults are `needs-action`, compared file by file and failing closed on silent sources; archived in `archive/2026-10-07-config-layer/`
 - **CMP-4** `persisted-enums-layer`: `persisted-enums` layer (C# and TypeScript enum parser, string and int storage rules, discovery by glob + regex, accept allowlist, F7 acceptance test); archived in `archive/2026-10-07-persisted-enums-layer/`
+- **CMP-6** `release-readiness`: README (quick start, CLI and config reference), `softure-compat init`, CI on Node 22 and 24, tag-driven npm publish workflow with provenance, and one acceptance run over all five layers reproducing F1, F2, F4, F5, F6, F7, F10; archived in `archive/2026-10-07-release-readiness/`

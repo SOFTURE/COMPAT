@@ -7,6 +7,7 @@ describe("main", () => {
     const run = createIo(process.cwd());
     expect(await main(["--help"], run.io)).toBe(0);
     expect(run.stdout()).toContain("Usage: softure-compat check --base <ref> --revision <ref>");
+    expect(run.stdout()).toContain("softure-compat init [--repo <dir>] [--config <file>] [--force]");
   });
 
   it("prints the package version", async () => {
@@ -22,6 +23,10 @@ describe("main", () => {
     [["diff", "--base", "a", "--revision", "b"], 'unknown command "diff"'],
     [["check", "--base", "a", "--revision", "b", "--format", "html"], "--format must be one of md, json"],
     [["check", "--base", "a", "--revision", "b", "--fail-on", "info"], "--fail-on must be one of"],
+    [["check", "--base", "a", "--revision", "b", "--force"], "--force is only for init"],
+    [["init", "--base", "a"], "--base is only for check"],
+    [["init", "--fail-on", "never"], "--fail-on is only for check"],
+    [["init", "now"], 'unknown command "init now"'],
   ])("returns 2 for %j", async (argv, message) => {
     const run = createIo(process.cwd());
     expect(await main(argv, run.io)).toBe(2);

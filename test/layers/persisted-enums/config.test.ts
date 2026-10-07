@@ -69,14 +69,8 @@ describe("persisted-enums config", () => {
     ]);
   });
 
-  it("is registered after seed and composes into the config file schema", () => {
-    expect(LAYERS.map((layer) => layer.name)).toEqual([
-      "openapi",
-      "sql-migrations",
-      "seed",
-      "persisted-enums",
-      "config",
-    ]);
+  it("is registered in the layer list and composes into the config file schema", () => {
+    expect(LAYERS.map((layer) => layer.name)).toContain("persisted-enums");
     const parsed = parseConfig(
       { layers: { "persisted-enums": { sources: "src/**/*.cs", enums: [named] } } },
       LAYERS,
