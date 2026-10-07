@@ -1,125 +1,123 @@
 ---
 project: "SOFTURE COMPAT"
-roadmap: v1
+roadmap: v2
 version: 1
 status: ready
 prd_version: null
 updated: 2026-10-07
 ---
 
-# Roadmap v1: a publishable `softure-compat` with the five layers that would have saved the PETSEO session
+# Roadmap v2: no silent false negatives in the shipped layers, and a report reviewers actually see
 
 > Run-wide orders, read by orchestrators (not parsed):
 > - Push main branch: no
 > - Archive roadmap: no
-> - Release: no (the owner publishes to npm with his own token)
+> - Release: yes, through CMP-12 (a version bump merged to `master`; `release.yml` publishes)
 > - Parallelism: one thread per change, started by the project coordinator; an item starts once its
 >   prerequisites are merged into `master`
 
-Source: `context/archive/2026-10-07-backward-compat-checker/research.md` (no PRD; the research and the owner's
-requests of 2026-10-07 are the product input). Scope of v1 follows research §6 question 4: `openapi`,
-`sql-migrations`, `seed`, `persisted-enums` and `config`. The layers `client-usage`, `message-contracts` and
-`behaviour` wait in `context/backlog/later-layers.md`.
+Source: every open entry of `context/backlog/later-layers.md` on 2026-10-07, research §6 question 6
+(`context/archive/2026-10-07-backward-compat-checker/research.md`) and the owner's request of 2026-10-07 to take the
+rest of the backlog, but only what makes sense. No open GitHub issues on 2026-10-07. Roadmap v1 (CMP-1..CMP-6) and
+the issue wave #11..#23 are done; v1 is archived in `foundation/archive/2026-10-07-roadmap-v1.md`.
+
+## How items were chosen
+The tool's promise is that a release which passes the gate does not break what runs in production. So an entry
+made the cut when it closes a **false negative**: a real change that today produces no finding at all, verified in
+the code. Entries that only make findings more precise, reduce noise that errs on the safe side, or check
+something other than backward compatibility were rejected (see "Rejected"). One item outside the backlog made it:
+the GitHub Action, because `needs-action` findings do not fail the default gate and today end up in a file nobody
+opens.
 
 ## At a glance
 
 | ID | Change | Outcome | Depends on | Mode | Status |
 | --- | --- | --- | --- | --- | --- |
-| **CMP-1** | `backward-compat-checker` | `softure-compat check` runs end to end with the finding model, git refs, reports, exit codes and the `openapi` layer | — | autonomous | done |
-| **CMP-2** | `sql-migrations-layer` | new migrations of the revision are classified for Postgres and SQL Server | CMP-1 | autonomous | done |
-| **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | done |
-| **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | done |
-| **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | done |
-| **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | done (2026-10-07; `0.1.0` released by `release.yml`) |
+| **CMP-7** | `seed-silent-writes` | seed writes inside dynamic SQL are diffed; `COPY` and unreadable dynamic SQL are reported instead of silent | — | autonomous | new |
+| **CMP-8** | `compose-scanning-gaps` | compose block scalars, pass-through `environment` entries and multi-line scalars no longer hide required keys | — | autonomous | new |
+| **CMP-9** | `msbuild-properties` | package versions held in properties of `Directory.Build.props` or imported files are compared | — | autonomous | new |
+| **CMP-10** | `dependency-lockfiles` | resolved versions from lockfiles, so lockfile-only upgrades and watched transitive ones are reported | — | autonomous | new |
+| **CMP-11** | `github-action` | composite GitHub Action: runs the check, writes the job summary, keeps one PR comment | — | autonomous | new |
+| **CMP-12** | `release-0-3-0` | README and backlog brought up to date, version `0.3.0` released | CMP-7..CMP-11 | autonomous | new |
 
 ## Order
-CMP-1 builds the core every layer plugs into, so it goes first. CMP-3 reuses the SQL statement splitter of CMP-2.
-CMP-4 and CMP-5 only add a layer folder and a registry line each. CMP-6 closes the roadmap: it documents the
-finished command set and proves the PETSEO acceptance table on a synthetic repository. Items run
-as separate threads, one change each; CMP-4 and CMP-5 may run next to CMP-2. The shared hot files are the layer
-registry and the config schema that CMP-1 creates; every later item adds one entry to each.
+CMP-7..CMP-11 have no prerequisites and run in parallel (five threads). CMP-12 goes last.
+
+Shared hot files: `README.md` (each item edits its own section; conflicts are textual). CMP-9 and CMP-10 both live in
+`src/layers/dependencies/`: CMP-9 owns `read-nuget.ts`, CMP-10 adds new lockfile readers and touches the layer
+entry point; whichever merges second merges `master` in. No item touches the layer registry.
 
 ## Items
 
-### CMP-1: Core CLI and the OpenAPI layer
-- **Change ID:** `backward-compat-checker`
-- **Status:** done
-- **Outcome:** `softure-compat check --base <ref> --revision <ref>` reads `compat.config.json`, runs enabled
-  layers on both refs, prints Markdown or JSON and exits non-zero at or above `--fail-on`. The `openapi` layer
-  wraps oasdiff with an allowlist for reviewed false positives.
+### CMP-7: Seed silent writes
+- **Change ID:** `seed-silent-writes`
+- **Status:** new
+- **Outcome:** dynamic SQL with a literal body (`EXEC(N'...')`, `EXEC sp_executesql N'...'`, `EXECUTE '...'` in a
+  `DO` body) is unwrapped and diffed; `EXECUTE format(...)`, concatenated dynamic SQL and `COPY ... FROM` are
+  `unreadable-write` `needs-action`.
+- **Why it matters:** `seed-statements.ts` detects writes by keyword with literals masked, so a write inside
+  `EXEC(N'...')` and every `COPY` produce no finding: a seed that overwrites production rows that way passes.
 - **Prerequisites:** none.
-- **Unknowns:** none left; research.md §4 is the design input.
-- **Risk:** oasdiff is a Go binary outside npm; a missing binary must read as `skipped`, never as `safe`.
-- **Baseline:** no tool; the PETSEO analysis was manual.
-- **PRD refs:** research.md §1 F1, F2; §4 design sketch.
+- **Risk:** unwrapping must keep the outer file's line numbers for evidence.
 
-### CMP-2: SQL migrations layer
-- **Change ID:** `sql-migrations-layer`
-- **Status:** done
-- **Outcome:** migrations present in the revision and absent in the base (a folder of scripts or an EF idempotent
-  script) are split into statements and classified by dialect-aware rules.
-- **Prerequisites:** CMP-1.
-- **Unknowns:** how EF idempotent scripts mark migration ids in each dialect.
-- **Risk:** regex rules miss exotic DDL; unknown statements must stay silent rather than be called `breaking`.
-- **Baseline:** research.md F4, F5.
-- **PRD refs:** research.md §4 layer 3.
+### CMP-8: Compose scanning gaps
+- **Change ID:** `compose-scanning-gaps`
+- **Status:** new
+- **Outcome:** `${VAR}` inside block scalars (also after ` #`), pass-through `environment: [KEY]` and valueless
+  `KEY:` entries (required from the host), multi-line quoted scalars, apostrophes in plain scalars.
+- **Why it matters:** each miss lets a release that needs a new production secret pass the gate; pass-through
+  entries are a common compose idiom.
+- **Prerequisites:** none.
+- **Risk:** existing setups may see new `needs-action` findings after upgrading; the README says so.
 
-### CMP-3: Seed layer
-- **Change ID:** `seed-layer`
-- **Status:** done
-- **Outcome:** seed files are diffed statement by statement; destructive or overwriting statements are
-  `needs-action`, new upserted rows are `safe`.
-- **Prerequisites:** CMP-2 (statement splitter).
-- **Unknowns:** none.
-- **Risk:** multi-row `INSERT ... VALUES` diffs need tuple-level comparison.
-- **Baseline:** research.md F6.
-- **PRD refs:** research.md §4 layer 4.
+### CMP-9: MSBuild properties
+- **Change ID:** `msbuild-properties`
+- **Status:** new
+- **Outcome:** `$(Property)` in a package version resolves through the `Directory.Build.props` chain and explicit
+  in-repository `<Import>`s, nearest definition winning.
+- **Why it matters:** today it resolves only from the declaring file, so `Version="$(MassTransitVersion)"` with the
+  value in `Directory.Build.props` is the same unresolved text at both refs and an upgrade produces no finding.
+- **Prerequisites:** none.
+- **Risk:** MSBuild semantics are large; unsupported imports fail visibly.
 
-### CMP-4: Persisted enums layer
-- **Change ID:** `persisted-enums-layer`
-- **Status:** done
-- **Outcome:** C# and TypeScript enums named in the config (or discovered by a pattern such as
-  `ConfigureEnum<T>`) are compared member by member with storage-aware classes.
-- **Prerequisites:** CMP-1.
-- **Unknowns:** none.
-- **Risk:** enum bodies with attributes and comments; the parser must tolerate them.
-- **Baseline:** research.md F7.
-- **PRD refs:** research.md §4 layer 5.
+### CMP-10: Dependency lockfiles
+- **Change ID:** `dependency-lockfiles`
+- **Status:** new
+- **Outcome:** with `package-lock.json`, `pnpm-lock.yaml` or NuGet `packages.lock.json` next to a manifest, direct
+  dependencies compare by resolved version and `watch` packages are also reported when they change transitively.
+- **Why it matters:** ranges compare by lower bound, so a lockfile-only upgrade (`^4.1.0` from 4.1.0 to 4.9.0) or a
+  watched messaging client pulled in transitively changes the running code with no finding.
+- **Prerequisites:** none.
+- **Risk:** lockfile size and pnpm v6/v9 formats; only the needed packages are read.
 
-### CMP-5: Configuration layer
-- **Change ID:** `config-layer`
-- **Status:** done
-- **Outcome:** keys from compose files, `.env` examples and configured regex sources are compared; a new key
-  without a default is `needs-action`.
-- **Prerequisites:** CMP-1.
-- **Unknowns:** none.
-- **Risk:** false positives from commented-out lines; comments are stripped per source kind.
-- **Baseline:** research.md F10.
-- **PRD refs:** research.md §4 layer 7.
+### CMP-11: GitHub Action
+- **Change ID:** `github-action`
+- **Status:** new
+- **Outcome:** `action.yml` at the root (`uses: SOFTURE/COMPAT@v0`) runs the check, writes the report to
+  `$GITHUB_STEP_SUMMARY` and creates or updates one PR comment; `release.yml` moves the `v0` tag.
+- **Why it matters:** `needs-action` findings (secrets, data preconditions) do not fail the default gate, so they
+  must be in front of the person merging the release PR, not in a file inside the job.
+- **Prerequisites:** none.
+- **Risk:** the action must pin the CLI version it is released with.
 
-### CMP-6: Release readiness
-- **Change ID:** `release-readiness`
-- **Status:** done (2026-10-07; `0.1.0` released by `release.yml`)
-- **Outcome:** README with a quick start and the config reference, `softure-compat init`, GitHub Actions for CI
-  and npm publish with provenance, and an end-to-end test that reproduces the in-scope PETSEO findings.
-- **Prerequisites:** CMP-2, CMP-3, CMP-4, CMP-5.
-- **Unknowns:** none.
-- **Risk:** the publish workflow cannot be exercised without the owner's npm token.
-- **Baseline:** none.
-- **PRD refs:** change.md Constraints (distribution).
+### CMP-12: Release 0.3.0
+- **Change ID:** `release-0-3-0`
+- **Status:** new
+- **Outcome:** README and `context/backlog/later-layers.md` reflect v2, `package.json` goes to `0.3.0`, the merge
+  releases it.
+- **Prerequisites:** CMP-7..CMP-11.
 
-## Before the next release
-- [ ] Owner configures npm trusted publishing (organization `SOFTURE`, repository `COMPAT`, workflow `release.yml`), then may delete the `NPM_TOKEN` secret; `0.1.0` was published with the token on 2026-10-07 (README "Releasing") (**CMP-6**, `automatic-release`)
-
-## Owner decisions and checks
-- [x] **CMP-6**: The owner added `NPM_TOKEN` and the pipeline published `0.1.0` to npm, GitHub Packages and GitHub Release `v0.1.0` (2026-10-07) (Manual 3.5; replaced by the automatic release in `archive/2026-10-07-automatic-release/`: no manual `npm publish`, no manual tag). archive/2026-10-07-release-readiness/plan.md
-- [ ] **CMP-6**: The owner can configure PETSEO from the README alone (Manual 4.3). archive/2026-10-07-release-readiness/plan.md
+## Rejected
+| Idea | Source | Why not |
+| --- | --- | --- |
+| Squawk pass for Postgres migrations | backlog | Its compatibility rules (rename, type change, required column) duplicate the own 26 rules; the rest is lock and downtime lint (`CONCURRENTLY`, `NOT VALID`), which is not backward compatibility. A second pinned binary to maintain for that is not worth it. |
+| ApiCompat precise mode for message contracts | backlog | Needs a .NET SDK and a build of both refs in CI; it only adds base types declared outside the repository. The source parser already covers contracts in the repo. |
+| Live client versions from Sentry or a store | backlog, research §6 q6 | A static `{ tags, since }` list that goes stale keeps too many builds live, which only keeps findings conservative, never a false `safe`. A vendor API and token for less noise is not justified until real noise shows up. |
+| Row-level diff of CTE writes in seeds | backlog | Already reported as `unreadable-write` `needs-action`, so nothing is silent; row-level parsing is polish. |
+| Seed key columns per table | backlog | Only matters when a seed's first column is not its key; seeds lead with the key, and no consumer has hit it. |
+| MSBuild `Condition` evaluation | backlog | When conditions declare several versions of one package, the layer already compares them conservatively; evaluating MSBuild conditions is a large surface for no missed finding. Property resolution (the false negative) is CMP-9. |
+| SARIF output for code scanning | considered for v2 | Code scanning alerts describe code at one ref; a compat finding is a judgement on a pair of refs, so alerts would open and close confusingly. The PR comment of CMP-11 covers visibility. |
+| `protobuf` layer on `buf breaking` | considered for v2 | No consumer uses gRPC today, and AGENTS.md lists no gRPC adapter. Add it when a consumer needs it. |
 
 ## Done
-- **CMP-1** `backward-compat-checker`: core CLI (config, `RefTree`, finding model, gate, Markdown/JSON reports, exit codes) and the `openapi` layer on oasdiff, with CI; archived in `archive/2026-10-07-backward-compat-checker/`
-- **CMP-2** `sql-migrations-layer`: `sql-migrations` layer (folder and EF Core idempotent sources, Postgres and SQL Server, 26 rules, accept allowlist), shared SQL scanner in `src/sql/` for CMP-3, UTF-16 decoding in `RefTree`; archived in `archive/2026-10-07-sql-migrations-layer/`
-- **CMP-3** `seed-layer`: `seed` layer (seed files diffed per table and row key across a source's files; conflict guards, `MERGE`, `IF NOT EXISTS` blocks, `DO` bodies and T-SQL without semicolons; 14 finding ids, accept allowlist); archived in `archive/2026-10-07-seed-layer/`
-- **CMP-5** `config-layer`: `config` layer over compose interpolation, `.env` examples and configured regex sources; new required keys and removed defaults are `needs-action`, compared file by file and failing closed on silent sources; archived in `archive/2026-10-07-config-layer/`
-- **CMP-4** `persisted-enums-layer`: `persisted-enums` layer (C# and TypeScript enum parser, string and int storage rules, discovery by glob + regex, accept allowlist, F7 acceptance test); archived in `archive/2026-10-07-persisted-enums-layer/`
-- **CMP-6** `release-readiness`: README (quick start, CLI and config reference), `softure-compat init`, CI on Node 22 and 24, tag-driven npm publish workflow with provenance, and one acceptance run over all five layers reproducing F1, F2, F4, F5, F6, F7, F10; archived in `archive/2026-10-07-release-readiness/`
-- `automatic-release` (follow-up to CMP-6): `release.yml` releases every unreleased `package.json` version merged to `master` (npm with provenance over OIDC trusted publishing or the `NPM_TOKEN` fallback, GitHub Packages, tag and GitHub Release); archived in `archive/2026-10-07-automatic-release/`
+(nothing yet)
