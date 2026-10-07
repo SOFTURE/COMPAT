@@ -8,6 +8,7 @@ import {
   type KeyDeclaration,
   type KeyIndex,
 } from "../../../src/layers/config/classify.js";
+import { normalizeKey } from "../../../src/layers/config/keys.js";
 import type { Finding } from "../../../src/model/finding.js";
 
 const tree = (side: "base" | "revision"): RefTree => ({
@@ -244,5 +245,50 @@ describe("applyAccept", () => {
   it("reports an entry that matched nothing", () => {
     const entry = { key: "Gone", id: "config-key-removed", reason: "old" } as const;
     expect(applyAccept(findings, [entry]).usage).toEqual([{ entry, count: 0 }]);
+  });
+});
+
+describe("normalized keys", () => {
+  function normalizedIndex(...entries: Required<Entry>[]): KeyIndex {
+    const result: KeyIndex = new Map();
+    for (const { source, path, ...declaration } of entries) {
+      addDeclarations(result, [declaration], { source, path }, normalizeKey);
+    }
+    return result;
+  }
+
+  const findings = classify(
+    normalizedIndex(),
+    normalizedIndex(
+      { source: "compose", path: "docker-compose.yml", key: "SHOP_BASE_URL", line: 4, default: null },
+      { source: "ansible", path: "env.j2", key: "Shop__BaseUrl", line: 2, default: null },
+      { source: "dotnet", path: "ShopSettings.cs", key: "Shop__BaseUrl", line: 9, default: null },
+    ),
+  );
+
+  it("reports one finding per canonical key with every source, spelling and place", () => {
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      scope: "ansible, compose, dotnet",
+      id: "config-key-added-required",
+      subject: "SHOP_BASE_URL",
+      message:
+        "new key without a default; the value must exist in production before the deploy (spelled SHOP_BASE_URL, Shop__BaseUrl)",
+    });
+    expect(findings[0]?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
+      "ShopSettings.cs:9",
+      "docker-compose.yml:4",
+      "env.j2:2",
+    ]);
+  });
+
+  it("accepts a finding by any spelling of its key", () => {
+    const { findings: result, usage } = applyAccept(
+      findings,
+      [{ key: "Shop:BaseUrl", id: "config-key-added-required", reason: "in the vault" }],
+      normalizeKey,
+    );
+    expect(result[0]?.accepted).toEqual({ reason: "in the vault" });
+    expect(usage[0]?.count).toBe(1);
   });
 });

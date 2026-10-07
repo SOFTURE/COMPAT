@@ -1,5 +1,6 @@
 import type { RefTree } from "../../git/ref-tree.js";
 import { type Evidence, type Finding, type FindingClass, getClassRank } from "../../model/finding.js";
+import type { KeyIdentity } from "./keys.js";
 
 export const CONFIG_LAYER = "config";
 
@@ -18,7 +19,7 @@ export type KeyDeclaration = { key: string; line: number; default: string | null
 
 export type SourcedDeclaration = KeyDeclaration & { source: string; path: string };
 
-/** Every declaration of every key at one ref, by key. */
+/** Every declaration of every key at one ref, by key identity. */
 export type KeyIndex = Map<string, SourcedDeclaration[]>;
 
 export type ConfigAcceptEntry = { key: string; id: ConfigFindingId; reason: string };
@@ -59,16 +60,29 @@ const MESSAGES: Record<ConfigFindingId, string> = {
 /** What one source says about one key: the finding id and the declarations that prove it. */
 type SourceVerdict = { id: ConfigFindingId; base: SourcedDeclaration[]; revision: SourcedDeclaration[] };
 
+/**
+ * Adds declarations to an index under the identity of their key (see `getKeyIdentity`); each
+ * declaration keeps the spelling it was written with.
+ */
 export function addDeclarations(
   index: KeyIndex,
   declarations: KeyDeclaration[],
   origin: { source: string; path: string },
+  identify: KeyIdentity = (key) => key,
 ): void {
   for (const declaration of declarations) {
-    const entries = index.get(declaration.key) ?? [];
+    const id = identify(declaration.key);
+    const entries = index.get(id) ?? [];
     entries.push({ ...declaration, ...origin });
-    index.set(declaration.key, entries);
+    index.set(id, entries);
   }
+}
+
+/** The message of a finding, plus the spellings of the key when any differs from the subject. */
+function getMessage(id: ConfigFindingId, subject: string, declarations: SourcedDeclaration[]): string {
+  const spellings = [...new Set(declarations.map((declaration) => declaration.key))].sort(compareText);
+  if (spellings.every((spelling) => spelling === subject)) return MESSAGES[id];
+  return `${MESSAGES[id]} (spelled ${spellings.join(", ")})`;
 }
 
 function withoutDefault(declarations: SourcedDeclaration[]): SourcedDeclaration[] {
@@ -152,7 +166,7 @@ function groupByUnit(
 }
 
 /**
- * Compares the keys of both refs. Each comparison unit is classified on its own, so one source
+ * Compares the keys of both refs; the subject of a finding is the key identity. Each comparison unit is classified on its own, so one source
  * or file cannot mask a change in another; sources that reach the same verdict for a key share one finding, and
  * a key gets only the findings of its most severe class.
  * Messages never carry default values, which may be secrets.
@@ -195,7 +209,7 @@ export function classifyKeys({
         id,
         subject: key,
         class: FINDING_CLASS[id],
-        message: MESSAGES[id],
+        message: getMessage(id, key, [...(base.get(key) ?? []), ...(revision.get(key) ?? [])]),
         evidence: [...toEvidence(baseTree, merged.base), ...toEvidence(revisionTree, merged.revision)],
       });
     }
@@ -203,14 +217,17 @@ export function classifyKeys({
   return findings;
 }
 
-/** Marks findings matched by an accept entry (same key and finding id). */
+/** Marks findings matched by an accept entry (the same key identity and finding id). */
 export function applyAccept(
   findings: Finding[],
   accept: ConfigAcceptEntry[],
+  identify: KeyIdentity = (key) => key,
 ): { findings: Finding[]; usage: AcceptUsage[] } {
   const usage = accept.map((entry) => ({ entry, count: 0 }));
   const result = findings.map((finding) => {
-    const match = usage.find(({ entry }) => entry.key === finding.subject && entry.id === finding.id);
+    const match = usage.find(
+      ({ entry }) => identify(entry.key) === finding.subject && entry.id === finding.id,
+    );
     if (match === undefined) return finding;
     match.count += 1;
     return { ...finding, accepted: { reason: match.entry.reason } };

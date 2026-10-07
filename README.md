@@ -14,6 +14,7 @@ It works only from git. It never connects to a production server or database.
 | [`seed`](#seed) | seed scripts that run on every deploy, row by row |
 | [`persisted-enums`](#persisted-enums) | enums stored in the database as strings or numbers (C# and TypeScript) |
 | [`config`](#config) | configuration keys a release needs (compose interpolation, `.env` examples, your own patterns) |
+| [`dependencies`](#dependencies) | runtime package versions (NuGet, npm), classified by semver |
 | [`message-contracts`](#message-contracts) | C# message contracts (types, wire properties, enums) and queue names, for messages in flight |
 
 ## Install
@@ -67,8 +68,8 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 
 | Option | Command | Meaning |
 | --- | --- | --- |
-| `--base <ref>` | check | git ref running in production (required) |
-| `--revision <ref>` | check | git ref about to be released (required) |
+| `--base <ref>` | check | git ref running in production, or a [resolver](#finding-the-production-ref) (required) |
+| `--revision <ref>` | check | git ref about to be released, or a [resolver](#finding-the-production-ref) (required) |
 | `--repo <dir>` | both | repository directory (default: current directory) |
 | `--config <file>` | both | config file (default: `<repo>/compat.config.json`) |
 | `--format <md\|json>` | check | report format (default: `md`) |
@@ -80,7 +81,25 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `-v`, `--version` | both | show the version |
 
 **Exit codes:** `0` the gate passed (`init`: the config was written), `1` the gate failed, `2` the command could not
-run (bad arguments, invalid config, unknown ref, unreadable repository).
+run (bad arguments, invalid config, unknown ref, a resolver that found nothing, unreadable repository).
+
+### Finding the production ref
+
+`--base` must be what production runs, and the newest tag usually is not (it is often what DEV runs). Instead of a
+git ref, `--base` and `--revision` take a resolver:
+
+| Value | Resolves to |
+| --- | --- |
+| `github-deployment:<environment>` | the commit of the newest GitHub deployment to that environment whose newest status is `success` (superseded deployments are `inactive` and skipped) |
+| `github-workflow:<file>` | the head commit of the newest successful run of that workflow, e.g. `github-workflow:deploy-prod.yml` |
+| `latest-tag[:<glob>]` | the newest tag matching the glob (all tags without one), in version order, e.g. `latest-tag:v2.*` |
+
+The GitHub resolvers read the token from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`; the repository from
+`GITHUB_REPOSITORY`, then the `origin` remote; the API from `GITHUB_API_URL` (default `https://api.github.com`). A
+resolver that finds nothing stops the check with exit code `2`; it never falls back to a guess. The resolved commit
+must be in the clone, so fetch the full history. The report header names both, e.g.
+"Base github-deployment:prod → 2.2.4 `26b8973e1f0a`". A branch literally named `latest-tag` has to be passed as
+`refs/heads/latest-tag`.
 
 ### Classes and the gate
 
@@ -114,8 +133,13 @@ The check needs both refs in the clone, so fetch the full history (or at least t
     go-version: "1.24"
 - run: go install github.com/oasdiff/oasdiff@v1.33.0
 - run: npm ci
-- run: npx softure-compat check --base "$PRODUCTION_TAG" --revision HEAD --output compat-report.md
+- run: npx softure-compat check --base github-deployment:production --revision HEAD --output compat-report.md
+  env:
+    GH_TOKEN: ${{ github.token }}
 ```
+
+The job needs `permissions: { contents: read, deployments: read, actions: read }` for the GitHub resolvers. A
+literal ref (`--base "$PRODUCTION_TAG"`) works too.
 
 `--format json` gives a machine-readable report with the same content.
 
@@ -137,7 +161,8 @@ typo never silently disables a check. Every layer is optional; a configured laye
       "sources": "**/*.cs",
       "enums": [{ "kind": "discover", "files": "**/*DbContext.cs", "pattern": "ConfigureEnum<(?<name>[\\w.]+)>", "storage": "string" }]
     },
-    "config": { "sources": [{ "kind": "compose" }, { "kind": "dotenv" }] }
+    "config": { "sources": [{ "kind": "compose" }, { "kind": "dotenv" }] },
+    "dependencies": { "watch": [{ "name": "SOFTURE.*", "class": "needs-action" }] }
   }
 }
 ```
@@ -168,11 +193,25 @@ Compares the OpenAPI spec of each API at both refs with `oasdiff changelog`. oas
 }
 ```
 
+Several APIs built from one solution can share one build per side:
+
+```json
+{
+  "setup": { "run": "dotnet build App.slnx -c Debug", "timeoutSeconds": 900 },
+  "apis": [
+    { "name": "b2c", "source": { "kind": "command", "run": "dotnet run --no-build --project src/B2C -- export openapi.json", "output": "openapi.json" } },
+    { "name": "admin", "source": { "kind": "command", "run": "dotnet run --no-build --project src/Admin -- export admin.json", "output": "admin.json" } }
+  ]
+}
+```
+
 | Key | Meaning |
 | --- | --- |
 | `apis[].name` | unique name (letters, digits, `.`, `_`, `-`) |
 | `apis[].source` | where the spec comes from at each ref, see below |
 | `apis[].accept[]` | `{ id, operation?, reason }`; `operation` is `METHOD /path` as oasdiff reports it |
+| `setup` | `{ run, timeoutSeconds? }`: a command run once per side, before any spec source of that side; see below |
+| `concurrency` | `2` (default) prepares the base and revision sides in parallel; `1` prepares them one after the other |
 | `oasdiff.path` | oasdiff binary; a relative path is resolved against the repository root |
 | `oasdiff.args` | extra arguments for `oasdiff changelog` (not `--format`, `-f`, `--fail-on`, `-o`) |
 
@@ -189,6 +228,13 @@ Spec sources:
   Swashbuckle, FastEndpoints), and make sure the command works on a clean checkout (restore dependencies inside it).
 - `{ "kind": "url", "base": "https://dev.example.com/swagger.json", "revision": "https://..." }`: fetched over
   HTTP(S), for example from a DEV environment.
+
+`setup` runs **once in each materialised ref**, whatever the number of APIs, before their spec sources, with the
+same working directory and environment (`COMPAT_SIDE`, `COMPAT_REF`, `COMPAT_COMMIT`) as a `command` source. Use it
+for a build that every export command shares; the export commands then skip the build (`dotnet run --no-build`).
+The default timeout is 600 seconds (maximum 7200). A failing setup fails the layer with the side, the ref and the
+end of its stderr. The base and revision checkouts are separate, so both sides (setup, then the spec of each API in
+order) run in parallel; set `"concurrency": 1` when one build at a time is all the machine can take.
 
 ### sql-migrations
 
@@ -310,11 +356,13 @@ Reports configuration keys the revision needs that production may not have.
       "kind": "regex",
       "name": "dotnet-required",
       "files": ["src/**/*Settings.cs"],
-      "pattern": "public required [\\w<>?]+ (?<key>\\w+) \\{",
+      "pattern": "public required [\\w<>?]+ (?<member>\\w+) \\{",
+      "enclosing": "class (?<section>\\w+?)Settings\\b",
+      "key": "{section}__{member}",
       "comments": "slash"
     }
   ],
-  "accept": [{ "key": "Shop__ApiKey", "id": "config-key-added-required", "reason": "set in the production vault" }]
+  "accept": [{ "key": "SHOP_API_KEY", "id": "config-key-added-required", "reason": "set in the production vault" }]
 }
 ```
 
@@ -322,9 +370,16 @@ Reports configuration keys the revision needs that production may not have.
 | --- | --- |
 | `compose` | `${VAR}` interpolation in compose files (default `files`: `**/{docker-compose,compose}{,.*}.{yml,yaml}`); `${VAR:-x}` has a default, `${VAR}` and `${VAR:?msg}` are required |
 | `dotenv` | keys of `.env` examples (default `files`: `**/.env.{example,sample,template,dist}`, `**/{example,sample}.env`); with `valuesAreDefaults: false` (the default) every key is required, with `true` a key with a value has a default |
-| `regex` | your own pattern over `files`: named group `key` (required) and `default` (optional); `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first |
+| `regex` | your own pattern over `files`: named group `key` and an optional `default`; `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first. `key` builds the key from several named groups instead, e.g. `"{section}__{member}"`; a group can also come from `enclosing`, a pattern whose nearest match before the key lends its groups (the settings class around a member). A placeholder nothing fills stays empty |
 
-Every source has an optional unique `name` (`compose` and `dotenv` default to their kind; `regex` requires one).
+Every source has an optional unique `name` (`compose` and `dotenv` default to their kind; `regex` requires one)
+and an optional `prefix` prepended to each of its keys, for a source that reads one section only (`"prefix": "Shop__"`).
+
+Keys are normalized before they are compared (`"keyMatching": "normalized"`, the default): they are split on
+`:`, `__`, `.`, `_`, `-` and case changes and joined in upper snake case, so `Shop:BaseUrl`, `Shop__BaseUrl`,
+`SHOP_BASE_URL`, `shop.base_url` and the .NET member `ShopBaseUrl` are one key, `SHOP_BASE_URL`. A finding names
+the normalized key, every source that reads it, and the original spellings when they differ.
+`"keyMatching": "exact"` compares keys as written. `accept[].key` may use any spelling.
 Keys are compared file by file for files present at both refs. A source fails the layer when it matches no file,
 loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
 `accept[]` entries are `{ key, id, reason }`.
@@ -337,6 +392,48 @@ loses its files or all its keys in the revision, or (dotenv and regex) finds no 
 | `config-key-default-changed` | `safe` |
 | `config-key-removed` | `safe` |
 
+### dependencies
+
+Reports runtime package upgrades: a library upgrade can change behaviour both builds rely on without any contract
+change (a new retry policy in a messaging client, a new default in an ORM).
+
+```json
+{
+  "sources": [{ "kind": "nuget" }, { "kind": "npm", "sections": ["dependencies"] }],
+  "watch": [
+    {
+      "name": "SOFTURE.*",
+      "class": "needs-action",
+      "releaseNotes": "https://github.com/SOFTURE/MessageBroker/releases"
+    }
+  ],
+  "ignore": ["Microsoft.CodeAnalysis.*", "*.Analyzers", "xunit*", "Microsoft.NET.Test.Sdk"],
+  "accept": [{ "id": "dependency-upgraded", "name": "Npgsql", "reason": "release notes reviewed, no behaviour change" }]
+}
+```
+
+| Source | Reads |
+| --- | --- |
+| `nuget` | MSBuild files (default `files`: `**/*.{csproj,fsproj,vbproj,props,targets}`): `PackageVersion` (central package management), `PackageReference` and `GlobalPackageReference` with `Include` or `Update` and a version (`VersionOverride`, `Version` attribute or element); `$(Property)` is resolved from the same file; a reference without a version takes it from `Directory.Packages.props` |
+| `npm` | `package.json` (default `files`: `**/package.json`); `sections` from `dependencies` (default), `devDependencies`, `peerDependencies`, `optionalDependencies` |
+
+`sources` defaults to both kinds; files under `node_modules`, `bin` and `obj` are skipped. Packages are compared by
+name over all files of a ref (NuGet names case-insensitively); a range compares by its lower bound (`^1.2.3`,
+`[1.2,2.0)`). When projects declare several versions of one package, a version that went down anywhere is a
+downgrade, otherwise the jump from the lowest base version to the highest revision version decides the class. The
+layer fails when no dependency file matches at either ref or a `package.json` is not valid JSON.
+
+`watch[]` entries are `{ name, class?, releaseNotes? }`: every finding of a matching package gets at least `class`,
+and `releaseNotes` is printed with it (nothing is fetched). `ignore[]` lists packages that produce no finding.
+Names in both are globs (`*`, `?`, `{a,b}`) matched case-insensitively. `accept[]` entries are `{ id, name, reason }`.
+
+| Finding id | Class |
+| --- | --- |
+| `dependency-upgraded` | `safe` for a patch or minor upgrade; `needs-action` for a major upgrade, a minor upgrade below 1.0 or any upgrade below 0.1 |
+| `dependency-downgraded` | `needs-action` |
+| `dependency-changed` | `needs-action`: the declared version is not a version number at one ref (`latest`, a git URL, an unresolved `$(Property)`) |
+| `dependency-added` | `safe` |
+| `dependency-removed` | `safe` |
 ### message-contracts
 
 Messages that wait in a broker queue during a deploy are produced by one build and consumed by the other. The layer
@@ -398,9 +495,10 @@ are unrelated.
 ## What it does not check yet
 
 The v1 acceptance case is the PETSEO 2.2.4 → 2.3.4 release. The tool reproduces its HTTP contract, schema, data
-migration, seed, persisted enum and configuration findings (covered by `test/e2e/acceptance.test.ts`), and its
-message contracts and queues (`test/e2e/message-contracts.test.ts`). It does not yet check query-string binding
-changes, messaging library behaviour, push payloads opened by old app versions, or behaviour of refactored code. Those layers are planned in
+migration, seed, persisted enum, configuration and dependency findings (covered by `test/e2e/acceptance.test.ts`), and
+its message contracts and queues (`test/e2e/message-contracts.test.ts`). It does not yet check query-string binding
+changes, messaging library behaviour beyond the version change, push payloads opened by old app versions, or
+behaviour of refactored code. Those layers are planned in
 [`context/backlog/later-layers.md`](context/backlog/later-layers.md).
 
 ## Releasing (maintainers)

@@ -3,14 +3,19 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { DEFAULT_CONFIG_FILE, loadConfig } from "../config/config.js";
-import { openRefTree, resolveRepoRoot } from "../git/ref-tree.js";
+import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
 import type { Layer } from "../layers/layer.js";
 import { LAYERS } from "../layers/registry.js";
-import type { LayerResult } from "../model/finding.js";
+import type { LayerResult, Side } from "../model/finding.js";
 import { evaluateGate, type FailOn } from "../model/gate.js";
 import { killAllProcessGroups } from "../process/run-process.js";
 import { renderJson } from "../report/json.js";
 import { renderMarkdown } from "../report/markdown.js";
+import type { RefInfo } from "../report/report.js";
+import type { FetchFn } from "../resolve/github.js";
+import { parseRefSpec } from "../resolve/ref-spec.js";
+import { resolveRefSpec } from "../resolve/resolve-ref.js";
+import { err, ok, type Result } from "../result.js";
 
 export const REPORT_FORMATS = ["md", "json"] as const;
 
@@ -36,6 +41,8 @@ export type CheckIo = {
   handleSignals?: boolean;
   /** Layers to use instead of the registry; tests inject stubs here. */
   layers?: Layer[];
+  /** `fetch` for the GitHub resolvers; tests inject a mock here. */
+  fetch?: FetchFn;
 };
 
 export const EXIT_CANNOT_RUN = 2;
@@ -66,16 +73,17 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
   const tempRoot = await mkdtemp(join(tmpdir(), "softure-compat-"));
   const stopOnSignal = installTerminationHandlers(tempRoot, io);
   try {
-    const base = await openRefTree({ repoDir: repoRoot.value, ref: options.base, side: "base", tempRoot });
+    const base = await openSide({ value: options.base, side: "base", repoDir: repoRoot.value, tempRoot, io });
     if (!base.ok) {
       io.stderr(`softure-compat: ${base.error}\n`);
       return EXIT_CANNOT_RUN;
     }
-    const revision = await openRefTree({
-      repoDir: repoRoot.value,
-      ref: options.revision,
+    const revision = await openSide({
+      value: options.revision,
       side: "revision",
+      repoDir: repoRoot.value,
       tempRoot,
+      io,
     });
     if (!revision.ok) {
       io.stderr(`softure-compat: ${revision.error}\n`);
@@ -90,8 +98,8 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
         results.push(
           await layer.run({
             config: layerConfig,
-            base: base.value,
-            revision: revision.value,
+            base: base.value.tree,
+            revision: revision.value.tree,
             repoDir: repoRoot.value,
             tempDir,
             env: io.env,
@@ -112,8 +120,8 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
 
     const gate = evaluateGate(results, { failOn: options.failOn, allowIncomplete: options.allowIncomplete });
     const report = {
-      base: { ref: options.base, commit: base.value.commit },
-      revision: { ref: options.revision, commit: revision.value.commit },
+      base: base.value.info,
+      revision: revision.value.info,
       failOn: options.failOn,
       allowIncomplete: options.allowIncomplete,
       gate,
@@ -140,6 +148,26 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     stopOnSignal();
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+type OpenSideOptions = { value: string; side: Side; repoDir: string; tempRoot: string; io: CheckIo };
+
+/** Resolves a `--base`/`--revision` value and opens its tree; a resolved commit missing locally asks for a fetch. */
+async function openSide(options: OpenSideOptions): Promise<Result<{ tree: RefTree; info: RefInfo }>> {
+  const { value, side, repoDir, tempRoot, io } = options;
+  const resolved = await resolveRefSpec(parseRefSpec(value), { repoDir, env: io.env, fetch: io.fetch });
+  if (!resolved.ok) return resolved;
+  const { ref, commit, resolver } = resolved.value;
+  const tree = await openRefTree({ repoDir, ref: commit ?? ref, label: ref, side, tempRoot });
+  if (!tree.ok) {
+    if (resolver === undefined) return tree;
+    return err(
+      `${resolver} resolved to ${ref} (${commit ?? ref}), which is not in the local clone; fetch it (actions/checkout with fetch-depth: 0)`,
+    );
+  }
+  const info: RefInfo = { ref, commit: tree.value.commit };
+  if (resolver !== undefined) info.resolver = resolver;
+  return ok({ tree: tree.value, info });
 }
 
 const SIGNAL_EXIT_CODES = { SIGINT: 130, SIGTERM: 143 } as const;

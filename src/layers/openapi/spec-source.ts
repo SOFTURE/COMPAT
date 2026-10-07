@@ -1,12 +1,11 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RefTree } from "../../git/ref-tree.js";
-import { describeProcessError, getTailLines, runProcess } from "../../process/run-process.js";
 import { err, ok, type Result } from "../../result.js";
 import type { SpecSource } from "./config.js";
 import { redactUrl, resolveInsideTree } from "./safe-path.js";
+import { runTreeCommand } from "./tree-command.js";
 
-export const DEFAULT_COMMAND_TIMEOUT_SECONDS = 600;
 const URL_TIMEOUT_MS = 30_000;
 
 export type ResolvedSpec =
@@ -61,24 +60,19 @@ async function resolveCommandSpec(
   const staleOutput = await resolveInsideTree(root.value, source.output);
   if (!staleOutput.ok) return staleOutput;
   if (staleOutput.value.status === "found") await rm(staleOutput.value.path, { force: true });
-  const timeoutSeconds = source.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS;
-  const result = await runProcess({
-    command: source.run,
-    shell: true,
-    cwd: root.value,
-    env: { ...options.env, COMPAT_SIDE: tree.side, COMPAT_REF: tree.ref, COMPAT_COMMIT: tree.commit },
-    timeoutMs: timeoutSeconds * 1000,
+  const ran = await runTreeCommand({
+    run: source.run,
+    tree,
+    root: root.value,
+    timeoutSeconds: source.timeoutSeconds,
+    env: options.env,
+    label: "export command",
   });
-  const label = `export command at ${tree.side} (${tree.ref})`;
-  if (!result.ok) return err(describeProcessError(label, result.error));
-  if (result.value.exitCode !== 0) {
-    const tail = getTailLines(result.value.stderr, 20);
-    return err(`${label} exited ${result.value.exitCode}${tail ? `: ${tail}` : ""}`);
-  }
+  if (!ran.ok) return ran;
   const output = await resolveInsideTree(root.value, source.output);
   if (!output.ok) return output;
   if (output.value.status === "absent") {
-    return err(`${label} succeeded but did not write ${source.output}`);
+    return err(`export command at ${tree.side} (${tree.ref}) succeeded but did not write ${source.output}`);
   }
   return ok({ status: "found", file: output.value.path, root: root.value, displayPath: source.output });
 }

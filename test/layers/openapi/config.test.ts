@@ -40,6 +40,23 @@ describe("openapi config", () => {
     );
   });
 
+  it("accepts a setup command and a concurrency of 1 or 2", () => {
+    const source = { kind: "file", path: "a.json" };
+    const setup = { run: "dotnet build App.slnx", timeoutSeconds: 900 };
+    expect(parse({ apis: [api(source)], setup, concurrency: 1 }).success).toBe(true);
+    expect(parse({ apis: [api(source)], setup: { run: "make" }, concurrency: 2 }).success).toBe(true);
+  });
+
+  it("rejects an empty setup command, a setup typo and a concurrency outside 1..2", () => {
+    const source = { kind: "file", path: "a.json" };
+    expect(firstIssue({ apis: [api(source)], setup: { run: "" } })).toMatch(/^setup\.run: Too small/);
+    expect(firstIssue({ apis: [api(source)], setup: { run: "make", timeout: 5 } })).toBe(
+      'setup: Unrecognized key: "timeout"',
+    );
+    expect(firstIssue({ apis: [api(source)], concurrency: 3 })).toMatch(/^concurrency: Too big/);
+    expect(firstIssue({ apis: [api(source)], concurrency: 0 })).toMatch(/^concurrency: Too small/);
+  });
+
   it("rejects paths that leave the repository", () => {
     expect(firstIssue({ apis: [api({ kind: "file", path: "../secrets.json" })] })).toBe(
       "apis.0.source.path: must not contain '..'",

@@ -13,6 +13,8 @@ init    writes a starter compat.config.json from the files committed at HEAD
 Options:
   --base <ref>            check: git ref running in production (required)
   --revision <ref>        check: git ref about to be released (required)
+                          both take a git ref or a resolver: github-deployment:<environment>,
+                          github-workflow:<file>, latest-tag[:<glob>]
   --repo <dir>            repository directory (default: current directory)
   --config <file>         config file (default: <repo>/compat.config.json)
   --format <md|json>      check: report format (default: md)
