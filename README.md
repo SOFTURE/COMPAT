@@ -443,6 +443,29 @@ Keys are compared file by file for files present at both refs. A source fails th
 loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
 `accept[]` entries are `{ key, id, reason }`.
 
+`chains` compares sources with each other in the revision: in a chain, every key present in one source must be
+present in all the others (matched after normalization), so a key added to `deploy-dev` but not to `deploy-prod`,
+or to the compose file but not to the Ansible assert, is reported as `config-chain-missing`.
+
+```json
+"chains": [
+  { "name": "app-env", "sources": ["compose", "ansible-template", "deploy-prod"], "required": ["ansible-assert"] },
+  { "name": "dev-prod-parity", "sources": ["deploy-dev", "deploy-prod"] }
+],
+"accept": [{ "key": "DEBUG_TOOLBAR", "chain": "dev-prod-parity", "reason": "DEV only" }]
+```
+
+| Chain field | Meaning |
+| --- | --- |
+| `name` | unique chain name, shown as the finding scope `chain <name>` |
+| `sources` | names of sources in the chain; together with `required` at least two |
+| `required` | sources whose missing key is `breaking` (e.g. the assert that guards the deploy); a miss elsewhere is `needs-action` |
+| `class` | overrides the class of every finding of the chain |
+| `scope` | `changed` (default): only keys whose declarations differ between the refs in some source of the chain (added, removed, default changed); `all`: every key, for an audit |
+
+A chain with a source that failed to scan is skipped with a note. Chain `accept[]` entries are
+`{ key, chain, reason }` for an intentional asymmetry.
+
 `presence` (optional) resolves the keys that need a value in production by asking the target environment for its
 key names, never its values. `run` is a shell command that prints the names, one per line; `timeoutSeconds`
 defaults to 60.
@@ -467,6 +490,7 @@ leaves the findings as they were.
 | `config-key-added-optional` | `safe` |
 | `config-key-default-changed` | `safe` |
 | `config-key-removed` | `safe` |
+| `config-chain-missing` | `breaking` when a `required` source misses the key, else `needs-action`; `class` overrides |
 
 ### dependencies
 

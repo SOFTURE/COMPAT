@@ -2,6 +2,7 @@ import type { RefTree } from "../../git/ref-tree.js";
 import type { Finding, LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer } from "../layer.js";
+import { applyChainAccept, checkChains, type SourceIndexes } from "./chains.js";
 import {
   addDeclarations,
   applyAccept,
@@ -11,7 +12,12 @@ import {
   type KeyDeclaration,
   type KeyIndex,
 } from "./classify.js";
-import { type ConfigSource, compileRegexSource, configLayerConfigSchema } from "./config.js";
+import {
+  type ChainAcceptEntry,
+  type ConfigSource,
+  compileRegexSource,
+  configLayerConfigSchema,
+} from "./config.js";
 import { getKeyIdentity, type KeyIdentity } from "./keys.js";
 import { applyPresence, hasResolvableFindings, type PresenceSettings, readPresentKeys } from "./presence.js";
 import { scanCompose } from "./scan-compose.js";
@@ -34,6 +40,7 @@ export const configLayer = defineLayer({
     const notes: string[] = [];
     const errors: string[] = [];
     const identify = getKeyIdentity(context.config.keyMatching);
+    const scannedSources = new Map<string, SourceIndexes>();
     // A source is used only when both refs were read; one side alone would invent added or removed keys.
     for (const source of context.config.sources) {
       const scanned = await scanSourceAtBothRefs(source, {
@@ -46,6 +53,7 @@ export const configLayer = defineLayer({
         continue;
       }
       const [atBase, atRevision] = scanned.value;
+      scannedSources.set(source.name, { base: atBase.index, revision: atRevision.index });
       mergeIndex(base, atBase.index);
       mergeIndex(revision, atRevision.index);
       const atBaseFiles = new Set(atBase.files);
@@ -66,12 +74,36 @@ export const configLayer = defineLayer({
       identify,
       notes,
     });
-    const { findings, usage } = applyAccept(resolved, context.config.accept ?? [], identify);
+    const acceptEntries = context.config.accept ?? [];
+    const { findings, usage } = applyAccept(
+      resolved,
+      acceptEntries.filter((entry) => "id" in entry),
+      identify,
+    );
     for (const { entry, count } of usage) {
       notes.push(
         count === 0
           ? `accept entry ${entry.id} on ${entry.key} matched nothing; remove it if the change is gone`
           : `accept entry ${entry.id} on ${entry.key} accepted ${count} finding(s)`,
+      );
+    }
+    const chained = checkChains({
+      chains: context.config.chains ?? [],
+      sources: scannedSources,
+      revisionTree: context.revision,
+    });
+    const chainAccept = applyChainAccept(
+      chained.findings,
+      acceptEntries.filter((entry): entry is ChainAcceptEntry => "chain" in entry),
+      identify,
+    );
+    findings.push(...chainAccept.findings);
+    notes.push(...chained.notes);
+    for (const { entry, count } of chainAccept.usage) {
+      notes.push(
+        count === 0
+          ? `accept entry for chain ${entry.chain} on ${entry.key} matched nothing; remove it if the asymmetry is gone`
+          : `accept entry for chain ${entry.chain} on ${entry.key} accepted ${count} finding(s)`,
       );
     }
     if (errors.length > 0) {
