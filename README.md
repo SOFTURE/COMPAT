@@ -16,6 +16,7 @@ It works only from git. It never connects to a production server or database.
 | [`config`](#config) | configuration keys a release needs (compose interpolation, `.env` examples, your own patterns) |
 | [`dependencies`](#dependencies) | runtime package versions (NuGet, npm), classified by semver |
 | [`message-contracts`](#message-contracts) | C# message contracts (types, wire properties, enums) and queue names, for messages in flight |
+| [`behaviour`](#behaviour) | the base ref's black-box tests, run against the revision's running stack |
 
 ## Install
 
@@ -66,6 +67,7 @@ What `init` detects:
 | `persisted-enums` | a `*DbContext.cs` calling `ConfigureEnum<T>()` (string storage) |
 | `config` | compose files and `.env` examples at the default globs |
 | `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`; one glob per such folder |
+| `behaviour` | never: it is written disabled with example commands, since nothing in a repository says how its stack starts |
 
 Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A SQL file is read as SQL Server when it has `GO`
 batch lines or `[dbo]` names, otherwise as Postgres.
@@ -637,13 +639,59 @@ sources, custom `[JsonConverter]`s, or serializer settings other than MassTransi
 added one with the same unique wire shape are paired as a rename, reported as `breaking` even when the two messages
 are unrelated.
 
+### behaviour
+
+Some changes no static layer can see: refactored code that must behave the same, query-string binding, payloads
+opened by old app versions. The layer starts the revision's stack, runs the **base** ref's black-box tests against
+it and reports every base test that fails there. It knows no stack: it runs your commands, each inside the
+materialized tree of its side.
+
+```json
+{
+  "start": { "run": "SCRIPTS/rebuild-integration-stack.sh", "timeoutSeconds": 1800 },
+  "test": {
+    "run": "dotnet test APP/API/TESTS/PETSEO.Integration.Tests --logger trx",
+    "results": { "kind": "trx", "path": "**/TestResults/*.trx" }
+  },
+  "stop": { "run": "docker compose -f VPS/DOCKER/TESTS/docker-compose.integration-tests.yml down -v" },
+  "retries": 1,
+  "baseline": true,
+  "accept": [{ "test": "PETSEO.Integration.Tests.Legacy.*", "reason": "asserts the old paging on purpose" }]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `start` | `{ side?, run, background?, ready?, timeoutSeconds? }`, optional. `side` is `revision` (default) or `base`. A script runs to completion (default timeout 1800 s, a non-zero exit fails the layer); with `background: true` the command is a long-running app, kept alive during the tests and stopped with its whole process group afterwards, and `ready` (an http(s) URL) is polled until it answers 2xx within `timeoutSeconds` |
+| `test` | `{ side?, run, results: { kind, path }, timeoutSeconds? }`. `side` is `base` (default) or `revision`; `kind` is `junit` (JUnit XML) or `trx`; `path` is a glob or list of globs relative to the tree root; default timeout 3600 s |
+| `stop` | `{ side?, run, timeoutSeconds? }`, optional; `side` defaults to `revision`, timeout to 600 s. It always runs, also after a failed `start`, a test timeout or unreadable results |
+| `retries` | 0 (default) to 5: the test command reruns while tests fail; a test that passes in any attempt passes, with a note |
+| `baseline` | `true` runs a whole cycle with every command at the test side first (base tests against the base stack); tests failing there are not reported |
+| `accept[]` | `{ test, reason }`; `test` is the full test name, `*` matches any run of characters |
+
+Every command runs through the shell with `COMPAT_SIDE`, `COMPAT_REF` and `COMPAT_COMMIT` of its own tree and
+`COMPAT_PORT`, a free TCP port picked for the cycle; `{port}` in `run` and `ready` is replaced by it, so tests can
+reach a background app. The exit code of the test command is ignored when result files exist (failing tests exit
+non-zero); files matching `results.path` are deleted before each attempt. A test name is `classname.name` in JUnit
+XML and the full method name in TRX.
+
+| Finding id | Class |
+| --- | --- |
+| `base-test-failed` | `breaking`: the base test failed (or errored, or timed out) against the stack; the message holds the first lines of its failure |
+
+The layer fails, keeping its findings, when `start` fails or the app is not ready in time, when the test command
+times out, cannot start, writes no result file or results without any test case, when a result file is not valid
+JUnit XML or TRX, and when `stop` fails (the stack may still be running). `init` writes it disabled with example
+commands: nothing in a repository says how its stack starts. The materialized trees are shared with the other layers of the run.
+
 ## What it does not check yet
 
 The v1 acceptance case is the PETSEO 2.2.4 → 2.3.4 release. The tool reproduces its HTTP contract, schema, data
 migration, seed, persisted enum, configuration and dependency findings (covered by `test/e2e/acceptance.test.ts`), and
-its message contracts and queues (`test/e2e/message-contracts.test.ts`). It does not yet check query-string binding
-changes, messaging library behaviour beyond the version change, push payloads opened by old app versions, or
-behaviour of refactored code. Those layers are planned in
+its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-string binding changes, push payloads
+opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
+[`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked. Further layers
+are planned in
 [`context/backlog/later-layers.md`](context/backlog/later-layers.md).
 
 ## Releasing (maintainers)
