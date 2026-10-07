@@ -29,6 +29,9 @@ beforeAll(async () => {
         "src/Dup/B.cs": "enum Twin { One }",
         "web/status.ts": 'export enum Status { Draft = "draft" }',
         "web/readme.md": "enum Fake { X }",
+        "more/Domain/Kind.cs": "enum Kind { A, Gone }",
+        "more/Old/Moved.cs": "enum Moved { A, Gone }",
+        "more/Lost.cs": "public enum Lost { A, Gone }",
       },
       tag: "v1",
     },
@@ -41,6 +44,12 @@ beforeAll(async () => {
         "src/Legacy.cs": null,
         "src/Dup/B.cs": "enum Twin { One, Two }",
         "web/status.ts": 'export enum Status { Draft = "draft", Live = "live" }',
+        "more/Domain/Kind.cs": "enum Kind\n{\n#if LEGACY\n    Gone,\n#endif\n    A,\n}",
+        "more/Ui/Kind.cs": "enum Kind { A }",
+        "more/Old/Moved.cs": null,
+        "more/New/Moved.cs": "enum Moved { A }",
+        // Invalid C#: the unclosed raw string swallows the rest of the file for the scanner.
+        "more/Lost.cs": 'var s = """ never closed;\npublic enum Lost { A }',
       },
       tag: "v2",
     },
@@ -194,5 +203,57 @@ describe("persisted-enums layer", () => {
       accept: [{ id: "enum-member-added", enum: "Color", reason: "too broad" }],
     });
     expect("findings" in result && result.findings[0]?.accepted).toBeUndefined();
+  });
+
+  describe("never reads a declaration it could not parse as absent (impl review F1, F2, F4, F5, F6)", () => {
+    const named = (name: string, extra: object = {}) => ({
+      kind: "named",
+      name,
+      storage: "string",
+      ...extra,
+    });
+
+    it("fails a target whose declaration has conditional members, even when another file declares the name", async () => {
+      const result = await run({ sources: "more/**/*.cs", enums: [named("Kind")] });
+      expect(result.status).toBe("failed");
+      expect("error" in result && result.error).toBe(
+        'enum "Kind": cannot be read at v2: more/Domain/Kind.cs: enum "Kind" at line 1 has a #if at line 3; conditional members cannot be compared (also declared in more/Ui/Kind.cs; set "file" if that is the one)',
+      );
+    });
+
+    it("compares the other declaration once it is pinned with file", async () => {
+      const result = await run({
+        sources: "more/**/*.cs",
+        enums: [named("Kind", { file: "more/Ui/Kind.cs" })],
+      });
+      expect(result.status).toBe("ran");
+      // The pinned file is new in the revision, so the base declaration is found by name.
+      expect(brief(result)).toEqual([["enum-member-removed", "breaking", "Kind.Gone"]]);
+    });
+
+    it("fails a target whose declaration the scanner lost instead of reporting it removed", async () => {
+      const result = await run({ sources: "more/**/*.cs", enums: [named("Lost")] });
+      expect(result).toMatchObject({
+        status: "failed",
+        error:
+          'enum "Lost": cannot be read at v2: more/Lost.cs: "enum Lost" at line 2 was not recognised by the parser',
+      });
+    });
+
+    it("follows a pinned file that moved between the refs", async () => {
+      const result = await run({
+        sources: "more/**/*.cs",
+        enums: [named("Moved", { file: "more/New/Moved.cs" })],
+      });
+      expect(brief(result)).toEqual([["enum-member-removed", "breaking", "Moved.Gone"]]);
+    });
+
+    it("fails when discovery finds names but sources declare none of them", async () => {
+      const result = await run({ sources: "Src/**/*.cs", enums: [discover] });
+      expect(result.status).toBe("failed");
+      expect("error" in result && result.error).toBe(
+        'discovery found Color, Shape, Size but none is declared in the sources at either ref; check "sources"',
+      );
+    });
   });
 });

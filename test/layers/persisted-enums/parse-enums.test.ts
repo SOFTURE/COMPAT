@@ -230,3 +230,52 @@ describe("parseEnums robustness", () => {
     ]);
   });
 });
+
+describe("parseEnums with literals that hide comment or string openers (impl review F1, F3)", () => {
+  it("reads C# interpolated raw strings and multi-line verbatim strings as one token", () => {
+    const text = [
+      'var sql = $"""',
+      "    SELECT * /* not a comment */ FROM t",
+      '    """;',
+      'var glob = @"',
+      '    files/*.cs";',
+      'var plain = $$"""{{x}} " """;',
+      "enum After { A, B }",
+    ].join("\n");
+    expect(summary(parse(text, "csharp")[0])).toEqual([
+      ["A", "0"],
+      ["B", "1"],
+    ]);
+  });
+
+  it("skips TypeScript regular expression literals that contain comment openers or quotes", () => {
+    const text = [
+      'const trimmed = p.replace(/\\/*$/, "");',
+      "const any = /[/*]/.test(p);",
+      'const quote = /"/g;',
+      "const ratio = total / 2 / 3;",
+      "enum After { A, B }",
+    ].join("\n");
+    expect(summary(parse(text, "typescript")[0])).toEqual([
+      ["A", "0"],
+      ["B", "1"],
+    ]);
+  });
+
+  it("evaluates C# char initializers to their code unit and never as a string value", () => {
+    const [declaration] = parse(
+      "enum Gender { Male = 'M', Female = 'F', Tab = '\\t', Quote = '\\'' }",
+      "csharp",
+    );
+    expect(declaration?.members.map((member) => [member.name, member.value, member.stringValue])).toEqual([
+      ["Male", 77n, null],
+      ["Female", 70n, null],
+      ["Tab", 9n, null],
+      ["Quote", 39n, null],
+    ]);
+  });
+
+  it("treats a string initializer in C# as unknown", () => {
+    expect(summary(parse('enum E { A = "a" }', "csharp")[0])).toEqual([["A", null]]);
+  });
+});

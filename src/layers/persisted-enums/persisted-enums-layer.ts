@@ -37,8 +37,15 @@ type Target = { name: string; storage: EnumStorage; isNamed: boolean; file?: str
 
 type Located = { path: string; declaration: EnumDeclaration };
 
+/** A file where an enum is declared but the parser could not read it. */
+type Unreadable = { path: string; reason: string };
+
 /** Every enum declared in the source files of one ref, by simple name, and those the parser could not read. */
-type SourceIndex = { byName: Map<string, Located[]>; failures: Map<string, string[]> };
+type SourceIndex = { byName: Map<string, Located[]>; unreadable: Map<string, Unreadable[]> };
+
+/** A declaration-looking line (`public enum Status`, `export const enum Status`), comments excluded. */
+const DECLARATION_LINE =
+  /^[ \t]*(?:(?:public|internal|private|protected|file|new|export|declare|const)[ \t]+)*enum[ \t]+@?([A-Za-z_][A-Za-z0-9_]*)\b/gm;
 
 /** A finding with the member names it is about; the accept allowlist matches on them. */
 type ClassifiedFinding = { finding: Finding; members: string[] };
@@ -82,6 +89,7 @@ export const persistedEnumsLayer = defineLayer({
 
     const classified: ClassifiedFinding[] = [];
     let checkedCount = 0;
+    const undeclaredDiscoveries: string[] = [];
     // Every enum is checked even when one fails, so the findings of the others still reach the gate.
     for (const target of targets) {
       const outcome = checkTarget({
@@ -95,6 +103,7 @@ export const persistedEnumsLayer = defineLayer({
         continue;
       }
       if (outcome.value === null) {
+        undeclaredDiscoveries.push(target.name);
         notes.push(
           `enum "${target.name}" was discovered but is declared in no source file at either ref; it is not checked`,
         );
@@ -104,6 +113,13 @@ export const persistedEnumsLayer = defineLayer({
       checkedCount++;
     }
     notes.unshift(`${checkedCount} persisted enum(s) checked`);
+    const discoveredCount = targets.filter((target) => !target.isNamed).length;
+    if (discoveredCount > 0 && undeclaredDiscoveries.length === discoveredCount) {
+      // One false match (a generic `T`) is normal; nothing declared at all means `sources` misses the enums.
+      errors.push(
+        `discovery found ${undeclaredDiscoveries.join(", ")} but none is declared in the sources at either ref; check "sources"`,
+      );
+    }
 
     const accepted = applyAccept(classified, context.config.accept ?? []);
     notes.push(...accepted.notes);
@@ -273,7 +289,9 @@ async function indexSources(options: IndexOptions): Promise<Result<{ index: Sour
   const parseable = paths.filter((path) => getLanguage(path) !== undefined);
   const toRead = parseable.filter((path) => candidates.value.has(path) || options.pinnedFiles.includes(path));
   const contents = await mapWithConcurrency(toRead, READ_CONCURRENCY, options.read);
-  const index: SourceIndex = { byName: new Map(), failures: new Map() };
+  const index: SourceIndex = { byName: new Map(), unreadable: new Map() };
+  const addUnreadable = (name: string, entry: Unreadable) =>
+    index.unreadable.set(name, [...(index.unreadable.get(name) ?? []), entry]);
   for (const [position, path] of toRead.entries()) {
     const content = contents[position] as Result<string | null>;
     if (!content.ok) return err(content.error);
@@ -285,11 +303,20 @@ async function indexSources(options: IndexOptions): Promise<Result<{ index: Sour
         { path, declaration },
       ]);
     }
-    for (const failure of parsed.failures) {
-      index.failures.set(failure.name, [
-        ...(index.failures.get(failure.name) ?? []),
-        `${path}: ${failure.error}`,
-      ]);
+    for (const failure of parsed.failures) addUnreadable(failure.name, { path, reason: failure.error });
+    // A declaration the scanner lost (an unusual literal before it) must fail, never read as absent.
+    const seen = new Set([
+      ...parsed.declarations.map((declaration) => declaration.name),
+      ...parsed.failures.map((failure) => failure.name),
+    ]);
+    for (const match of content.value.matchAll(DECLARATION_LINE)) {
+      const name = match[1] as string;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      addUnreadable(name, {
+        path,
+        reason: `"enum ${name}" at line ${getLineAt(content.value, match.index)} was not recognised by the parser`,
+      });
     }
   }
   return ok({ index, ignored: paths.length - parseable.length });
@@ -332,18 +359,29 @@ function getLanguage(path: string): SourceLanguage | undefined {
   return dot === -1 ? undefined : LANGUAGE_BY_EXTENSION[path.slice(dot).toLowerCase()];
 }
 
-/** The declaration of the target at one ref: `null` when absent, an error when ambiguous or unparsable. */
+/** The declaration of the target at one ref: `null` when absent, an error when ambiguous or unreadable. */
 function locate(target: Target, index: SourceIndex, tree: RefTree): Result<Located | null> {
-  const candidates = (index.byName.get(target.name) ?? []).filter(
-    (located) => target.file === undefined || located.path === target.file,
-  );
+  const isInScope = (path: string) => target.file === undefined || path === target.file;
+  const allCandidates = index.byName.get(target.name) ?? [];
+  const allUnreadable = index.unreadable.get(target.name) ?? [];
+  let candidates = allCandidates.filter((located) => isInScope(located.path));
+  let unreadable = allUnreadable.filter((entry) => isInScope(entry.path));
+  if (target.file !== undefined && candidates.length === 0 && unreadable.length === 0) {
+    // The pinned file may hold the enum at one ref only, when it moved: fall back to the name.
+    candidates = allCandidates;
+    unreadable = allUnreadable;
+  }
+  if (unreadable.length > 0) {
+    const reasons = unreadable.map((entry) => `${entry.path}: ${entry.reason}`).join("; ");
+    const hint =
+      candidates.length > 0
+        ? ` (also declared in ${candidates.map((c) => c.path).join(", ")}; set "file" if that is the one)`
+        : "";
+    return err(`cannot be read at ${tree.ref}: ${reasons}${hint}`);
+  }
   if (candidates.length > 1) {
     const paths = [...new Set(candidates.map((located) => located.path))].join(", ");
     return err(`declared more than once at ${tree.ref} (${paths}); set "file" on a named entry`);
-  }
-  const failures = index.failures.get(target.name) ?? [];
-  if (candidates.length === 0 && failures.length > 0) {
-    return err(`cannot be read at ${tree.ref}: ${failures.join("; ")}`);
   }
   return ok(candidates[0] ?? null);
 }

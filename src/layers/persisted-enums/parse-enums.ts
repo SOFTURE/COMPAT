@@ -65,7 +65,7 @@ export function parseEnums(text: string, language: SourceLanguage): ParsedEnums 
     declarations.push({
       name: nameToken.text,
       line: token.line,
-      members: evaluateMembers(nameToken.text, rawMembers.value),
+      members: evaluateMembers({ enumName: nameToken.text, rawMembers: rawMembers.value, language }),
     });
   }
   return { declarations, failures };
@@ -158,7 +158,9 @@ type Value = { kind: "number"; value: bigint } | { kind: "string"; value: string
 
 const UNKNOWN: Value = { kind: "unknown" };
 
-function evaluateMembers(enumName: string, rawMembers: RawMember[]): EnumMember[] {
+type EvaluateMembersOptions = { enumName: string; rawMembers: RawMember[]; language: SourceLanguage };
+
+function evaluateMembers({ enumName, rawMembers, language }: EvaluateMembersOptions): EnumMember[] {
   const byName = new Map(rawMembers.map((member, position) => [member.name, position]));
   const values = new Map<number, Value>();
   const inProgress = new Set<number>();
@@ -180,7 +182,7 @@ function evaluateMembers(enumName: string, rawMembers: RawMember[]): EnumMember[
           const target = byName.get(name);
           return target === undefined ? UNKNOWN : getValueAt(target);
         },
-        enumName,
+        { enumName, language },
       );
     }
     inProgress.delete(position);
@@ -201,7 +203,8 @@ function evaluateMembers(enumName: string, rawMembers: RawMember[]): EnumMember[
 }
 
 function formatToken(token: Token): string {
-  return token.kind === "string" ? JSON.stringify(token.text) : token.text;
+  if (token.kind === "string") return JSON.stringify(token.text);
+  return token.kind === "char" ? `'${token.text}'` : token.text;
 }
 
 const BINARY_PRECEDENCE: Record<string, number> = {
@@ -221,7 +224,13 @@ const BINARY_PRECEDENCE: Record<string, number> = {
  * Evaluates a constant initializer with BigInt arithmetic. Anything outside literals, unary and
  * binary operators, parentheses and references to members of the same enum is unknown.
  */
-function evaluateExpression(tokens: Token[], resolve: (name: string) => Value, enumName: string): Value {
+type ExpressionContext = { enumName: string; language: SourceLanguage };
+
+function evaluateExpression(
+  tokens: Token[],
+  resolve: (name: string) => Value,
+  { enumName, language }: ExpressionContext,
+): Value {
   let index = 0;
 
   const parsePrimary = (): Value => {
@@ -229,7 +238,11 @@ function evaluateExpression(tokens: Token[], resolve: (name: string) => Value, e
     if (token === undefined) return UNKNOWN;
     index++;
     if (token.kind === "number") return parseNumber(token.text);
-    if (token.kind === "string") return { kind: "string", value: token.text };
+    // A C# enum stores numbers only: a char is its UTF-16 code unit, a string is not a constant value.
+    if (token.kind === "char")
+      return token.text.length === 1 ? { kind: "number", value: BigInt(token.text.charCodeAt(0)) } : UNKNOWN;
+    if (token.kind === "string")
+      return language === "typescript" ? { kind: "string", value: token.text } : UNKNOWN;
     if (token.kind === "identifier") {
       let name = token.text;
       if (name === enumName && tokens[index]?.text === "." && tokens[index + 1]?.kind === "identifier") {

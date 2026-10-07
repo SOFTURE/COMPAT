@@ -196,3 +196,31 @@ describe("compareEnums edge cases from the plan review", () => {
     ]);
   });
 });
+
+describe("compareEnums with C# char values (impl review F3)", () => {
+  it("compares by member name under string storage and reports a rename", () => {
+    expect(
+      compare(
+        "enum E { Male = 'M', Female = 'F' }",
+        "enum E { Man = 'M', Female = 'F', Other = 'O' }",
+        "string",
+      ),
+    ).toEqual([
+      ["enum-member-renamed", "breaking", "E.Male -> E.Man"],
+      ["enum-member-added", "rollback-risk", "E.Other"],
+    ]);
+  });
+
+  it("compares by code unit under int storage", () => {
+    expect(
+      compare(
+        "enum E { Male = 'M', Female = 'F' }",
+        "enum E { Man = 'M', Female = 'F', Other = 'O' }",
+        "int",
+      ),
+    ).toEqual([
+      ["enum-member-renamed", "needs-action", "E.Male -> E.Man"],
+      ["enum-member-added", "rollback-risk", "E.Other"],
+    ]);
+  });
+});
