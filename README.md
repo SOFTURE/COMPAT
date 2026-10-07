@@ -450,6 +450,13 @@ an equality (`===`, `!==`, `==`, `!=`) with an operand ending in the property or
 line that looks like a branch and holds the property or enum name where the scanner read no code (inside a template
 literal, after a literal it lost) counts as a branch too, so a scanner miss never reads as "does not branch".
 
+Common property names (`type`, `status`) also appear on unrelated objects, so a comparison with a string literal
+that names no member of the enum (by name or string value, case-insensitively, at either ref) is not a branch:
+`event.type === "set"` is ignored, `n.type === "TermsChange"` counts. The same holds for a `switch` over the
+property whose `case` labels are all such literals. A string literal is never read as the property itself
+(`key === "content-type"`). Comparisons with identifiers, template literals with holes, or expressions
+(`"a" + b`) still count.
+
 ### error-codes
 
 A server that returns typed error codes (`new Error("Shop.Cart.NotFound", ...)`) that each client translates in its

@@ -34,6 +34,11 @@ export type Finding = {
   reclassified?: { from: FindingClass; by: string; reason: string };
   /** Where a `persisted-enums` finding reaches clients; `client-usage` refines it by these fields. */
   exposure?: Exposure[];
+  /**
+   * Names and string values of the exposed enum's members at both refs, so `client-usage` can tell a
+   * comparison against a member from one against an unrelated string.
+   */
+  enumValues?: string[];
 };
 
 export type LayerResult =
