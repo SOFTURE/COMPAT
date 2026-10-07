@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { RefTree } from "../git/ref-tree.js";
-import type { LayerResult } from "../model/finding.js";
+import type { Finding, LayerResult } from "../model/finding.js";
 
 export type LayerContext<C> = {
   config: C;
@@ -11,7 +11,15 @@ export type LayerContext<C> = {
   tempDir: string;
   env: NodeJS.ProcessEnv;
   log(message: string): void;
+  /** Results of the layers that ran before this one, in registry order; absent when run on its own. */
+  results?: readonly LayerResult[];
 };
+
+/** Replaces finding `index` of the earlier layer `layer`; only class, message, evidence and `reclassified` may change. */
+export type FindingRevision = { layer: string; index: number; finding: Finding };
+
+/** A layer's own result plus, for a layer that refines earlier ones, the findings it revised. */
+export type LayerOutput = LayerResult & { revisions?: FindingRevision[] };
 
 /**
  * A layer compares one aspect of the two refs. Its config schema must be built with
@@ -21,7 +29,7 @@ export type Layer<S extends z.ZodObject = z.ZodObject> = {
   name: string;
   description: string;
   configSchema: S;
-  run(context: LayerContext<z.infer<S>>): Promise<LayerResult>;
+  run(context: LayerContext<z.infer<S>>): Promise<LayerOutput>;
 };
 
 /**

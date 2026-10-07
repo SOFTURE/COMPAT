@@ -295,6 +295,53 @@ and the end of the app output; an app that exits early is reported with its exit
 source starts its own app. `init` proposes a disabled `serve` source for every `*.csproj` that references
 `FastEndpoints.Swagger`, `NSwag.AspNetCore` or `Swashbuckle.AspNetCore` when the repository has no committed spec.
 
+### client-usage
+
+oasdiff judges the contract, not what deployed clients do. This layer reads what the live builds of each client
+call and send, and re-classifies the `openapi` findings of that client's API. It runs right after `openapi` and needs
+it enabled; it adds no findings of its own.
+
+```json
+{
+  "clients": [
+    {
+      "name": "mobile",
+      "api": "b2c",
+      "refs": { "tags": "mobile-2.*", "since": "2.0.1" },
+      "generatedClient": { "kind": "typescript", "path": "APP/MOBILE/B2C/services/api/petseo.client.ts" },
+      "sources": ["APP/MOBILE/B2C/{app,components,services,hooks}/**/*.{ts,tsx}"]
+    }
+  ]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `clients[].name` | unique name (letters, digits, `.`, `_`, `-`), shown in reasons as `mobile@2.0.1` |
+| `clients[].api` | the `openapi` API name this client calls |
+| `clients[].refs` | the live client builds: a list of git refs, or `{ tags, since? }`: local tags matching the `git tag --list` pattern, at or above the `since` version |
+| `clients[].generatedClient` | `{ kind: "typescript", path }`: the generated client, read at every client ref |
+| `clients[].sources` | optional globs of the client's own code; an operation then counts as called only when its client function is referenced there |
+
+What changes, per `openapi` finding of the client's API that is not accepted and not `safe`, for an operation
+(`METHOD /path`):
+
+- No client ref calls the operation → `safe`, reason `not called by mobile@2.0.1, 2.1.1, 2.2.4`.
+- `request-property-became-required`, `new-required-request-property` or `request-property-became-not-nullable`, and
+  every calling ref always sends the property (the typed body parameter is not optional and the property is declared
+  without `?`, or without `null` for the not-nullable rule) → `safe`, with the declarations as evidence.
+- Otherwise the class stays, the message names the refs that call the operation (or may omit the property), and the
+  calls are added as evidence.
+
+A re-classified finding keeps its rule id and shows `reclassified from <class> by client-usage: <reason>`; the JSON
+report carries `reclassified: { from, by, reason }` and evidence with `side: "client"`.
+
+The TypeScript reader understands NSwag, swaggie, orval, axios or fetch style clients (a path literal plus
+`method: "POST"`, `.post(...)` or `request("post", ...)`) and openapi-typescript `paths`. It fails closed: a client
+ref missing from the clone (fetch tags, `fetch-depth: 0`), a generated client that is absent or yields no operation,
+or `sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
+called with every method.
+
 ### sql-migrations
 
 Classifies the migrations that exist in the revision but not in the base: the ones the deploy will run. A migration

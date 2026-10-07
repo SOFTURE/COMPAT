@@ -31,7 +31,13 @@ function formatEvidence(evidence: Evidence): string {
 function formatFinding(finding: Finding): string {
   const evidence = finding.evidence.length > 0 ? ` (${finding.evidence.map(formatEvidence).join(", ")})` : "";
   const line = `- **${escapeMarkdown(finding.layer)} / ${escapeMarkdown(finding.scope)}** \`${finding.id.replace(/`/g, "'")}\` ${escapeMarkdown(finding.subject)}: ${escapeMarkdown(finding.message)}${evidence}`;
-  return finding.accepted ? `${line}\n  - accepted: ${escapeMarkdown(finding.accepted.reason)}` : line;
+  const details: string[] = [];
+  if (finding.reclassified) {
+    const { from, by, reason } = finding.reclassified;
+    details.push(`  - reclassified from ${from} by ${escapeMarkdown(by)}: ${escapeMarkdown(reason)}`);
+  }
+  if (finding.accepted) details.push(`  - accepted: ${escapeMarkdown(finding.accepted.reason)}`);
+  return [line, ...details].join("\n");
 }
 
 function countByClass(result: LayerResult): string[] {

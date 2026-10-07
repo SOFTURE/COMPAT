@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG_FILE, loadConfig } from "../config/config.js";
 import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
 import type { Layer } from "../layers/layer.js";
 import { LAYERS } from "../layers/registry.js";
+import { applyRevisions, splitOutput } from "../layers/revisions.js";
 import type { LayerResult, Side } from "../model/finding.js";
 import { evaluateGate, type FailOn } from "../model/gate.js";
 import { killAllProcessGroups } from "../process/run-process.js";
@@ -90,12 +91,12 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
       return EXIT_CANNOT_RUN;
     }
 
-    const results: LayerResult[] = [];
+    let results: LayerResult[] = [];
     for (const { layer, config: layerConfig } of config.value.layers) {
       const tempDir = join(tempRoot, `layer-${layer.name}`);
       await mkdir(tempDir, { recursive: true });
       try {
-        results.push(
+        const { result, revisions } = splitOutput(
           await layer.run({
             config: layerConfig,
             base: base.value.tree,
@@ -104,8 +105,22 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
             tempDir,
             env: io.env,
             log: (message) => io.stderr(`[${layer.name}] ${message}\n`),
+            results: [...results],
           }),
         );
+        const revised = applyRevisions(results, revisions);
+        if (revised.ok) {
+          results = revised.value;
+          results.push(result);
+        } else {
+          results.push({
+            layer: layer.name,
+            status: "failed",
+            error: `invalid refinement: ${revised.error}`,
+            findings: [],
+            notes: result.status === "skipped" ? [] : result.notes,
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         results.push({

@@ -1,0 +1,240 @@
+import { describe, expect, it } from "vitest";
+import {
+  readIdentifiers,
+  readTypescriptClient,
+} from "../../../src/layers/client-usage/read-typescript-client.js";
+
+const NSWAG = `
+export class PetsClient {
+    private baseUrl: string;
+
+    /**
+     * POST "/api/ignored/in/comment"
+     */
+    addMedication(petId: string, body: AddMedicationCommand): Promise<void> {
+        let url_ = this.baseUrl + "/api/pets/{petId}/medications";
+        if (petId === undefined || petId === null)
+            throw new Error("The parameter 'petId' must be defined.");
+        url_ = url_.replace("{petId}", encodeURIComponent("" + petId));
+        url_ = url_.replace(/[?&]$/, "");
+
+        const content_ = JSON.stringify(body);
+
+        let options_: RequestInit = {
+            body: content_,
+            method: "POST",
+            headers: { "Content-Type": "application/json" }
+        };
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processAddMedication(_response);
+        });
+    }
+
+    protected processAddMedication(response: Response): Promise<void> {
+        return Promise.resolve<void>(null as any);
+    }
+
+    listPets(page?: number | undefined): Promise<Pet[]> {
+        let url_ = this.baseUrl + "/api/pets?";
+        if (page !== undefined)
+            url_ += "page=" + encodeURIComponent("" + page) + "&";
+        let options_: RequestInit = { method: "GET", headers: { "Accept": "application/json" } };
+        return this.http.fetch(url_, options_).then(() => []);
+    }
+}
+
+export class AddMedicationCommand implements IAddMedicationCommand {
+    name?: string | undefined;
+    daysOfWeek!: number[];
+    schedule!: Schedule;
+    note?: string | null;
+
+    constructor(data?: IAddMedicationCommand) {
+        if (data) {
+            for (var property in data) {
+                (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        data["daysOfWeek"] = this.daysOfWeek;
+        return data;
+    }
+}
+
+export interface Schedule {
+    times: Array<string>;
+    timezone: string | null;
+}
+`;
+
+const SWAGGIE = `
+export const petsClient = {
+  /**
+   * @param petId (optional)
+   */
+  addMedication(petId: string, body: AddMedicationRequest, $config?: RequestInit): Promise<void> {
+    let url = '/api/Pets/{PetId}/medications';
+    url = url.replace('{PetId}', encodeURIComponent("" + petId));
+    return fetch(url, { method: 'POST', body: JSON.stringify(body), ...$config }).then(() => undefined);
+  },
+  removePet(petId: string): Promise<void> {
+    const url = '/api/pets/' + encodeURIComponent(petId) + '/archive';
+    return fetch(url, { method: 'DELETE' }).then(() => undefined);
+  },
+};
+
+export interface AddMedicationRequest {
+  name: string;
+  daysOfWeek?: number[];
+}
+`;
+
+const ORVAL = `
+export type CreatePetBody = {
+  name: string;
+  tags: string[] | null;
+};
+
+export const createPet = (createPetBody: CreatePetBody, options?: SecondParameter<typeof customInstance>) => {
+  return customInstance<Pet>(
+    { url: \`/api/pets\`, method: 'POST', headers: { 'Content-Type': 'application/json' }, data: createPetBody },
+    options,
+  );
+};
+
+export const getPet = (petId: string) => {
+  return customInstance<Pet>({ url: \`/api/pets/\${petId}\`, method: 'GET' });
+};
+`;
+
+const AXIOS = `
+export async function updatePet(petId: string, request: UpdatePet) {
+  return axios.put<Pet>(\`/api/pets/\${petId}\`, request);
+}
+export const ping = () => api.get("/api/ping");
+`;
+
+const OPENAPI_TYPESCRIPT = `
+export interface paths {
+  "/api/pets": {
+    parameters: { query?: never; header?: never };
+    get: operations["listPets"];
+    put?: never;
+    post: operations["createPet"];
+    delete?: never;
+  };
+  "/api/pets/{petId}": {
+    get: operations["getPet"];
+  };
+}
+`;
+
+describe("readTypescriptClient", () => {
+  it("reads NSwag operations, the body parameter and class members", () => {
+    const model = readTypescriptClient(NSWAG);
+    expect(model.operations).toEqual([
+      {
+        method: "post",
+        path: "/api/pets/{}/medications",
+        line: 9,
+        functionName: "addMedication",
+        body: { typeName: "AddMedicationCommand", isOptional: false },
+      },
+      { method: "get", path: "/api/pets", line: 32, functionName: "listPets" },
+    ]);
+    const command = model.types.get("AddMedicationCommand");
+    expect(command?.get("name")).toEqual({
+      isOptional: true,
+      isNullable: false,
+      typeName: "string",
+      line: 41,
+    });
+    expect(command?.get("daysOfWeek")).toEqual({
+      isOptional: false,
+      isNullable: false,
+      typeName: "number",
+      line: 42,
+    });
+    expect(command?.get("schedule")?.typeName).toBe("Schedule");
+    expect(command?.get("note")).toMatchObject({ isOptional: true, isNullable: true });
+    expect([...(command?.keys() ?? [])]).toEqual(["name", "daysOfWeek", "schedule", "note"]);
+    expect(model.types.get("Schedule")?.get("timezone")).toMatchObject({
+      isOptional: false,
+      isNullable: true,
+    });
+    expect(model.types.get("Schedule")?.get("times")?.typeName).toBe("string");
+  });
+
+  it("reads swaggie operations, including a concatenated path", () => {
+    const model = readTypescriptClient(SWAGGIE);
+    expect(model.operations).toEqual([
+      {
+        method: "post",
+        path: "/api/pets/{}/medications",
+        line: 7,
+        functionName: "addMedication",
+        body: { typeName: "AddMedicationRequest", isOptional: false },
+      },
+      { method: "delete", path: "/api/pets/{}/archive", line: 12, functionName: "removePet" },
+    ]);
+    expect(model.types.get("AddMedicationRequest")?.get("daysOfWeek")).toMatchObject({ isOptional: true });
+  });
+
+  it("reads orval operations and type aliases", () => {
+    const model = readTypescriptClient(ORVAL);
+    expect(
+      model.operations.map(({ method, path, functionName, body }) => ({ method, path, functionName, body })),
+    ).toEqual([
+      {
+        method: "post",
+        path: "/api/pets",
+        functionName: "createPet",
+        body: { typeName: "CreatePetBody", isOptional: false },
+      },
+      { method: "get", path: "/api/pets/{}", functionName: "getPet", body: undefined },
+    ]);
+    expect(model.types.get("CreatePetBody")?.get("tags")).toMatchObject({
+      isNullable: true,
+      typeName: "string",
+    });
+  });
+
+  it("reads the method from an axios-style callee", () => {
+    const model = readTypescriptClient(AXIOS);
+    expect(model.operations.map(({ method, path, functionName }) => [method, path, functionName])).toEqual([
+      ["put", "/api/pets/{}", "updatePet"],
+      ["get", "/api/ping", "ping"],
+    ]);
+  });
+
+  it("reads the declared methods of openapi-typescript paths", () => {
+    const model = readTypescriptClient(OPENAPI_TYPESCRIPT);
+    expect(model.operations.map(({ method, path }) => [method, path])).toEqual([
+      ["get", "/api/pets"],
+      ["post", "/api/pets"],
+      ["get", "/api/pets/{}"],
+    ]);
+  });
+
+  it("marks a path without a readable method as called with every method", () => {
+    const model = readTypescriptClient(`export const ROUTE = "/api/pets/{id}";`);
+    expect(model.operations).toEqual([{ method: "*", path: "/api/pets/{}", line: 1 }]);
+  });
+
+  it("reads nothing from a file without path literals", () => {
+    expect(readTypescriptClient("export const x = 'application/json';").operations).toEqual([]);
+    expect(readTypescriptClient("").operations).toEqual([]);
+  });
+});
+
+describe("readIdentifiers", () => {
+  it("collects identifiers, not strings or comments", () => {
+    const identifiers = readIdentifiers("// addMedication\nconst a = petsClient.addMedication('listPets');");
+    expect(identifiers.has("addMedication")).toBe(true);
+    expect(identifiers.has("petsClient")).toBe(true);
+    expect(identifiers.has("listPets")).toBe(false);
+  });
+});
