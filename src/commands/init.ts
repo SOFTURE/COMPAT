@@ -9,6 +9,13 @@ import { LAYERS } from "../layers/registry.js";
 import { err, ok, type Result } from "../result.js";
 import type { SqlDialect } from "../sql/statements.js";
 import { type CheckIo, EXIT_CANNOT_RUN } from "./check.js";
+import {
+  DEFAULT_DEPENDENCY_IGNORE,
+  detectDeployChain,
+  findMobileApps,
+  isInFolderOf,
+  isTestPath,
+} from "./init-selection.js";
 
 export type InitOptions = {
   repoDir?: string;
@@ -247,48 +254,132 @@ async function detectPersistedEnums(tree: RefTree): Promise<Result<StarterLayer>
   return ok({ name: "persisted-enums", config, summary: matching.join(", "), enabled: true });
 }
 
-async function detectConfig(tree: RefTree): Promise<Result<StarterLayer>> {
+/** The files of a default glob that `init` keeps, and why it left out the others. */
+type Selection = { selected: string[]; skipped: string[] };
+
+/** A source with its default files when it keeps them all, else with the kept files listed. */
+const toSource = (kind: string, all: string[], selected: string[]) =>
+  selected.length === all.length ? { kind } : { kind, files: selected };
+
+const describeSkipped = (skipped: string[]) => (skipped.length > 0 ? `; skipped ${skipped.join("; ")}` : "");
+
+/** Leaves out test files and files of mobile apps; `mobileApps` are `package.json` paths. */
+function selectServerFiles(files: string[], mobileApps: string[]): Selection {
+  const tests = files.filter(isTestPath);
+  const mobile = files.filter(
+    (path) => !isTestPath(path) && mobileApps.some((manifest) => isInFolderOf(path, manifest)),
+  );
+  const selected = files.filter((path) => !tests.includes(path) && !mobile.includes(path));
+  const skipped = [
+    ...(tests.length > 0 ? [`test files ${tests.join(", ")}`] : []),
+    ...(mobile.length > 0 ? [`mobile app files ${mobile.join(", ")}`] : []),
+  ];
+  return { selected, skipped };
+}
+
+async function findMobileAppManifests(tree: RefTree): Promise<Result<string[]>> {
+  const packages = await listSourceFiles(tree, DEFAULT_NPM_FILES);
+  return packages.ok ? findMobileApps(tree, packages.value) : packages;
+}
+
+/**
+ * Compose files and `.env` examples outside tests and mobile apps, compose files referenced by the
+ * deploy tooling over the rest, and the deploy chain itself (Ansible, workflows) as regex sources.
+ */
+async function detectConfig(tree: RefTree, mobileApps: string[]): Promise<Result<StarterLayer>> {
   const compose = await listSourceFiles(tree, DEFAULT_COMPOSE_FILES);
   if (!compose.ok) return compose;
   const dotenv = await listSourceFiles(tree, DEFAULT_DOTENV_FILES);
   if (!dotenv.ok) return dotenv;
+  const allFiles = await listSourceFiles(tree, ["**"]);
+  if (!allFiles.ok) return allFiles;
+  const serverCompose = selectServerFiles(compose.value, mobileApps);
+  const deploy = await detectDeployChain(tree, allFiles.value, serverCompose.selected);
+  if (!deploy.ok) return deploy;
+  const deployed = deploy.value.composeFiles;
+  const composeFiles = deployed.length > 0 ? deployed : serverCompose.selected;
+  const notDeployed = serverCompose.selected.filter((path) => !composeFiles.includes(path));
+  const serverDotenv = selectServerFiles(dotenv.value, mobileApps);
+
+  const deploySources = deploy.value.sources;
   const sources = [
-    ...(compose.value.length > 0 ? [{ kind: "compose" }] : []),
-    ...(dotenv.value.length > 0 ? [{ kind: "dotenv" }] : []),
+    ...(composeFiles.length > 0 ? [toSource("compose", compose.value, composeFiles)] : []),
+    ...(serverDotenv.selected.length > 0 ? [toSource("dotenv", dotenv.value, serverDotenv.selected)] : []),
+    ...deploySources,
   ];
   if (sources.length === 0) {
     return ok(
       disabled(
         "config",
         { sources: [{ kind: "compose" }, { kind: "dotenv" }] },
-        "no compose file and no .env example",
+        "no compose file, no .env example and no deploy chain (Ansible, GitHub workflows)",
       ),
     );
   }
-  const found = [...compose.value, ...dotenv.value];
-  return ok({ name: "config", config: { sources }, summary: found.join(", "), enabled: true });
+  const required = deploy.value.required;
+  const members = [
+    ...(deployed.length > 0 ? ["compose"] : []),
+    ...deploySources.map((source) => source.name).filter((name) => name !== required),
+  ];
+  const chainMembers = members.length + (required === null ? 0 : 1);
+  const chains =
+    deploySources.length > 0 && members.length > 0 && chainMembers >= 2
+      ? [{ name: "deploy", sources: members, ...(required === null ? {} : { required: [required] }) }]
+      : [];
+  const environment = deploy.value.environment;
+  const config = {
+    sources,
+    ...(chains.length > 0 ? { chains } : {}),
+    ...(environment === null
+      ? {}
+      : { presence: { run: `gh secret list --env ${environment} --json name --jq '.[].name'` } }),
+  };
+  const found = [
+    ...composeFiles,
+    ...serverDotenv.selected,
+    ...deploySources.map((source) => `${source.name} (${source.files.join(", ")})`),
+  ];
+  const skipped = [
+    ...serverCompose.skipped,
+    ...(notDeployed.length > 0 ? [`compose files the deploy does not use ${notDeployed.join(", ")}`] : []),
+    ...serverDotenv.skipped,
+  ];
+  return ok({ name: "config", config, summary: found.join(", ") + describeSkipped(skipped), enabled: true });
 }
 
-async function detectDependencies(tree: RefTree): Promise<Result<StarterLayer>> {
+/** NuGet and npm manifests, without mobile apps; test packages are written as `ignore`. */
+async function detectDependencies(tree: RefTree, mobileApps: string[]): Promise<Result<StarterLayer>> {
   const nuget = await listSourceFiles(tree, DEFAULT_NUGET_FILES);
   if (!nuget.ok) return nuget;
   const npm = await listSourceFiles(tree, DEFAULT_NPM_FILES);
   if (!npm.ok) return npm;
+  const mobile = npm.value.filter((path) => mobileApps.some((manifest) => isInFolderOf(path, manifest)));
+  const serverNpm = npm.value.filter((path) => !mobile.includes(path));
   const sources = [
     ...(nuget.value.length > 0 ? [{ kind: "nuget" }] : []),
-    ...(npm.value.length > 0 ? [{ kind: "npm" }] : []),
+    ...(serverNpm.length > 0 ? [toSource("npm", npm.value, serverNpm)] : []),
   ];
+  const skipped = mobile.length > 0 ? [`React Native/Expo apps ${mobile.join(", ")}`] : [];
   if (sources.length === 0) {
     return ok(
       disabled(
         "dependencies",
         { sources: [{ kind: "nuget" }, { kind: "npm" }] },
-        "no MSBuild project or props file and no package.json",
+        `no MSBuild project or props file and no server package.json${describeSkipped(skipped)}`,
       ),
     );
   }
-  const found = [...nuget.value, ...npm.value];
-  return ok({ name: "dependencies", config: { sources }, summary: found.join(", "), enabled: true });
+  const config = {
+    sources,
+    ...(nuget.value.length > 0 ? { ignore: DEFAULT_DEPENDENCY_IGNORE } : {}),
+  };
+  const found = [...nuget.value, ...serverNpm];
+  return ok({
+    name: "dependencies",
+    config,
+    summary: found.join(", ") + describeSkipped(skipped),
+    enabled: true,
+  });
 }
 
 /** Always disabled: which client builds are live is not in the repository. */
@@ -352,9 +443,11 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
   if (!openapi.ok) return openapi;
   const persistedEnums = await detectPersistedEnums(tree);
   if (!persistedEnums.ok) return persistedEnums;
-  const config = await detectConfig(tree);
+  const mobileApps = await findMobileAppManifests(tree);
+  if (!mobileApps.ok) return mobileApps;
+  const config = await detectConfig(tree, mobileApps.value);
   if (!config.ok) return config;
-  const dependencies = await detectDependencies(tree);
+  const dependencies = await detectDependencies(tree, mobileApps.value);
   if (!dependencies.ok) return dependencies;
   const messageContracts = await detectMessageContracts(tree);
   if (!messageContracts.ok) return messageContracts;

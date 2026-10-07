@@ -65,11 +65,15 @@ What `init` detects:
 | `sql-migrations` | `.sql` files mentioning `__EFMigrationsHistory` (EF Core idempotent scripts), or drizzle `meta/_journal.json` folders for PostgreSQL |
 | `seed` | `.sql` files with `seed` in the name that are not migrations |
 | `persisted-enums` | a `*DbContext.cs` calling `ConfigureEnum<T>()` (string storage) |
-| `config` | compose files and `.env` examples at the default globs |
+| `config` | compose files and `.env` examples at the default globs, without test and mobile app files; compose files the deploy tooling references win over the rest. Ansible templates (`KEY={{ var }}`), `lookup('env', 'KEY')`, `assert` tasks and workflow `env:` entries from `secrets.*` become `regex` sources joined in a `deploy` chain (the assert is `required`); a workflow `environment:` adds a `gh secret list` presence command |
+| `dependencies` | MSBuild files and `package.json` files, without React Native and Expo apps; with NuGet, test packages (`Microsoft.NET.Test.Sdk`, `xunit*`, `nunit*`, `MSTest*`, `coverlet.*`, `*.Analyzers`, `Microsoft.CodeAnalysis.*`) are written as `ignore` |
 | `message-contracts` | C# files under a folder whose name contains `Contract` or ends with `Messages`; one glob per such folder |
 | `behaviour` | never: it is written disabled with example commands, since nothing in a repository says how its stack starts |
 
-Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A SQL file is read as SQL Server when it has `GO`
+Folders named `node_modules`, `bin`, `obj` and `dist` are ignored. A test file is one under a `test`, `tests`,
+`e2e`, `mocks` or `*.Tests` folder, or with such a word in its name (`docker-compose.integration-tests.yml`); a
+mobile app is the folder of a `package.json` that depends on `expo` or `react-native`. Ansible files are those under
+an `ansible`, `roles` or `playbooks` folder or next to an `ansible.cfg`; `stderr` lists every file `init` skipped. A SQL file is read as SQL Server when it has `GO`
 batch lines or `[dbo]` names, otherwise as Postgres.
 
 ## Command line
