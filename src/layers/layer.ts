@@ -24,7 +24,10 @@ export type Layer<S extends z.ZodObject = z.ZodObject> = {
   run(context: LayerContext<z.infer<S>>): Promise<LayerResult>;
 };
 
-/** Keeps the schema type when declaring a layer. */
-export function defineLayer<S extends z.ZodObject>(layer: Layer<S>): Layer<S> {
-  return layer;
+/**
+ * Declares a layer with a typed `run` and returns it in the registry's erased form. The cast is
+ * sound because the core only calls `run` with a config that `configSchema` itself parsed.
+ */
+export function defineLayer<S extends z.ZodObject>(layer: Layer<S>): Layer {
+  return layer as unknown as Layer;
 }

@@ -28,7 +28,7 @@ export function createStubLayer(name = "stub", result?: (config: { level?: strin
       const findings = config.level ? [createFinding(config.level as FindingClass, { layer: name })] : [];
       return { layer: name, status: "ran", findings, notes: [] };
     },
-  }) as unknown as Layer;
+  });
 }
 
 export function createIo(cwd: string, layers?: Layer[]) {

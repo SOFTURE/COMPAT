@@ -24,6 +24,8 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
       env: options.env ?? process.env,
       shell: options.shell ?? false,
       stdio: ["ignore", "pipe", "pipe"],
+      // Its own process group, so a timeout also stops grandchildren (a shell's `sleep`, a build server).
+      detached: process.platform !== "win32",
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -34,7 +36,7 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
         ? undefined
         : setTimeout(() => {
             isTimedOut = true;
-            child.kill("SIGKILL");
+            killTree(child.pid, () => child.kill("SIGKILL"));
           }, options.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -58,6 +60,18 @@ export function runProcess(options: RunProcessOptions): Promise<Result<ProcessOu
       resolve(ok({ exitCode: code ?? 1, stdout: out, stderr: errOut }));
     });
   });
+}
+
+function killTree(pid: number | undefined, fallback: () => void): void {
+  if (pid === undefined || process.platform === "win32") {
+    fallback();
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    fallback();
+  }
 }
 
 export function describeProcessError(command: string, error: ProcessError): string {

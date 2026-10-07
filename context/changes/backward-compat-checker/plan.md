@@ -52,7 +52,7 @@ dependency and is listed in the backlog as the pinned-download alternative.
 | Config location | `compat.config.json` in the working tree root (`--repo`, default cwd), overridable by `--config` | the config describes how to check, and must work before it is committed at the base ref | plan |
 | Config shape | `{ "layers": { "<layer>": { "enabled"?: boolean, ... } } }`; a layer runs when its key is present and `enabled` is not `false` | one entry per layer keeps CMP-2..5 to one registry line and one schema entry | research §4, roadmap |
 | Unknown config keys | rejected (strict objects) with the zod path in the message | a typo must not silently disable a check | plan |
-| Refs | resolved with `git rev-parse --verify --end-of-options <ref>^{commit}`; files listed with `git ls-tree -r -z --name-only` (git pathspecs, `:(glob)` magic for globs) and read with `git cat-file blob`; whole tree on demand with a temporary index (`GIT_INDEX_FILE=<tmp> git read-tree <commit>` + `git checkout-index -a --prefix=<dir>/`), cached per run, removed in `finally` | never builds in the consumer's working tree (research §4); unlike `git archive`, ignores `export-ignore`, needs no `tar` and touches no `.git/worktrees` | research |
+| Refs | resolved with `git rev-parse --verify --end-of-options <ref>^{commit}`; files listed once with `git ls-tree -r -z --name-only` and filtered by a small own glob matcher (`src/git/glob.ts`: `**`, `*`, `?`, `{a,b}`) and read with `git cat-file blob`; whole tree on demand with a temporary index (`GIT_INDEX_FILE=<tmp> git read-tree <commit>` + `git checkout-index -a --prefix=<dir>/`), cached per run, removed in `finally` | never builds in the consumer's working tree (research §4); unlike `git archive`, ignores `export-ignore`, needs no `tar` and touches no `.git/worktrees` | research |
 | Classes and order | `safe` < `needs-action` < `rollback-risk` < `breaking` | research §4 and change Intent | research |
 | oasdiff level mapping | ERR (3) → `breaking`, WARN (2) → `needs-action`, INFO (1) → `safe` | WARN covers deprecations and risky-but-legal changes the owner must know about | plan |
 | Accept allowlist | per API `accept: [{ id, operation?, reason }]`, `operation` as `"POST /api/x/{id}"`; an entry without `operation` matches only changes that have no operation (an id-only entry can never hide the same check on another endpoint); an accepted finding keeps its class, is listed under "Accepted" with the reason, and never counts for the gate; notes list how many findings each entry accepted, and an entry that matched nothing is reported as unused | records reviewed false positives such as F2 without hiding them | research §4 |
@@ -110,7 +110,7 @@ dependency and is listed in the backlog as the pinned-download alternative.
    (`--end-of-options`) and returns `RefTree = { side; ref; commit; listFiles(pathspec: string | string[]):
    Promise<Result<string[]>>; readFile(path): Promise<Result<string | null>> (null when absent);
    materialize(): Promise<Result<string>> (dir under `tempRoot`, cached) }`. `listFiles` runs
-   `git ls-tree -r -z --name-only <commit> -- <pathspecs>` (globs through `:(glob)` pathspec magic); `readFile`
+   `git ls-tree -r -z --name-only <commit>` once and filters it with `src/git/glob.ts`; `readFile`
    checks presence with `listFiles([path])` and reads with `git cat-file blob <commit>:<path>`, so "absent" and
    "git failed" are different results. `materialize` uses a temporary index file and `git checkout-index`, as in
    Key decisions. Later layers (migrations folders, enum and config files) use `listFiles` and `readFile` and never
@@ -148,7 +148,7 @@ passes; skipped layer fails without `allowIncomplete`, passes with it; failed la
 valid config; messages name the file and path) using a stub layer; `ref-tree.test.ts` on a temp git repository built in the test (unknown ref is an
 error naming the ref; `readFile` returns content, `null` for an absent path; `materialize` holds the files of that
 commit, not of the working tree, including a path marked `export-ignore`; `listFiles` with a plain path and with a
-`:(glob)` pattern; a ref starting with `-` is rejected as unknown, not parsed as an option); `markdown.test.ts` / `json.test.ts` (empty report,
+glob; a ref starting with `-` is rejected as unknown, not parsed as an option); `markdown.test.ts` / `json.test.ts` (empty report,
 mixed classes, accepted, skipped and failed layers, escaping); `check.test.ts` in-process with a stub layer
 registered through an injectable layer list (exit 0, 1 and 2 paths; `--output` writes the file; `--output` to an unwritable path → 2; unknown ref → 2; the temp root is gone after
 the run); `main.test.ts` (`--help` returns 0, unknown option returns 2, missing `--base` returns 2).
@@ -264,6 +264,10 @@ skipped when the binary is absent, unless `COMPAT_REQUIRE_OASDIFF=1`, which make
   acceptance fixture on top.
 - Lint tool → Biome (one dev dependency for lint and format).
 - Test runner → Vitest (runs TypeScript without a build step).
+- Glob support for `listFiles` (found in phase 1: `git ls-tree` rejects `:(glob)` pathspec magic, and
+  `path.matchesGlob` is experimental before Node 22.5) → an own matcher in `src/git/glob.ts` over one cached listing.
+- Timed-out commands (found in phase 2: a shell's child kept the pipes open after the shell was killed) → the
+  process runs in its own process group and the whole group is killed on timeout.
 - Keep `"private": true` → yes until CMP-6, so nothing can be published before release readiness.
 
 ## Progress
@@ -273,19 +277,19 @@ skipped when the binary is absent, unless `COMPAT_REQUIRE_OASDIFF=1`, which make
 ### Phase 1: Core command with the finding model, refs, reports and exit codes
 
 #### Automated
-- [x] 1.1 Named phase 1 tests pass (finding, gate, config, ref-tree, markdown, json, check, main)
-- [x] 1.2 `runCheck` with a stub `breaking` finding returns 1, and 0 with `--fail-on never`
-- [x] 1.3 An unknown ref returns 2 and stderr names the ref; a config with no enabled layer returns 2
-- [x] 1.4 `context/workflow.json` gates are `npm run typecheck`, `npm run lint`, `npm test`
-- [x] 1.5 Gates green (typecheck, lint, test)
+- [x] 1.1 Named phase 1 tests pass (finding, gate, config, ref-tree, markdown, json, check, main) — 9b76792
+- [x] 1.2 `runCheck` with a stub `breaking` finding returns 1, and 0 with `--fail-on never` — 9b76792
+- [x] 1.3 An unknown ref returns 2 and stderr names the ref; a config with no enabled layer returns 2 — 9b76792
+- [x] 1.4 `context/workflow.json` gates are `npm run typecheck`, `npm run lint`, `npm test` — 9b76792
+- [x] 1.5 Gates green (typecheck, lint, test) — 9b76792
 
 ### Phase 2: The `openapi` layer with oasdiff, spec sources and the accept allowlist
 
 #### Automated
-- [ ] 2.1 Named phase 2 tests pass (config, classify, accept, spec source, layer with fake oasdiff)
-- [ ] 2.2 With real oasdiff, the F1/F2 repository exits 1 with one `breaking` `request-property-became-not-nullable` and two `safe` `endpoint-added`, and exits 0 with the accept entry
-- [ ] 2.3 Without oasdiff on `PATH`, the `openapi` layer is `skipped` and the command exits 1, or 0 with `--allow-incomplete`
-- [ ] 2.4 Gates green (typecheck, lint, test)
+- [x] 2.1 Named phase 2 tests pass (config, classify, accept, spec source, layer with fake oasdiff)
+- [x] 2.2 With real oasdiff, the F1/F2 repository exits 1 with one `breaking` `request-property-became-not-nullable` and two `safe` `endpoint-added`, and exits 0 with the accept entry
+- [x] 2.3 Without oasdiff on `PATH`, the `openapi` layer is `skipped` and the command exits 1, or 0 with `--allow-incomplete`
+- [x] 2.4 Gates green (typecheck, lint, test)
 
 ### Phase 3: Packaging and CI
 
