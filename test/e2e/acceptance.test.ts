@@ -198,6 +198,10 @@ describe.skipIf(shouldSkipRealOasdiff(oasdiff))("PETSEO acceptance table, all v1
       ["seed", "ran"],
       ["persisted-enums", "ran"],
       ["config", "ran"],
+      ["client-usage", "not-configured"],
+      ["dependencies", "not-configured"],
+      ["message-contracts", "not-configured"],
+      ["behaviour", "not-configured"],
     ]);
     expect(report.gate.reasons).toEqual(["openapi: 1 finding(s) at or above breaking"]);
   });

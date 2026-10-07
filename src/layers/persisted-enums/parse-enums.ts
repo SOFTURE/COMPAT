@@ -241,8 +241,11 @@ function evaluateExpression(
     // A C# enum stores numbers only: a char is its UTF-16 code unit, a string is not a constant value.
     if (token.kind === "char")
       return token.text.length === 1 ? { kind: "number", value: BigInt(token.text.charCodeAt(0)) } : UNKNOWN;
+    // A template literal with holes (`${A}x`) is not a constant value: its text holds the holes as `${}`.
     if (token.kind === "string")
-      return language === "typescript" ? { kind: "string", value: token.text } : UNKNOWN;
+      return language === "typescript" && token.isInterpolated !== true
+        ? { kind: "string", value: token.text }
+        : UNKNOWN;
     if (token.kind === "identifier") {
       let name = token.text;
       if (name === enumName && tokens[index]?.text === "." && tokens[index + 1]?.kind === "identifier") {

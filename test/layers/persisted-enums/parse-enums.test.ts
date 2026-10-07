@@ -163,6 +163,15 @@ describe("parseEnums for TypeScript", () => {
     ]);
   });
 
+  it("leaves a template literal with holes without a string value", () => {
+    const [declaration] = parse('enum Kind { A = "a", B = `${A}-b`, C = `c` }', "typescript");
+    expect(declaration?.members.map((member) => [member.name, member.stringValue])).toEqual([
+      ["A", "a"],
+      ["B", null],
+      ["C", "c"],
+    ]);
+  });
+
   it("does not treat a property named enum as a declaration", () => {
     const declarations = parse(
       "const x = { enum: 1 }; type T = typeof x.enum; enum Real { A }",

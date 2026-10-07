@@ -19,6 +19,12 @@ beforeAll(() => {
       files: { "app/client.ts": CLIENT, "app/screens/inbox.ts": "switch (item.type) {}\n" },
       tag: "app-3",
     },
+    {
+      files: {
+        "app/client.ts": `${CLIENT}export const getPet = (id: string) => { const url = "api/pets/" + id; return fetch(url); };\n`,
+      },
+      tag: "app-4",
+    },
   ]);
 });
 afterAll(() => repo.cleanup());
@@ -95,6 +101,10 @@ describe("client-usage layer", () => {
     [
       { refs: ["app-2"] },
       'client "mobile": app-2: no HTTP operation could be read from app/client.ts; is it a generated TypeScript client?',
+    ],
+    [
+      { refs: ["app-4"] },
+      'client "mobile": app-4: 1 request URL(s) in app/client.ts could not be read, first "api/pets/" at line 2; their operations would count as not called',
     ],
     [{ sources: ["web/**/*.ts"] }, 'client "mobile": app-1: sources web/**/*.ts match no file'],
     [

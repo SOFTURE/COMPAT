@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, LayerResult } from "../../src/model/finding.js";
-import { evaluateGate, getLayerVerdict } from "../../src/model/gate.js";
+import { evaluateGate, getLayerVerdict, type InactiveLayer } from "../../src/model/gate.js";
 import { createFinding } from "../helpers/stub-layer.js";
 
 const ran = (findings: Finding[]): LayerResult => ({
@@ -69,6 +69,46 @@ describe("evaluateGate", () => {
       exitCode: 1,
       reasons: ["openapi: 1 finding(s) at or above breaking"],
     });
+  });
+});
+
+describe("evaluateGate with layers that did not run", () => {
+  const inactive: InactiveLayer[] = [
+    { layer: "openapi", status: "disabled" },
+    { layer: "behaviour", status: "not-configured" },
+  ];
+
+  it("passes when layers are disabled or not configured and none is required", () => {
+    expect(evaluateGate([ran([])], strict, inactive)).toEqual({ passed: true, exitCode: 0, reasons: [] });
+  });
+
+  it("fails on a required layer that is disabled or not configured", () => {
+    const gate = evaluateGate([ran([])], { ...strict, required: ["openapi", "behaviour"] }, inactive);
+    expect(gate).toEqual({
+      passed: false,
+      exitCode: 1,
+      reasons: [
+        "openapi: layer disabled, but --require names it",
+        "behaviour: layer not configured, but --require names it",
+      ],
+    });
+  });
+
+  it("fails on a required layer that was skipped or failed even when incomplete checks are allowed", () => {
+    const results: LayerResult[] = [
+      { layer: "stub", status: "skipped", reason: "no spec" },
+      { layer: "other", status: "failed", error: "boom", findings: [], notes: [] },
+      { layer: "free", status: "skipped", reason: "nothing to read" },
+    ];
+    const gate = evaluateGate(results, { ...strict, allowIncomplete: true, required: ["stub", "other"] });
+    expect(gate.reasons).toEqual([
+      "stub: layer skipped, but --require names it",
+      "other: layer failed, but --require names it",
+    ]);
+  });
+
+  it("passes when a required layer ran", () => {
+    expect(evaluateGate([ran([])], { ...strict, required: ["stub"] }, inactive).passed).toBe(true);
   });
 });
 
