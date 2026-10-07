@@ -1,0 +1,168 @@
+name: SOFTURE COMPAT
+description: Tells whether a server release is backward compatible with production, and puts the report on the job summary and the pull request.
+author: SOFTURE
+branding:
+  icon: shield
+  color: blue
+
+# A composite action around the published CLI. It installs `@softure-ai/compat` at the version in this repository's
+# package.json, so `uses: SOFTURE/COMPAT@v0.3.0` (or the moving `@v0`) always runs the CLI released from that commit.
+inputs:
+  base:
+    description: Git ref or resolver running in production (`--base`), e.g. `github-deployment:production` or `latest-tag:v*`.
+    required: true
+  revision:
+    description: Git ref about to be released (`--revision`).
+    required: false
+    default: HEAD
+  fail-on:
+    description: Lowest class that fails the step (`breaking`, `rollback-risk`, `needs-action` or `never`).
+    required: false
+    default: breaking
+  config:
+    description: Config file (`--config`), relative to `working-directory`. Default `compat.config.json` there.
+    required: false
+    default: ""
+  working-directory:
+    description: Repository directory the check runs in.
+    required: false
+    default: "."
+  args:
+    description: Extra CLI arguments, split on whitespace (e.g. `--allow-incomplete --no-download`).
+    required: false
+    default: ""
+  comment:
+    description: 'On pull requests, create or update one comment with the report (needs `pull-requests: write`).'
+    required: false
+    default: "true"
+  comment-key:
+    description: Tells comments apart when one pull request runs several checks; each key keeps its own comment.
+    required: false
+    default: default
+  package:
+    description: npm package spec of the CLI to run instead of the pinned version (a version, a tag or a tarball path).
+    required: false
+    default: ""
+  node-version:
+    description: Node.js version to set up (the CLI needs 22 or later). Empty skips `actions/setup-node`.
+    required: false
+    default: "22"
+  github-token:
+    description: Token for the GitHub resolvers and the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: 'CLI exit code: 0 gate passed, 1 gate failed, 2 the check could not run.'
+    value: ${{ steps.check.outputs.exit-code }}
+  report:
+    description: Path of the Markdown report (empty when the check could not run).
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      if: inputs.node-version != ''
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Run softure-compat check
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        COMPAT_ACTION_PATH: ${{ github.action_path }}
+        COMPAT_BASE: ${{ inputs.base }}
+        COMPAT_REVISION: ${{ inputs.revision }}
+        COMPAT_FAIL_ON: ${{ inputs.fail-on }}
+        COMPAT_CONFIG: ${{ inputs.config }}
+        COMPAT_ARGS: ${{ inputs.args }}
+        COMPAT_PACKAGE: ${{ inputs.package }}
+      run: |
+        PACKAGE="${COMPAT_PACKAGE}"
+        if [ -z "${PACKAGE}" ]; then
+          VERSION=$(node -p "require(process.argv[1]).version" "${COMPAT_ACTION_PATH}/package.json")
+          PACKAGE="@softure-ai/compat@${VERSION}"
+        fi
+        REPORT="${RUNNER_TEMP}/softure-compat-report.md"
+        rm -f "${REPORT}"
+
+        ARGS=(check --base "${COMPAT_BASE}" --revision "${COMPAT_REVISION}" --fail-on "${COMPAT_FAIL_ON}" --output "${REPORT}")
+        if [ -n "${COMPAT_CONFIG}" ]; then ARGS+=(--config "${COMPAT_CONFIG}"); fi
+        read -r -a EXTRA <<< "${COMPAT_ARGS}"
+        ARGS+=("${EXTRA[@]}")
+
+        echo "Running ${PACKAGE}: softure-compat ${ARGS[*]}"
+        set +e
+        npx --yes --package="${PACKAGE}" -- softure-compat "${ARGS[@]}"
+        EXIT_CODE=$?
+        set -e
+
+        echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        if [ -f "${REPORT}" ]; then
+          echo "report=${REPORT}" >> "$GITHUB_OUTPUT"
+          cat "${REPORT}" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "report=" >> "$GITHUB_OUTPUT"
+          printf '## Backward compatibility\n\nThe check could not run (exit code %s); see the job log.\n' "${EXIT_CODE}" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Comment the report on the pull request
+      if: inputs.comment == 'true' && steps.check.outputs.report != '' && github.event.pull_request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPORT: ${{ steps.check.outputs.report }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        COMMENT_KEY: ${{ inputs.comment-key }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        export MARKER="<!-- softure-compat:${COMMENT_KEY} -->"
+        BODY="${RUNNER_TEMP}/softure-compat-comment.md"
+        # A pull request comment holds at most 65536 characters; a longer report is cut and points at the job summary.
+        LIMIT=60000
+        {
+          echo "${MARKER}"
+          if [ "$(wc -c < "${REPORT}")" -gt "${LIMIT}" ]; then
+            # Cut on a line boundary so a multi-byte character is never split.
+            head -c "${LIMIT}" "${REPORT}" | sed '$d'
+            printf '\n\n_The report is longer than a comment allows; read it in full in the [job summary](%s)._\n' "${RUN_URL}"
+          else
+            cat "${REPORT}"
+            printf '\n<sub>[softure-compat run](%s)</sub>\n' "${RUN_URL}"
+          fi
+        } > "${BODY}"
+
+        # Commenting is best effort: a fork pull request or a token without `pull-requests: write` gets a warning, and
+        # the gate below still decides the step's result.
+        if ! COMMENT_ID=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+          --jq '.[] | select(.body | startswith(env.MARKER)) | .id' | head -n 1); then
+          echo "::warning::softure-compat: cannot read the comments of pull request #${PR_NUMBER}; the report is in the job summary."
+          exit 0
+        fi
+        if [ -n "${COMMENT_ID}" ]; then
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" -F "body=@${BODY}" > /dev/null \
+            && echo "Updated the report comment on pull request #${PR_NUMBER}." \
+            || echo "::warning::softure-compat: cannot update the report comment on pull request #${PR_NUMBER} (it needs pull-requests: write); the report is in the job summary."
+        else
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${BODY}" > /dev/null \
+            && echo "Commented the report on pull request #${PR_NUMBER}." \
+            || echo "::warning::softure-compat: cannot comment on pull request #${PR_NUMBER} (it needs pull-requests: write); the report is in the job summary."
+        fi
+
+    - name: Apply the gate
+      if: steps.check.outputs.exit-code != '0'
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.check.outputs.exit-code }}
+      run: |
+        if [ "${EXIT_CODE}" = "1" ]; then
+          echo "::error::softure-compat: the gate failed; see the report in the job summary."
+        else
+          echo "::error::softure-compat: the check could not run (exit code ${EXIT_CODE}); see the step above."
+        fi
+        exit "${EXIT_CODE}"

@@ -133,7 +133,54 @@ findings with an `accept` list: every entry needs a `reason`, accepted findings 
 
 ### In CI
 
-The check needs both refs in the clone, so fetch the full history (or at least the production tag):
+The GitHub Action runs the check, writes the report to the job summary and keeps one comment with the report on the
+pull request, updated on every push. `needs-action` findings do not fail the default gate, so the comment is where the
+person merging the release sees them.
+
+```yaml
+on: pull_request
+
+permissions:
+  contents: read
+  deployments: read      # github-deployment:<environment>
+  actions: read          # github-workflow:<file>
+  pull-requests: write   # the report comment
+
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # both refs must be in the clone
+      - uses: SOFTURE/COMPAT@v0
+        with:
+          base: github-deployment:production
+```
+
+`@v0` follows the latest `0.x` release; pin `@v0.3.0` to stay on one version. The action runs the CLI version released
+from the same commit, so the action and the CLI never drift apart.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `base` | (required) | `--base`: a git ref or a resolver |
+| `revision` | `HEAD` | `--revision` |
+| `fail-on` | `breaking` | `--fail-on` |
+| `config` | `compat.config.json` | `--config`, relative to `working-directory` |
+| `working-directory` | `.` | the repository directory |
+| `args` | | extra CLI arguments, split on whitespace (`--allow-incomplete --no-download`) |
+| `comment` | `true` | create or update the report comment on pull requests |
+| `comment-key` | `default` | one comment per key, for several checks on one pull request |
+| `package` | the released version | npm package spec of the CLI to run instead (a version or a tarball path) |
+| `node-version` | `22` | Node.js set up for the CLI; empty keeps the job's Node.js |
+| `github-token` | `github.token` | token for the resolvers and the comment |
+
+Outputs: `exit-code` (0 passed, 1 gate failed, 2 could not run) and `report` (path of the Markdown report). The step
+fails when the gate fails, after the summary and the comment are written. Without `pull-requests: write` (for example
+on a pull request from a fork) the comment is skipped with a warning and the summary still has the report.
+
+Without the action, run the CLI yourself. The check needs both refs in the clone, so fetch the full history (or at
+least the production tag):
 
 ```yaml
 - uses: actions/checkout@v4
@@ -428,7 +475,10 @@ The row key is the `ON CONFLICT (...)` target, else the `MERGE ... ON` pairs, el
 | `safe` | `row-added`, `row-removed`, `seed-file-removed`, `insert-query-added` |
 | `needs-action` | `row-changed`, `row-change-ignored`, `row-added-skipped`, `row-deleted`, `insert-unguarded`, `upsert-query`, `update-data`, `delete-data`, `truncate`, `unreadable-write` |
 
-Dynamic SQL (`EXEC(N'...')`, `EXECUTE format(...)`), `COPY` and `BULK INSERT` are not read.
+Dynamic SQL with a literal body (`EXEC(N'...')`, `EXEC sp_executesql N'...'`, `EXECUTE '...'` inside a `DO` body)
+is unwrapped and its statements are compared like any other, with the lines of the outer file. Dynamic SQL without a
+literal body (`EXEC(@sql)`, `EXECUTE format(...)`, concatenation), `COPY ... FROM` and `BULK INSERT` are reported as
+`unreadable-write`. psql's `\copy` is a client command and is not read.
 
 ### persisted-enums
 
@@ -752,6 +802,8 @@ then:
 1. publishes `@softure-ai/compat` to **npmjs.com** with provenance;
 2. publishes `@softure/compat` to **GitHub Packages** (GitHub requires the scope to match the org);
 3. creates the tag `vX.Y.Z` on the released commit and the **GitHub Release** with generated notes and the tarball.
+4. moves the major tag (`v0`) to that commit, so `uses: SOFTURE/COMPAT@v0` runs the new release (not for a
+   prerelease).
 
 A version with a prerelease suffix (`0.2.0-rc.1`) goes to the `next` dist-tag and is marked as a prerelease. A
 version already on a registry is skipped, so re-running the workflow (Actions → *SOFTURE COMPAT - RELEASE* → *Run
