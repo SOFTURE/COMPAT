@@ -1,0 +1,153 @@
+import { readFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { main } from "../../src/main.js";
+import { createRepo, type TestRepo, writeRepoFile } from "../helpers/git-repo.js";
+import { createIo } from "../helpers/stub-layer.js";
+
+const fixture = (side: "base" | "revision", name: string) =>
+  readFileSync(new URL(`../fixtures/config/f10/${side}/${name}`, import.meta.url), "utf8");
+const files = (side: "base" | "revision") => ({
+  "deploy/docker-compose.yml": fixture(side, "docker-compose.yml"),
+  ".env.example": fixture(side, ".env.example"),
+  "VPS/ANSIBLE/roles/app/tasks/main.yml": fixture(side, "main.yml"),
+  "src/Petseo.Api/Settings/ApiSettings.cs": fixture(side, "ApiSettings.cs"),
+});
+const sources = [
+  { kind: "compose" },
+  { kind: "dotenv", valuesAreDefaults: true },
+  {
+    kind: "regex",
+    name: "ansible-assert",
+    files: ["VPS/ANSIBLE/roles/**/*.yml"],
+    pattern: "^\\s*-\\s*app_env\\.(?<key>\\w+) is defined",
+    flags: "m",
+    comments: "hash",
+  },
+  {
+    kind: "regex",
+    name: "dotnet-required",
+    files: ["src/**/*Settings.cs"],
+    pattern: "public required [\\w<>?]+ (?<key>\\w+) \\{",
+    comments: "slash",
+  },
+];
+
+let repo: TestRepo;
+
+beforeAll(() => {
+  repo = createRepo([
+    { files: files("base"), tag: "2.2.4" },
+    { files: files("revision"), tag: "2.3.4" },
+  ]);
+  writeRepoFile(repo, "plain.json", JSON.stringify({ layers: { config: { sources } } }));
+  writeRepoFile(
+    repo,
+    "accepted.json",
+    JSON.stringify({
+      layers: {
+        config: {
+          sources,
+          accept: [
+            ...["Shop__BaseUrl", "Shop__ApiKey", "ShopBaseUrl", "ShopApiKey"].map((key) => ({
+              key,
+              id: "config-key-added-required",
+              reason: "set in the production vault on 2026-10-06",
+            })),
+            {
+              key: "Logging__Level",
+              id: "config-key-default-removed",
+              reason: "set in the Ansible inventory",
+            },
+          ],
+        },
+      },
+    }),
+  );
+});
+afterAll(() => repo.cleanup());
+
+const check = (config: string, ...extra: string[]) => [
+  "check",
+  "--base",
+  "2.2.4",
+  "--revision",
+  "2.3.4",
+  "--config",
+  config,
+  ...extra,
+];
+
+type JsonFinding = {
+  subject: string;
+  id: string;
+  class: string;
+  accepted?: unknown;
+  evidence: { path: string; line: number }[];
+};
+
+async function runJson(...args: string[]) {
+  const run = createIo(repo.dir);
+  const code = await main([...args, "--format", "json"], run.io);
+  const report = JSON.parse(run.stdout()) as { layers: { status: string; findings: JsonFinding[] }[] };
+  return { code, layer: report.layers[0], stderr: run.stderr() };
+}
+
+describe("config layer end to end (research F10)", () => {
+  it("reports the new Shop settings as needs-action and passes the default gate", async () => {
+    const { code, layer } = await runJson(...check("plain.json"));
+    expect(code).toBe(0);
+    expect(layer?.status).toBe("ran");
+    const summary = layer?.findings.map((f) => `${f.subject} ${f.id} ${f.class}`);
+    expect(summary).toEqual([
+      "Logging__Level config-key-default-removed needs-action",
+      "ShopApiKey config-key-added-required needs-action",
+      "ShopBaseUrl config-key-added-required needs-action",
+      "Shop__ApiKey config-key-added-required needs-action",
+      "Shop__BaseUrl config-key-added-required needs-action",
+      "Shop__TimeoutSeconds config-key-added-optional safe",
+    ]);
+    const baseUrl = layer?.findings.find((f) => f.subject === "Shop__BaseUrl");
+    expect(baseUrl?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
+      "VPS/ANSIBLE/roles/app/tasks/main.yml:5",
+      "deploy/docker-compose.yml:7",
+    ]);
+    const dotnet = layer?.findings.find((f) => f.subject === "ShopBaseUrl");
+    expect(dotnet?.evidence.map((e) => `${e.path}:${e.line}`)).toEqual([
+      "src/Petseo.Api/Settings/ApiSettings.cs:10",
+    ]);
+  });
+
+  it("ignores commented-out declarations and never prints a default value", async () => {
+    for (const format of ["md", "json"]) {
+      const run = createIo(repo.dir);
+      await main([...check("plain.json"), "--format", format], run.io);
+      const report = run.stdout();
+      for (const hidden of ["Legacy", "Unused", "Information", "shop.example.com", "latest", "localhost"]) {
+        expect(report).not.toContain(hidden);
+      }
+    }
+  });
+
+  it("fails the gate at --fail-on needs-action and names the keys in the Markdown report", async () => {
+    const run = createIo(repo.dir);
+    const code = await main(check("plain.json", "--fail-on", "needs-action"), run.io);
+    expect(code).toBe(1);
+    const report = run.stdout();
+    expect(report).toContain("Shop__BaseUrl");
+    expect(report).toContain("`deploy/docker-compose.yml:8` @ 2.3.4");
+    expect(report).not.toContain("Legacy__Token");
+  });
+
+  it("passes at --fail-on needs-action once the settings are accepted", async () => {
+    const { code, layer } = await runJson(...check("accepted.json", "--fail-on", "needs-action"));
+    expect(code).toBe(0);
+    const accepted = layer?.findings.filter((f) => f.accepted).map((f) => f.subject);
+    expect(accepted).toEqual([
+      "Logging__Level",
+      "ShopApiKey",
+      "ShopBaseUrl",
+      "Shop__ApiKey",
+      "Shop__BaseUrl",
+    ]);
+  });
+});
