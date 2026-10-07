@@ -78,4 +78,12 @@ describe("README reference", () => {
     expect(getSection("openapi")).toContain("COMPAT_SIDE");
     expect(readme).toContain("go install github.com/oasdiff/oasdiff@v1.33.0");
   });
+
+  it("lists every input of the GitHub Action", () => {
+    const action = readFileSync(new URL("../action.yml", import.meta.url), "utf8");
+    const inputsBlock = action.slice(action.indexOf("\ninputs:\n"), action.indexOf("\noutputs:\n"));
+    const inputs = [...inputsBlock.matchAll(/^ {2}([a-z-]+):$/gm)].map((match) => match[1]);
+    expect(inputs).toContain("base");
+    for (const input of inputs) expect(getSection("In CI"), input).toContain(`| \`${input}\` |`);
+  });
 });
