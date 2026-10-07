@@ -421,7 +421,9 @@ What changes, per `openapi` finding of the client's API that is not accepted and
 - No client ref calls the operation → `safe`, reason `not called by mobile@2.0.1, 2.1.1, 2.2.4`.
 - `request-property-became-required`, `new-required-request-property` or `request-property-became-not-nullable`, and
   every calling ref always sends the property (the typed body parameter is not optional and the property is declared
-  without `?`, or without `null` for the not-nullable rule) → `safe`, with the declarations as evidence.
+  without `?`, and also without `null` for the not-nullable rule) → `safe`, with the declarations as evidence.
+  `allOf[...]` segments of the property path are skipped (a generated client flattens allOf into one type or an
+  intersection `A & B`, whose members the reader merges); under `oneOf[...]` or `anyOf[...]` the class stays.
 - Otherwise the class stays, the message names the refs that call the operation (or may omit the property), and the
   calls are added as evidence.
 

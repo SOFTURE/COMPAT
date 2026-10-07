@@ -125,6 +125,47 @@ describe("refineFindings", () => {
     );
   });
 
+  describe("a property under allOf (issue #70)", () => {
+    const allOf = notNullable("allOf[subschema #2]/daysOfWeek");
+    const intersection = (daysOfWeek: string) => `
+export const addMedication = (petId: string, body: AddMedication) =>
+  fetch(\`/api/pets/\${petId}/medications\`, { method: "POST", body: JSON.stringify(body) });
+export type AddMedication = MedicationBase & { ${daysOfWeek} };
+export interface MedicationBase { name: string }
+`;
+
+    it("drops the finding to safe when the flattened body always sends the property", () => {
+      const { revisions } = refineFindings([allOf], [usage()]);
+      expect(revisions[0]?.finding).toMatchObject({
+        class: "safe",
+        reclassified: { reason: "`allOf[subschema #2]/daysOfWeek` is always sent non-null by mobile@2.2.4" },
+      });
+    });
+
+    it("drops the finding to safe when an intersection body always sends the property", () => {
+      const model = readTypescriptClient(intersection("daysOfWeek: DayOfWeek[]"));
+      expect(refineFindings([allOf], [usage({ model })]).revisions[0]?.finding.class).toBe("safe");
+    });
+
+    it("keeps the class and names the refs when the property is optional", () => {
+      const model = readTypescriptClient(intersection("daysOfWeek?: DayOfWeek[]"));
+      const { revisions } = refineFindings([allOf], [usage({ model })]);
+      expect(revisions[0]?.finding.class).toBe("breaking");
+      expect(revisions[0]?.finding.message).toBe(
+        "the request property `allOf[subschema #2]/daysOfWeek` became not nullable; mobile@2.2.4 may send it without `allOf[subschema #2]/daysOfWeek` or with null (client-usage)",
+      );
+    });
+
+    it("keeps the class under oneOf or anyOf, which cannot be proven always sent", () => {
+      const findings = [
+        notNullable("oneOf[subschema #1]/daysOfWeek"),
+        notNullable("anyOf[subschema #1]/daysOfWeek"),
+      ];
+      const { revisions } = refineFindings(findings, [usage()]);
+      expect(revisions.map((revision) => revision.finding.class)).toEqual(["breaking", "breaking"]);
+    });
+  });
+
   it("drops an operation no client ref calls to safe and lists every ref", () => {
     const { revisions } = refineFindings(
       [finding({ id: "api-path-removed-without-deprecation", subject: "DELETE /api/pets/{petId}" })],
