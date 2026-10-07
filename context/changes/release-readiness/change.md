@@ -1,9 +1,9 @@
 ---
 change_id: release-readiness
 title: "The package is ready for its first npm release: documented, initialised in one command, tested end to end in CI"
-status: new
+status: plan_reviewed
 roadmap_item: CMP-6
-branch: null
+branch: claude/project-thread-q44ui9
 created: 2026-10-07
 updated: 2026-10-07
 archived_at: null
