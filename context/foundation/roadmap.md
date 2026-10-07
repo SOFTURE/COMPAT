@@ -30,7 +30,7 @@ requests of 2026-10-07 are the product input). Scope of v1 follows research §6 
 | **CMP-3** | `seed-layer` | seed scripts that run on every deploy are diffed and classified | CMP-2 | autonomous | done |
 | **CMP-4** | `persisted-enums-layer` | added, removed and renumbered members of persisted enums are classified | CMP-1 | autonomous | done |
 | **CMP-5** | `config-layer` | new required configuration keys are reported as `needs-action` | CMP-1 | autonomous | done |
-| **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | done_code (2026-10-07; waiting: owner adds the `NPM_TOKEN` secret, then sets up npm trusted publishing) |
+| **CMP-6** | `release-readiness` | README, `init` command, CI, publish workflow and an end-to-end acceptance fixture | CMP-2, CMP-3, CMP-4, CMP-5 | autonomous | done (2026-10-07; `0.1.0` released by `release.yml`) |
 
 ## Order
 CMP-1 builds the core every layer plugs into, so it goes first. CMP-3 reuses the SQL statement splitter of CMP-2.
@@ -99,7 +99,7 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 
 ### CMP-6: Release readiness
 - **Change ID:** `release-readiness`
-- **Status:** done_code (2026-10-07; waiting: owner adds the `NPM_TOKEN` secret, then sets up npm trusted publishing)
+- **Status:** done (2026-10-07; `0.1.0` released by `release.yml`)
 - **Outcome:** README with a quick start and the config reference, `softure-compat init`, GitHub Actions for CI
   and npm publish with provenance, and an end-to-end test that reproduces the in-scope PETSEO findings.
 - **Prerequisites:** CMP-2, CMP-3, CMP-4, CMP-5.
@@ -109,10 +109,10 @@ registry and the config schema that CMP-1 creates; every later item adds one ent
 - **PRD refs:** change.md Constraints (distribution).
 
 ## Before the next release
-- [ ] Owner adds the repository secret `NPM_TOKEN`; then `release.yml` (run on `master`) publishes `0.1.0` to npm and GitHub Packages and creates tag `v0.1.0` with the GitHub Release; afterwards the owner configures npm trusted publishing (repository `SOFTURE/COMPAT`, workflow `release.yml`) (README "Releasing") (**CMP-6**, `automatic-release`)
+- [ ] Owner configures npm trusted publishing (organization `SOFTURE`, repository `COMPAT`, workflow `release.yml`), then may delete the `NPM_TOKEN` secret; `0.1.0` was published with the token on 2026-10-07 (README "Releasing") (**CMP-6**, `automatic-release`)
 
 ## Owner decisions and checks
-- [ ] **CMP-6**: The owner adds `NPM_TOKEN` and the pipeline publishes `0.1.0` (Manual 3.5; replaced by the automatic release in `archive/2026-10-07-automatic-release/`: no manual `npm publish`, no manual tag). archive/2026-10-07-release-readiness/plan.md
+- [x] **CMP-6**: The owner added `NPM_TOKEN` and the pipeline published `0.1.0` to npm, GitHub Packages and GitHub Release `v0.1.0` (2026-10-07) (Manual 3.5; replaced by the automatic release in `archive/2026-10-07-automatic-release/`: no manual `npm publish`, no manual tag). archive/2026-10-07-release-readiness/plan.md
 - [ ] **CMP-6**: The owner can configure PETSEO from the README alone (Manual 4.3). archive/2026-10-07-release-readiness/plan.md
 
 ## Done
