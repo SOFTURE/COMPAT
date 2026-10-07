@@ -7,10 +7,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config/config.js";
 import { LAYERS } from "../../src/layers/registry.js";
 import { main } from "../../src/main.js";
+import type { FetchFn } from "../../src/resolve/github.js";
+import { createFakeGitHub, GITHUB_ENV } from "../helpers/fake-github.js";
 import { createRepo, type TestRepo, writeRepoFile } from "../helpers/git-repo.js";
 import { createIo } from "../helpers/stub-layer.js";
 
-type Written = { layers: Record<string, Record<string, unknown> & { enabled?: boolean }> };
+type Written = {
+  check?: Record<string, string>;
+  layers: Record<string, Record<string, unknown> & { enabled?: boolean }>;
+};
+
+/** The test runner's own GitHub variables must not reach the deployment lookup. */
+const {
+  GITHUB_REPOSITORY: _repository,
+  GH_TOKEN: _ghToken,
+  GITHUB_TOKEN: _token,
+  ...OFFLINE_ENV
+} = process.env;
 
 const repos: TestRepo[] = [];
 afterEach(() => {
@@ -24,8 +37,16 @@ function repoWith(files: Record<string, string>): TestRepo {
 }
 
 async function init(repo: TestRepo, ...extra: string[]) {
+  return initWith(repo, { env: OFFLINE_ENV }, ...extra);
+}
+
+async function initWith(
+  repo: TestRepo,
+  github: { env: NodeJS.ProcessEnv; fetch?: FetchFn },
+  ...extra: string[]
+) {
   const run = createIo(repo.dir);
-  const exitCode = await main(["init", ...extra], run.io);
+  const exitCode = await main(["init", ...extra], { ...run.io, ...github });
   const path = join(repo.dir, "compat.config.json");
   const written = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Written) : null;
   return { exitCode, written, stderr: run.stderr(), stdout: run.stdout() };
@@ -44,7 +65,11 @@ describe("softure-compat init", () => {
     expect(parseConfig(written, LAYERS, "compat.config.json").ok).toBe(true);
     expect(stderr).toContain("openapi disabled:");
     expect(stderr).toContain("wrote");
-    expect(stderr).toContain("softure-compat check --base <production tag> --revision HEAD");
+    expect(written?.check).toEqual({ base: "latest-tag", revision: "HEAD", failOn: "breaking" });
+    expect(stderr).toContain(
+      "check compares latest-tag with HEAD: GitHub not read: cannot tell the GitHub repository",
+    );
+    expect(stderr).toMatch(/then run:\n {2}softure-compat check\n$/);
   });
 
   it("enables dependencies for the package manifests it finds, skipping node_modules", async () => {
@@ -355,5 +380,94 @@ describe("softure-compat init", () => {
     expect(report.layers[0]?.findings.map((finding) => `${finding.subject} ${finding.id}`)).toEqual([
       "B config-key-added-required",
     ]);
+  });
+
+  describe("check defaults from GitHub deployments", () => {
+    const DEPLOYMENTS = "/deployments?per_page=100";
+    const success = [{ state: "success" }];
+
+    it("compares the two most recently deployed environments, the one named like production as the base", async () => {
+      const github = createFakeGitHub({
+        [DEPLOYMENTS]: [
+          { id: 5, environment: "production" },
+          { id: 4, environment: "dev" },
+          { id: 3, environment: "production" },
+          { id: 2, environment: "staging" },
+        ],
+        "/deployments/5/statuses?per_page=1": success,
+        "/deployments/4/statuses?per_page=1": success,
+      });
+      const { written, stderr } = await initWith(repoWith({ "README.md": "" }), {
+        env: GITHUB_ENV,
+        fetch: github.fetch,
+      });
+      expect(written?.check).toEqual({
+        base: "github-deployment:production",
+        revision: "github-deployment:dev",
+        failOn: "breaking",
+      });
+      expect(github.calls).toEqual([
+        DEPLOYMENTS,
+        "/deployments/5/statuses?per_page=1",
+        "/deployments/4/statuses?per_page=1",
+      ]);
+      expect(stderr).toContain('"production" is taken as production');
+    });
+
+    it("takes the less recently deployed environment as the base when no name says production", async () => {
+      const github = createFakeGitHub({
+        [DEPLOYMENTS]: [
+          { id: 3, environment: "dev" },
+          { id: 2, environment: "test" },
+          { id: 1, environment: "live" },
+        ],
+        "/deployments/3/statuses?per_page=1": success,
+        "/deployments/2/statuses?per_page=1": [{ state: "failure" }],
+        "/deployments/1/statuses?per_page=1": success,
+      });
+      const { written } = await initWith(repoWith({ "README.md": "" }), {
+        env: GITHUB_ENV,
+        fetch: github.fetch,
+      });
+      expect(written?.check).toMatchObject({
+        base: "github-deployment:live",
+        revision: "github-deployment:dev",
+      });
+    });
+
+    it("compares the only deployed environment with HEAD", async () => {
+      const github = createFakeGitHub({
+        [DEPLOYMENTS]: [{ id: 1, environment: "prod" }],
+        "/deployments/1/statuses?per_page=1": success,
+      });
+      const { written } = await initWith(repoWith({ "README.md": "" }), {
+        env: GITHUB_ENV,
+        fetch: github.fetch,
+      });
+      expect(written?.check).toMatchObject({ base: "github-deployment:prod", revision: "HEAD" });
+    });
+
+    it("falls back to the newest tag when no environment has a successful deployment", async () => {
+      const github = createFakeGitHub({ [DEPLOYMENTS]: [] });
+      const { exitCode, written, stderr } = await initWith(repoWith({ "README.md": "" }), {
+        env: GITHUB_ENV,
+        fetch: github.fetch,
+      });
+      expect(exitCode).toBe(0);
+      expect(written?.check).toMatchObject({ base: "latest-tag", revision: "HEAD" });
+      expect(stderr).toContain("no GitHub environment has a successful deployment");
+    });
+
+    it("still writes the config when GitHub answers with an error", async () => {
+      const github = createFakeGitHub({ [DEPLOYMENTS]: 403 });
+      const { exitCode, written, stderr } = await initWith(repoWith({ "README.md": "" }), {
+        env: GITHUB_ENV,
+        fetch: github.fetch,
+      });
+      expect(exitCode).toBe(0);
+      expect(written?.check).toMatchObject({ base: "latest-tag", revision: "HEAD" });
+      expect(stderr).toContain("GitHub not read: GET");
+      expect(stderr).toContain("returned HTTP 403");
+    });
   });
 });

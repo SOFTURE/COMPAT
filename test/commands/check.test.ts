@@ -133,6 +133,69 @@ describe("runCheck", () => {
   });
 });
 
+describe("runCheck with check defaults in the config", () => {
+  const withDefaults = (check: Record<string, unknown>) =>
+    JSON.stringify({ check, layers: { stub: { level: "needs-action" } } });
+  const commitOf = (tag: string) => repo.git("rev-parse", tag).trim();
+  const noFlags = (configPath: string, overrides: Partial<CheckOptions> = {}): CheckOptions => ({
+    configPath,
+    format: "json",
+    allowIncomplete: false,
+    ...overrides,
+  });
+
+  it("runs with no flags on the base, revision and failOn of the config", async () => {
+    writeRepoFile(
+      repo,
+      "defaults.json",
+      withDefaults({ base: "v1", revision: "v2", failOn: "needs-action" }),
+    );
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(noFlags("defaults.json"), run.io)).toBe(1);
+    const report = JSON.parse(run.stdout());
+    expect(report.base).toEqual({ ref: "v1", commit: commitOf("v1"), source: "config" });
+    expect(report.revision).toEqual({ ref: "v2", commit: commitOf("v2"), source: "config" });
+    expect(report.failOn).toBe("needs-action");
+  });
+
+  it("lets each flag override its config value and says so in the header", async () => {
+    writeRepoFile(
+      repo,
+      "defaults-v2.json",
+      withDefaults({ base: "v2", revision: "v2", failOn: "needs-action" }),
+    );
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(
+      await runCheck(noFlags("defaults-v2.json", { base: "v1", failOn: "breaking", format: "md" }), run.io),
+    ).toBe(0);
+    expect(run.stdout()).toContain(
+      `Base \`${commitOf("v1").slice(0, 12)}\` (--base), revision \`${commitOf("v2").slice(0, 12)}\` (config), fail on \`breaking\`.`,
+    );
+  });
+
+  it("falls back to breaking when neither the flag nor the config sets failOn", async () => {
+    writeRepoFile(repo, "refs-only.json", withDefaults({ base: "v1", revision: "v2" }));
+    const run = createIo(repo.dir, [createStubLayer()]);
+    expect(await runCheck(noFlags("refs-only.json"), run.io)).toBe(0);
+    expect(JSON.parse(run.stdout()).failOn).toBe("breaking");
+  });
+
+  it.each([
+    ["base", { revision: "v2" }, "no base ref: pass --base or set check.base in"],
+    ["revision", { base: "v1" }, "no revision ref: pass --revision or set check.revision in"],
+  ])(
+    "returns 2 when the %s is set neither on the command line nor in the config",
+    async (_side, check, message) => {
+      writeRepoFile(repo, "partial.json", withDefaults(check));
+      const run = createIo(repo.dir, [createStubLayer()]);
+      expect(await runCheck(noFlags("partial.json"), run.io)).toBe(2);
+      expect(run.stderr()).toContain(message);
+      expect(run.stderr()).toContain("partial.json");
+      expect(run.stdout()).toBe("");
+    },
+  );
+});
+
 describe("runCheck with ref resolvers", () => {
   const DEPLOYMENTS = "/deployments?environment=prod&per_page=100";
 
@@ -163,6 +226,7 @@ describe("runCheck with ref resolvers", () => {
       ref: "1.0.0",
       commit: v1,
       resolver: "github-deployment:prod",
+      source: "flag",
     });
   });
 

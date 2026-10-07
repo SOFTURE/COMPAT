@@ -12,7 +12,7 @@ import { evaluateGate, type FailOn } from "../model/gate.js";
 import { killAllProcessGroups } from "../process/run-process.js";
 import { renderJson } from "../report/json.js";
 import { renderMarkdown } from "../report/markdown.js";
-import type { RefInfo } from "../report/report.js";
+import type { RefInfo, RefSource } from "../report/report.js";
 import type { FetchFn } from "../resolve/github.js";
 import { parseRefSpec } from "../resolve/ref-spec.js";
 import { resolveRefSpec } from "../resolve/resolve-ref.js";
@@ -23,13 +23,16 @@ export const REPORT_FORMATS = ["md", "json"] as const;
 export type ReportFormat = (typeof REPORT_FORMATS)[number];
 
 export type CheckOptions = {
-  base: string;
-  revision: string;
+  /** `--base`; falls back to `check.base` in the config. */
+  base?: string;
+  /** `--revision`; falls back to `check.revision` in the config. */
+  revision?: string;
   repoDir?: string;
   configPath?: string;
   format: ReportFormat;
   outputPath?: string;
-  failOn: FailOn;
+  /** `--fail-on`; falls back to `check.failOn` in the config, then `breaking`. */
+  failOn?: FailOn;
   allowIncomplete: boolean;
   /** Layers that must run; a disabled, unconfigured, skipped or failed one fails the gate. */
   required?: string[];
@@ -49,6 +52,23 @@ export type CheckIo = {
 };
 
 export const EXIT_CANNOT_RUN = 2;
+
+const DEFAULT_FAIL_ON: FailOn = "breaking";
+
+/** A ref to compare and where it was set. */
+type RefChoice = { value: string; source: RefSource };
+
+/** The flag wins over the config; neither is an error naming both. */
+function chooseRef(
+  side: Side,
+  flag: string | undefined,
+  configured: string | undefined,
+  configPath: string,
+): Result<RefChoice> {
+  if (flag !== undefined) return ok({ value: flag, source: "flag" });
+  if (configured !== undefined) return ok({ value: configured, source: "config" });
+  return err(`no ${side} ref: pass --${side} or set check.${side} in ${configPath}`);
+}
 
 export async function runCheck(options: CheckOptions, io: CheckIo): Promise<number> {
   const repoDir = resolve(io.cwd, options.repoDir ?? ".");
@@ -75,6 +95,19 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     return EXIT_CANNOT_RUN;
   }
 
+  const { check: defaults } = config.value;
+  const baseRef = chooseRef("base", options.base, defaults.base, configPath);
+  if (!baseRef.ok) {
+    io.stderr(`softure-compat: ${baseRef.error}\n`);
+    return EXIT_CANNOT_RUN;
+  }
+  const revisionRef = chooseRef("revision", options.revision, defaults.revision, configPath);
+  if (!revisionRef.ok) {
+    io.stderr(`softure-compat: ${revisionRef.error}\n`);
+    return EXIT_CANNOT_RUN;
+  }
+  const failOn = options.failOn ?? defaults.failOn ?? DEFAULT_FAIL_ON;
+
   const repoRoot = await resolveRepoRoot(repoDir);
   if (!repoRoot.ok) {
     io.stderr(`softure-compat: ${repoRoot.error}\n`);
@@ -84,13 +117,19 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
   const tempRoot = await mkdtemp(join(tmpdir(), "softure-compat-"));
   const stopOnSignal = installTerminationHandlers(tempRoot, io);
   try {
-    const base = await openSide({ value: options.base, side: "base", repoDir: repoRoot.value, tempRoot, io });
+    const base = await openSide({
+      choice: baseRef.value,
+      side: "base",
+      repoDir: repoRoot.value,
+      tempRoot,
+      io,
+    });
     if (!base.ok) {
       io.stderr(`softure-compat: ${base.error}\n`);
       return EXIT_CANNOT_RUN;
     }
     const revision = await openSide({
-      value: options.revision,
+      choice: revisionRef.value,
       side: "revision",
       repoDir: repoRoot.value,
       tempRoot,
@@ -146,13 +185,13 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     const { inactive } = config.value;
     const gate = evaluateGate(
       results,
-      { failOn: options.failOn, allowIncomplete: options.allowIncomplete, required },
+      { failOn, allowIncomplete: options.allowIncomplete, required },
       inactive,
     );
     const report = {
       base: base.value.info,
       revision: revision.value.info,
-      failOn: options.failOn,
+      failOn,
       allowIncomplete: options.allowIncomplete,
       required,
       gate,
@@ -182,12 +221,16 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
   }
 }
 
-type OpenSideOptions = { value: string; side: Side; repoDir: string; tempRoot: string; io: CheckIo };
+type OpenSideOptions = { choice: RefChoice; side: Side; repoDir: string; tempRoot: string; io: CheckIo };
 
-/** Resolves a `--base`/`--revision` value and opens its tree; a resolved commit missing locally asks for a fetch. */
+/** Resolves a base or revision value and opens its tree; a resolved commit missing locally asks for a fetch. */
 async function openSide(options: OpenSideOptions): Promise<Result<{ tree: RefTree; info: RefInfo }>> {
-  const { value, side, repoDir, tempRoot, io } = options;
-  const resolved = await resolveRefSpec(parseRefSpec(value), { repoDir, env: io.env, fetch: io.fetch });
+  const { choice, side, repoDir, tempRoot, io } = options;
+  const resolved = await resolveRefSpec(parseRefSpec(choice.value), {
+    repoDir,
+    env: io.env,
+    fetch: io.fetch,
+  });
   if (!resolved.ok) return resolved;
   const { ref, commit, resolver } = resolved.value;
   const tree = await openRefTree({ repoDir, ref: commit ?? ref, label: ref, side, tempRoot });
@@ -197,7 +240,7 @@ async function openSide(options: OpenSideOptions): Promise<Result<{ tree: RefTre
       `${resolver} resolved to ${ref} (${commit ?? ref}), which is not in the local clone; fetch it (actions/checkout with fetch-depth: 0)`,
     );
   }
-  const info: RefInfo = { ref, commit: tree.value.commit };
+  const info: RefInfo = { ref, commit: tree.value.commit, source: choice.source };
   if (resolver !== undefined) info.resolver = resolver;
   return ok({ tree: tree.value, info });
 }
