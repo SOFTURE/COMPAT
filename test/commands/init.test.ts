@@ -47,6 +47,15 @@ describe("softure-compat init", () => {
     expect(stderr).toContain("softure-compat check --base <production tag> --revision HEAD");
   });
 
+  it("enables dependencies for the package manifests it finds, skipping node_modules", async () => {
+    const repo = repoWith({
+      "APP/Directory.Packages.props": "<Project />\n",
+      "web/node_modules/pkg/package.json": "{}",
+    });
+    const { written } = await init(repo);
+    expect(written?.layers.dependencies).toEqual({ sources: [{ kind: "nuget" }] });
+  });
+
   it("detects OpenAPI specs and names them after the file or its folder, uniquely", async () => {
     const repo = repoWith({
       "api/b2c/openapi.yaml": "openapi: 3.0.0\n",
