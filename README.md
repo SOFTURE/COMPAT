@@ -589,6 +589,11 @@ is unwrapped and its statements are compared like any other, with the lines of t
 literal body (`EXEC(@sql)`, `EXECUTE format(...)`, concatenation), `COPY ... FROM` and `BULK INSERT` are reported as
 `unreadable-write`. psql's `\copy` is a client command and is not read.
 
+When [`persisted-enums`](#persisted-enums) runs too, a `row-added` or `row-changed` finding whose rows write a string
+literal equal to a member that `persisted-enums` reports as `enum-member-added` (string storage) becomes
+`rollback-risk`, with the enum declaration as evidence: a base build that reads the table fails on those rows after a
+rollback.
+
 ### persisted-enums
 
 Enum members stored in the database must stay readable by both builds. The layer parses C# and TypeScript enums
@@ -615,7 +620,7 @@ Enum members stored in the database must stay readable by both builds. The layer
 
 | Finding id | Class |
 | --- | --- |
-| `enum-member-added` | `rollback-risk`: once a row holds it, the base build cannot read that row |
+| `enum-member-added` | `rollback-risk`: once a row holds it, the base build cannot read that row; when a [`seed`](#seed) row writes it (string storage), the message says so and the seed row is evidence |
 | `enum-member-removed` | `breaking` |
 | `enum-member-renamed` | `breaking` for string storage; `needs-action` for int storage (the number is unchanged) |
 | `enum-member-renumbered` | `breaking` (int storage: existing rows change meaning) |

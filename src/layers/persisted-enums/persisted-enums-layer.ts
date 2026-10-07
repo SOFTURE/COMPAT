@@ -11,6 +11,7 @@ import {
   persistedEnumsConfigSchema,
 } from "./config.js";
 import { type EnumDeclaration, type EnumMember, parseEnums } from "./parse-enums.js";
+import { type AddedStringMember, refineSeedFindings } from "./refine-seed.js";
 
 export const EXPOSED_ADDED_ID = "enum-member-exposed-added";
 
@@ -58,8 +59,11 @@ type SourceIndex = { byName: Map<string, Located[]>; unreadable: Map<string, Unr
 const DECLARATION_LINE =
   /^[ \t]*(?:(?:public|internal|private|protected|file|new|export|declare|const)[ \t]+)*enum[ \t]+@?([A-Za-z_][A-Za-z0-9_]*)\b/gm;
 
-/** A finding with the member names it is about; the accept allowlist matches on them. */
-type ClassifiedFinding = { finding: Finding; members: string[] };
+/**
+ * A finding with the member names it is about; the accept allowlist matches on them. `storedValue`
+ * is what rows hold for a member added to a string-stored enum; seed rows are matched on it.
+ */
+type ClassifiedFinding = { finding: Finding; members: string[]; storedValue?: string };
 
 export const persistedEnumsLayer = defineLayer({
   name: PERSISTED_ENUMS_LAYER,
@@ -134,13 +138,14 @@ export const persistedEnumsLayer = defineLayer({
 
     const accepted = applyAccept(classified, context.config.accept ?? []);
     notes.push(...accepted.notes);
-    if (errors.length > 0) return failed(errors.join("; "), accepted.findings, notes);
-    return {
-      layer: PERSISTED_ENUMS_LAYER,
-      status: "ran",
-      findings: accepted.findings,
-      notes,
-    } satisfies LayerResult;
+    const added = classified.flatMap(({ finding, members, storedValue }, index): AddedStringMember[] =>
+      storedValue === undefined
+        ? []
+        : [{ index, enumName: finding.scope, member: members[0] as string, storedValue }],
+    );
+    const { findings, revisions } = refineSeedFindings(accepted.findings, added, context.results ?? []);
+    if (errors.length > 0) return { ...failed(errors.join("; "), findings, notes), revisions };
+    return { layer: PERSISTED_ENUMS_LAYER, status: "ran", findings, notes, revisions };
   },
 });
 
@@ -449,9 +454,14 @@ function checkTarget({
   return ok(
     changes.flatMap((change) => {
       const finding = toFinding(change, target, files);
-      const classified = {
+      const isAddedString =
+        change.id === "enum-member-added" && target.storage === "string" && change.revision !== undefined;
+      const classified: ClassifiedFinding = {
         finding: { ...finding, evidence: withDiscovery(finding.evidence) },
         members: change.members,
+        ...(isAddedString && change.revision
+          ? { storedValue: change.revision.stringValue ?? change.revision.name }
+          : {}),
       };
       const exposed = toExposedFinding(change, target, classified.finding);
       return exposed === undefined

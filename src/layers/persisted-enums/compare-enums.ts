@@ -108,12 +108,16 @@ function compareStringStorage({ enumName, base, revision }: CompareEnumsOptions)
   return changes;
 }
 
+/** Why an added member is a rollback risk; `refine-seed` replaces it when a seed row writes the member. */
+export const ADDED_MEMBER_CLAUSE =
+  "once a row holds it, the base build cannot read that row after a rollback";
+
 function createAdded(enumName: string, member: EnumMember, stored: string): MemberChange {
   return {
     id: "enum-member-added",
     class: "rollback-risk",
     subject: `${enumName}.${member.name}`,
-    message: `${stored} is new: once a row holds it, the base build cannot read that row after a rollback`,
+    message: `${stored} is new: ${ADDED_MEMBER_CLAUSE}`,
     members: [member.name],
     revision: member,
   };
