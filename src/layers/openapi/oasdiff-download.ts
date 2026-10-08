@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { access, chmod, constants, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -20,11 +20,14 @@ export type OasdiffRelease = {
   urlTemplate: string;
   /** SHA-256 of every supported archive, keyed by the asset suffix (`linux_amd64`). */
   sha256: Readonly<Record<string, string>>;
+  /** SHA-256 of the binary inside every archive, so a cached binary can be verified offline. */
+  binarySha256: Readonly<Record<string, string>>;
 };
 
 /**
- * The oasdiff release the CLI downloads. The checksums are copied from the release's
- * `checksums.txt` and shipped in the package, so a tampered mirror or release cannot pass.
+ * The oasdiff release the CLI downloads. The archive checksums are copied from the release's
+ * `checksums.txt` and the binary checksums are taken from those verified archives; both ship in
+ * the package, so a tampered mirror, release or cache entry cannot pass.
  */
 export const PINNED_OASDIFF: OasdiffRelease = {
   version: "1.33.0",
@@ -35,6 +38,13 @@ export const PINNED_OASDIFF: OasdiffRelease = {
     linux_arm64: "4ae3c362d6074d919aada2dea82d0ee84366591600384455d0bdc658ddf8f7ae",
     windows_amd64: "22f98c7247075f8a446e783595802d6d38637de1760df264f3d4b3309f766c5b",
     windows_arm64: "d51bd1ea4b05ff9b314245d1e97f84c222b22ce34a930e8e305c68c32edbe951",
+  },
+  binarySha256: {
+    darwin_all: "14259eae1a315b73ea730e9f5ad4dc30eef4c1caaf0fe6511da913c74ec3106d",
+    linux_amd64: "fa65aae43c867e9f79da9cb121d3c1a113637883afe014c0680fd5b50696f416",
+    linux_arm64: "05baaaad3cf4576f95b72ebd0f40052ef3a6873c6c347fb5e5905071255e4aff",
+    windows_amd64: "f450465c0f4bd35ec49ba35b436820730843c5b21b5499e618963803bd8da919",
+    windows_arm64: "e6295057b3627a250fa3e05e5e60fdf26dac7e2108b3b05700d66b5f849b73ad",
   },
 };
 
@@ -48,7 +58,8 @@ export type ProvidedOasdiff = { path: string; source: "cache" | "download" };
 
 export type ProvideResult =
   | { status: "provided"; oasdiff: ProvidedOasdiff }
-  | { status: "unsupported"; platform: string };
+  | { status: "unsupported"; platform: string }
+  | { status: "not-cached" };
 
 /** Asset suffix of the release archive for a platform, or undefined when oasdiff ships none. */
 export function getAssetSuffix(platform: NodeJS.Platform, arch: string): string | undefined {
@@ -68,13 +79,14 @@ export function getCacheDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): 
 }
 
 /**
- * Returns a cached oasdiff of the pinned release, downloading it first when the cache has none.
- * The archive is checked against the embedded SHA-256 before anything is written to the cache,
- * and the binary appears in the cache only through an atomic rename, so a cached file is
- * always one that passed the check.
+ * Returns a cached oasdiff of the pinned release, downloading it first when the cache has no
+ * binary that matches the embedded SHA-256. The archive is checked before anything is written
+ * to the cache, and the binary appears there only through an atomic rename. With downloads off
+ * only the verified cache is used, and `not-cached` reports that it had nothing usable.
  */
 export async function provideOasdiff(options: {
   env: NodeJS.ProcessEnv;
+  isDownloadAllowed?: boolean;
   platform?: NodeJS.Platform;
   arch?: string;
   release?: OasdiffRelease;
@@ -86,13 +98,17 @@ export async function provideOasdiff(options: {
   const release = options.release ?? PINNED_OASDIFF;
   const suffix = getAssetSuffix(platform, arch);
   const expectedSha = suffix === undefined ? undefined : release.sha256[suffix];
-  if (suffix === undefined || expectedSha === undefined) {
+  const expectedBinarySha = suffix === undefined ? undefined : release.binarySha256[suffix];
+  if (suffix === undefined || expectedSha === undefined || expectedBinarySha === undefined) {
     return ok({ status: "unsupported", platform: `${platform}/${arch}` });
   }
   const binaryName = platform === "win32" ? "oasdiff.exe" : "oasdiff";
   const targetDir = join(getCacheDir(options.env, platform), "oasdiff", release.version, suffix);
   const target = join(targetDir, binaryName);
-  if (await isFile(target)) return ok({ status: "provided", oasdiff: { path: target, source: "cache" } });
+  if ((await getFileSha256(target)) === expectedBinarySha) {
+    return ok({ status: "provided", oasdiff: { path: target, source: "cache" } });
+  }
+  if (options.isDownloadAllowed === false) return ok({ status: "not-cached" });
 
   const asset = `oasdiff_${release.version}_${suffix}.tar.gz`;
   const url = release.urlTemplate.replace("{asset}", asset);
@@ -107,6 +123,12 @@ export async function provideOasdiff(options: {
   }
   const binary = extractTarGzFile(archive.value, binaryName);
   if (!binary.ok) return err(`oasdiff archive ${asset}: ${binary.error}`);
+  const binarySha = createHash("sha256").update(binary.value).digest("hex");
+  if (binarySha !== expectedBinarySha) {
+    return err(
+      `oasdiff binary in ${asset} failed the checksum check (expected sha256 ${expectedBinarySha}, got ${binarySha})`,
+    );
+  }
 
   const written = await writeAtomically(targetDir, target, binary.value);
   if (!written.ok) return written;
@@ -181,12 +203,14 @@ async function writeAtomically(dir: string, target: string, content: Buffer): Pr
   }
 }
 
-async function isFile(path: string): Promise<boolean> {
+/** SHA-256 of a file, or undefined when it cannot be read (a missing cache entry is expected). */
+async function getFileSha256(path: string): Promise<string | undefined> {
   try {
-    await access(path, constants.F_OK);
-    return true;
+    return createHash("sha256")
+      .update(await readFile(path))
+      .digest("hex");
   } catch {
-    return false;
+    return undefined;
   }
 }
 

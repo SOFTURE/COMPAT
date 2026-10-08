@@ -1,10 +1,11 @@
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { openRefTree, type RefTree } from "../../../src/git/ref-tree.js";
-import { getAssetSuffix } from "../../../src/layers/openapi/oasdiff-download.js";
+import { getAssetSuffix, PINNED_OASDIFF } from "../../../src/layers/openapi/oasdiff-download.js";
 import { openapiLayer } from "../../../src/layers/openapi/openapi-layer.js";
 import type { LayerResult } from "../../../src/model/finding.js";
 import { createRepo, type TestRepo } from "../../helpers/git-repo.js";
@@ -407,23 +408,57 @@ describe("openapi layer without oasdiff on PATH", () => {
     },
   );
 
-  it.runIf(suffix !== undefined && process.platform !== "win32")(
-    "uses the cached pinned release without network access",
+  /** Caches the fake as the pinned binary, with its checksum standing in for the shipped one. */
+  async function cacheFakeOasdiff(): Promise<string> {
+    const binarySha = PINNED_OASDIFF.binarySha256 as Record<string, string>;
+    const key = suffix ?? "";
+    const pinnedSha = binarySha[key];
+    binarySha[key] = createHash("sha256").update(readFileSync(FAKE_OASDIFF)).digest("hex");
+    onTestFinished(() => {
+      if (pinnedSha !== undefined) binarySha[key] = pinnedSha;
+    });
+    const cached = join(cacheDir, "oasdiff", "1.33.0", key, binaryName);
+    await mkdir(dirname(cached), { recursive: true });
+    await copyFile(FAKE_OASDIFF, cached);
+    return cached;
+  }
+
+  const hasCacheableRelease = suffix !== undefined && process.platform !== "win32";
+
+  it.runIf(hasCacheableRelease).each([
+    ["downloads are on", {}, {}],
+    ["the config turns downloads off", { oasdiff: { download: false } }, {}],
+    ["SOFTURE_COMPAT_NO_DOWNLOAD is set", {}, { SOFTURE_COMPAT_NO_DOWNLOAD: "1" }],
+  ])("uses the cached pinned release without network access when %s", async (_, config, env) => {
+    const cached = await cacheFakeOasdiff();
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    // The fake is a node script; PATH must still find node for its shebang.
+    const result = await runWithoutOasdiff(config, {
+      PATH: dirname(process.execPath),
+      ...changes([]),
+      ...env,
+    });
+    expect(result).toEqual({
+      layer: "openapi",
+      status: "ran",
+      findings: [],
+      notes: [`oasdiff oasdiff version fake at ${cached} (pinned release from the cache)`],
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it.runIf(hasCacheableRelease)(
+    "is skipped when downloads are off and the cached binary does not match its checksum",
     async () => {
-      const cached = join(cacheDir, "oasdiff", "1.33.0", suffix ?? "", binaryName);
-      await mkdir(dirname(cached), { recursive: true });
-      await copyFile(FAKE_OASDIFF, cached);
-      const fetchSpy = vi.fn();
-      vi.stubGlobal("fetch", fetchSpy);
-      // The fake is a node script; PATH must still find node for its shebang.
-      const result = await runWithoutOasdiff({}, { PATH: dirname(process.execPath), ...changes([]) });
-      expect(result).toEqual({
+      const cached = await cacheFakeOasdiff();
+      writeFileSync(cached, "#!/bin/sh\necho evil\n");
+      vi.stubGlobal("fetch", vi.fn());
+      expect(await runWithoutOasdiff({}, { SOFTURE_COMPAT_NO_DOWNLOAD: "1" })).toEqual({
         layer: "openapi",
-        status: "ran",
-        findings: [],
-        notes: [`oasdiff oasdiff version fake at ${cached} (pinned release from the cache)`],
+        status: "skipped",
+        reason: skippedReason,
       });
-      expect(fetchSpy).not.toHaveBeenCalled();
     },
   );
 });

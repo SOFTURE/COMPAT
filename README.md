@@ -30,12 +30,13 @@ install it: the CLI looks for oasdiff in `layers.openapi.oasdiff.path`, the `SOF
 variable and `PATH`, and when none has it, downloads the pinned v1.33.0 release for your OS and CPU from
 [github.com/oasdiff/oasdiff/releases](https://github.com/oasdiff/oasdiff/releases). The archive is checked against
 a SHA-256 shipped inside this package before it is used, and the binary is cached, so later runs work offline.
+A cached binary is used only while it matches its shipped SHA-256, also when downloading is turned off.
 
 | Topic | Details |
 | --- | --- |
 | Platforms | macOS (Intel and Apple silicon), Linux x64 and arm64, Windows x64 and arm64 |
 | Cache | `SOFTURE_COMPAT_CACHE_DIR`, else `$XDG_CACHE_HOME/softure-compat` or `~/.cache/softure-compat` (`%LOCALAPPDATA%\softure-compat` on Windows) |
-| Turn it off | `--no-download`, `SOFTURE_COMPAT_NO_DOWNLOAD=1`, or `"oasdiff": { "download": false }` |
+| Turn it off | `--no-download`, `SOFTURE_COMPAT_NO_DOWNLOAD=1`, or `"oasdiff": { "download": false }`; the verified cache is still used |
 | Behind a proxy | Node.js reads `HTTPS_PROXY` when `NODE_USE_ENV_PROXY=1` is set |
 
 A download that fails or does not match the checksum fails the `openapi` layer; it never passes unchecked. With
@@ -101,7 +102,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `check.failOn` in the config, then `breaking`) |
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
 | `--require <layer,...>` | check | fail the gate unless these layers ran: disabled, not configured, skipped or failed all fail it, even with `--allow-incomplete` |
-| `--no-download` | check | never download oasdiff; the `openapi` layer is skipped when it is missing |
+| `--no-download` | check | never download oasdiff; use the verified cache, else skip the `openapi` layer |
 | `--force` | init | overwrite an existing config file |
 | `-h`, `--help` | both | show the help |
 | `-v`, `--version` | both | show the version |
@@ -219,7 +220,7 @@ literal ref (`--base "$PRODUCTION_TAG"`) works too.
 
 No Go toolchain is needed: the first run downloads the pinned oasdiff (see [Install](#install)). Cache
 `~/.cache/softure-compat` with `actions/cache` to skip the download, or pass `--no-download` on runners without
-internet access and provide oasdiff yourself.
+internet access: the cached oasdiff is still used, and without one provide oasdiff yourself.
 
 `--format json` gives a machine-readable report with the same content.
 

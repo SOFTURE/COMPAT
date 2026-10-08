@@ -24,7 +24,7 @@ Options:
                           (default: check.failOn in the config, then breaking)
   --allow-incomplete      check: do not fail when a layer was skipped or failed
   --require <layer,...>   check: fail unless these layers ran (not disabled, unconfigured, skipped or failed)
-  --no-download           check: never download oasdiff; skip the openapi layer when it is missing
+  --no-download           check: never download oasdiff; use the verified cache, else skip the openapi layer
   --force                 init: overwrite an existing config file
   -h, --help              show this help
   -v, --version           show the version

@@ -92,9 +92,10 @@ const OASDIFF_SOURCE_LABELS: Record<OasdiffSource, string> = {
 type FindOutcome = { status: "found"; oasdiff: Oasdiff } | { status: "missing"; reason: string };
 
 /**
- * A configured or PATH oasdiff wins; otherwise the pinned release comes from the cache or is
- * downloaded. A download that fails or does not match its checksum fails the layer, so a
- * check never passes without the API comparison; only an explicit opt-out skips it.
+ * A configured or PATH oasdiff wins; otherwise the pinned release comes from the cache, verified
+ * against its shipped SHA-256, or is downloaded. Turning downloads off means no network, not no
+ * cache. A download that fails or does not match its checksum fails the layer, so a check never
+ * passes without the API comparison; only an explicit opt-out skips it.
  */
 async function findOasdiff(context: LayerContext<OpenapiConfig>): Promise<Result<FindOutcome>> {
   const located = await locateOasdiff({
@@ -105,24 +106,24 @@ async function findOasdiff(context: LayerContext<OpenapiConfig>): Promise<Result
   if (!located.ok) return located;
   if (located.value.status === "found") return ok(located.value);
   const isDownloadAllowed = context.config.oasdiff?.download !== false && !isDownloadTurnedOff(context.env);
-  if (!isDownloadAllowed) {
-    return ok({
-      status: "missing",
-      reason: `oasdiff not found on PATH and downloading is turned off (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
-    });
-  }
-  const provided = await provideOasdiff({ env: context.env, log: context.log });
+  const provided = await provideOasdiff({ env: context.env, isDownloadAllowed, log: context.log });
   if (!provided.ok) return provided;
-  if (provided.value.status === "unsupported") {
+  const outcome = provided.value;
+  if (outcome.status === "provided") {
+    const probed = await probeOasdiff({ ...outcome.oasdiff, env: context.env });
+    if (!probed.ok) return err(probed.error.message);
+    return ok({ status: "found", oasdiff: probed.value });
+  }
+  if (outcome.status === "unsupported" && isDownloadAllowed) {
     return ok({
       status: "missing",
-      reason: `oasdiff not found on PATH and oasdiff ${PINNED_OASDIFF.version} has no release for ${provided.value.platform} (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
+      reason: `oasdiff not found on PATH and oasdiff ${PINNED_OASDIFF.version} has no release for ${outcome.platform} (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
     });
   }
-  const { path, source } = provided.value.oasdiff;
-  const probed = await probeOasdiff({ path, source, env: context.env });
-  if (!probed.ok) return err(probed.error.message);
-  return ok({ status: "found", oasdiff: probed.value });
+  return ok({
+    status: "missing",
+    reason: `oasdiff not found on PATH and downloading is turned off (set layers.openapi.oasdiff.path or ${OASDIFF_ENV_VAR}, or ${OASDIFF_INSTALL_HINT})`,
+  });
 }
 
 /**
