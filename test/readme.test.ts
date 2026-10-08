@@ -4,7 +4,10 @@ import { BEHAVIOUR_FINDING_IDS } from "../src/layers/behaviour/config.js";
 import { CONFIG_FINDING_IDS } from "../src/layers/config/classify.js";
 import { DEPENDENCY_FINDING_IDS } from "../src/layers/dependencies/config.js";
 import { ERROR_CODE_FINDING_CLASSES } from "../src/layers/error-codes/config.js";
-import { MESSAGE_CONTRACT_FINDING_IDS } from "../src/layers/message-contracts/config.js";
+import {
+  MESSAGE_CONTRACT_FINDING_IDS,
+  messageContractsConfigSchema,
+} from "../src/layers/message-contracts/config.js";
 import { OUTBOUND_FINDING_CLASSES } from "../src/layers/outbound/config.js";
 import { ENUM_CHANGE_IDS } from "../src/layers/persisted-enums/config.js";
 import { LAYERS } from "../src/layers/registry.js";
@@ -58,6 +61,20 @@ describe("README reference", () => {
   it("lists every message-contracts finding id", () => {
     for (const id of MESSAGE_CONTRACT_FINDING_IDS)
       expect(getSection("message-contracts"), id).toContain(`\`${id}\``);
+  });
+
+  it("gives a queueFrom consumer example that the schema accepts with the composed queues example", () => {
+    const blocks = [...getSection("message-contracts").matchAll(/```json\n([\s\S]*?)\n```/g)].map(
+      (match) => JSON.parse(match[1] as string) as Record<string, unknown>,
+    );
+    const queues = blocks.find((block) => JSON.stringify(block.queues ?? []).includes('"composed"'));
+    const consumers = blocks.find((block) => JSON.stringify(block.consumers ?? []).includes('"queueFrom"'));
+    const parsed = messageContractsConfigSchema.safeParse({
+      sources: [{ name: "internal", language: "csharp", files: "src/**/*.cs" }],
+      queues: queues?.queues,
+      consumers: consumers?.consumers,
+    });
+    expect(parsed.error).toBeUndefined();
   });
 
   it("lists every behaviour finding id", () => {

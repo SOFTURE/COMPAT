@@ -116,5 +116,46 @@ describe("message-contracts config", () => {
         ["consumers.1.exclude.1", 'names "missing", which is not a consumer source'],
       ]);
     });
+
+    it("accepts queueFrom with select in place of a literal queue", () => {
+      const parsed = messageContractsConfigSchema.safeParse({
+        sources: [source],
+        queues: [endpoint, group, composed({})],
+        consumers: [
+          consumer({ queue: undefined, queueFrom: "endpoint" }),
+          consumer({ name: "broadcast", queue: undefined, queueFrom: "groups", select: "Broadcast" }),
+        ],
+      });
+      expect(parsed.error).toBeUndefined();
+    });
+
+    it("requires exactly one of queue and queueFrom, select only with queueFrom, and an existing queue source", () => {
+      const parsed = messageContractsConfigSchema.safeParse({
+        sources: [source],
+        queues: [endpoint],
+        consumers: [
+          consumer({ name: "both", queueFrom: "endpoint" }),
+          consumer({ name: "neither", queue: undefined }),
+          consumer({ name: "literal-select", select: "Broadcast" }),
+          consumer({ name: "missing", queue: undefined, queueFrom: "groups" }),
+        ],
+      });
+      expect(parsed.error?.issues.map((issue) => [issue.path.join("."), issue.message])).toEqual([
+        ["consumers.0.queue", "set exactly one of queue and queueFrom"],
+        ["consumers.1.queue", "set exactly one of queue and queueFrom"],
+        ["consumers.2.select", "needs queueFrom"],
+        ["consumers.3.queueFrom", 'names "groups", which is not a queue source'],
+      ]);
+    });
+
+    it("rejects queueFrom when no queue sources are declared", () => {
+      const parsed = messageContractsConfigSchema.safeParse({
+        sources: [source],
+        consumers: [consumer({ queue: undefined, queueFrom: "endpoint" })],
+      });
+      expect(parsed.error?.issues.map((issue) => [issue.path.join("."), issue.message])).toEqual([
+        ["consumers.0.queueFrom", 'names "endpoint", which is not a queue source'],
+      ]);
+    });
   });
 });

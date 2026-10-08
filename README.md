@@ -1027,7 +1027,7 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 | `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
 | `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments?, report? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none`; `report: false` for a source that only feeds a `composed` one |
 | `queues[]` | `{ kind: "composed", name, template, parts }`: names built at runtime, see below |
-| `consumers[]` | `{ kind: "regex", name, files, pattern, queue, exclude?, flags?, comments? }`: which queue consumes which message, see below |
+| `consumers[]` | `{ kind: "regex", name, files, pattern, queue \| queueFrom, select?, exclude?, flags?, comments? }`: which queue consumes which message, see below |
 | `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
 
 Some brokers build queue names at runtime, for example `SOFTURE.MessageBroker.Rabbit` 1.x names a consumer group
@@ -1091,6 +1091,28 @@ does not in the revision:
 
 A consumer source fails the layer, without consumer findings, when it matches no file or captures no consumer in the
 revision.
+
+A literal `queue` is the same at both refs, so a release that renames the receive endpoint (`Rabbit:Name`) moves no
+consumer. `queueFrom` instead takes the queue from a source of `queues`, resolved at each ref; set exactly one of
+`queue` and `queueFrom`:
+
+```json
+{
+  "consumers": [
+    { "kind": "regex", "name": "broadcast-group", "files": "src/PETSEO.Worker.Sync/Consumers/**/TermsChange/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queueFrom": "group-queues", "select": "Broadcast" },
+    { "kind": "regex", "name": "default-endpoint", "files": "src/PETSEO.Worker.Sync/Consumers/**/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queueFrom": "rabbit-endpoint", "exclude": ["broadcast-group"] }
+  ]
+}
+```
+
+`queueFrom` names a `regex` or `composed` queue source (`report: false` ones too). Without `select` the source must
+give exactly one name at the ref. `select` keeps the names of which a part value equals it exactly: for a `composed`
+source the value of any `{part}` (here the `group` part `Broadcast` picks `PETSEO.Worker.Sync.Broadcast`), for a
+`regex` source the whole name. When the source, after `select`, gives no name or several at a ref, or the source itself
+failed, the layer fails without consumer findings and names the consumer source, the queue source and the ref. With
+`queueFrom`, an endpoint rename reports every consumer of an existing message as `message-consumer-moved`.
 
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire
