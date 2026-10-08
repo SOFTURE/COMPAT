@@ -236,6 +236,12 @@ block. Findings of several layers about one thing (a seed row writing a new enum
 entry with each layer's view under it, and evidence seen at several refs is one link with the list of refs. The JSON
 report keeps every finding as it is.
 
+The summary table has one row per layer with its verdict (its most severe finding that is not accepted), the count of
+findings per class and the count of accepted ones, so a layer whose findings were all accepted reads `no-findings` with
+its accepted count next to it. A layer with no findings of its own that changed the class of other layers' findings
+(`client-usage`) reads `reclassified 6`. The JSON report gives each layer `acceptedCount` and `reclassifiedCount`;
+its `verdict` stays the gate's view. Accepted findings never fail the gate.
+
 ## Configuration
 
 `check` and `init` use `compat.config.json` in the `--repo` directory (default: the current directory), or the

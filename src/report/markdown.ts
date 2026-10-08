@@ -5,7 +5,7 @@ import {
   type LayerResult,
   type Side,
 } from "../model/finding.js";
-import { getLayerVerdict, type InactiveLayer } from "../model/gate.js";
+import { countAccepted, countReclassifiedBy, getLayerVerdict, type InactiveLayer } from "../model/gate.js";
 import type { RefInfo, Report } from "./report.js";
 
 const CLASSES_BY_SEVERITY = [...FINDING_CLASSES].reverse();
@@ -141,11 +141,23 @@ function formatCollapsedSection(title: string, findings: Finding[]): string[] {
   ];
 }
 
+/** The class columns from the most severe, then the accepted column. */
 function countByClass(result: LayerResult): string[] {
-  if (result.status === "skipped") return CLASSES_BY_SEVERITY.map(() => "-");
-  return CLASSES_BY_SEVERITY.map((findingClass) =>
+  if (result.status === "skipped") return [...CLASSES_BY_SEVERITY.map(() => "-"), "-"];
+  const counts = CLASSES_BY_SEVERITY.map((findingClass) =>
     String(result.findings.filter((finding) => !finding.accepted && finding.class === findingClass).length),
   );
+  return [...counts, String(countAccepted(result))];
+}
+
+/**
+ * The verdict, except that a layer with no findings of its own that changed the class of other layers' findings
+ * (`client-usage`) reads `reclassified 6`, so its row does not suggest it saw nothing.
+ */
+function formatVerdict(result: LayerResult, layers: readonly LayerResult[]): string {
+  const verdict = getLayerVerdict(result);
+  const reclassified = countReclassifiedBy(layers, result.layer);
+  return verdict === "no-findings" && reclassified > 0 ? `reclassified ${reclassified}` : verdict;
 }
 
 function formatRequired(required: string[]): string {
@@ -186,19 +198,19 @@ export function renderMarkdown(report: Report): string {
   }
   lines.push(
     "",
-    `| Layer | Verdict | ${CLASSES_BY_SEVERITY.join(" | ")} |`,
-    `| --- | --- |${" --- |".repeat(4)}`,
+    `| Layer | Verdict | ${CLASSES_BY_SEVERITY.join(" | ")} | accepted |`,
+    `| --- | --- |${" --- |".repeat(5)}`,
   );
   for (const result of report.layers) {
     lines.push(
-      `| ${escapeMarkdown(result.layer)} | ${getLayerVerdict(result)} | ${countByClass(result).join(" | ")} |`,
+      `| ${escapeMarkdown(result.layer)} | ${formatVerdict(result, report.layers)} | ${countByClass(result).join(" | ")} |`,
     );
   }
   for (const layer of report.inactive) {
-    lines.push(`| ${escapeMarkdown(layer.layer)} | ${formatInactiveStatus(layer)} | - | - | - | - |`);
+    lines.push(`| ${escapeMarkdown(layer.layer)} | ${formatInactiveStatus(layer)} | - | - | - | - | - |`);
   }
   if (report.layers.length === 0 && report.inactive.length === 0)
-    lines.push("| (none) | - | - | - | - | - |");
+    lines.push("| (none) | - | - | - | - | - | - |");
 
   const findings = report.layers.flatMap((result) => (result.status === "skipped" ? [] : result.findings));
   for (const findingClass of CLASSES_BY_SEVERITY) {
