@@ -174,10 +174,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0.5.0   # base, revision and fail-on come from "check" in compat.config.json
+      - uses: SOFTURE/COMPAT@v0.6.0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
-Use the tag of a release (`@v0.5.0`); every release has one. The action runs the CLI version released
+Use the tag of a release (`@v0.6.0`); every release has one. The action runs the CLI version released
 from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
@@ -1007,7 +1007,7 @@ its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-s
 opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
 [`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked.
 
-Known gaps in 0.5.0:
+Known gaps in 0.6.0:
 
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions
