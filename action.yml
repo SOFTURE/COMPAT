@@ -6,7 +6,7 @@ branding:
   color: blue
 
 # A composite action around the published CLI. It installs `@softure-ai/compat` at the version in this repository's
-# package.json, so `uses: SOFTURE/COMPAT@v0.7.0` always runs the CLI released from that commit.
+# package.json, so `uses: SOFTURE/COMPAT@v0.8.0` always runs the CLI released from that commit.
 inputs:
   base:
     description: Git ref or resolver running in production (`--base`), e.g. `github-deployment:production` or `latest-tag:v*`. Empty uses `check.base` from the config.
