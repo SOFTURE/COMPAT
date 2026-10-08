@@ -37,7 +37,7 @@ export type ClientRefUsage = {
 
 export type RefineSummary = { revisions: FindingRevision[]; toSafe: number; withEvidence: number };
 
-type Call = { usage: ClientRefUsage; operations: ClientOperation[] };
+export type Call = { usage: ClientRefUsage; operations: ClientOperation[] };
 
 /** Whether the ref's own code calls the operation; without sources every client operation counts. */
 export function isCalled(usage: ClientRefUsage, operation: ClientOperation): boolean {
@@ -45,7 +45,7 @@ export function isCalled(usage: ClientRefUsage, operation: ClientOperation): boo
   return usage.sourceIdentifiers.has(operation.functionName);
 }
 
-function findCalls(usage: ClientRefUsage, method: string, path: string): ClientOperation[] {
+export function findCalls(usage: ClientRefUsage, method: string, path: string): ClientOperation[] {
   return usage.model.operations.filter(
     (operation) =>
       (operation.method === "*" || operation.method === method) &&
@@ -86,14 +86,14 @@ function toMemberPath(propertyPath: string[]): string[] | undefined {
 }
 
 /** Where the client proves it always sends the property: the type declaration, or the call sites' literals. */
-type SentProof = { by: "type"; member: TypeMember } | { by: "call-sites"; sites: SentSite[] };
+export type SentProof = { by: "type"; member: TypeMember } | { by: "call-sites"; sites: SentSite[] };
 
 /**
  * How the call always sends the property under `rule`. The generated type mirrors the base contract,
  * which allowed the omission, so when it does not prove it the call sites' literals may. The error is
  * where the call-site reader stopped, `undefined` when it did not run.
  */
-function findAlwaysSent(
+export function findAlwaysSent(
   usage: ClientRefUsage,
   operation: ClientOperation,
   propertyPath: string[],
@@ -142,7 +142,7 @@ function toProofEvidence(usage: ClientRefUsage, proof: SentProof): Evidence[] {
   return proof.sites.map((site) => ({ ...toEvidence(usage, site.line), path: site.path }));
 }
 
-function capEvidence(finding: Finding, added: Evidence[]): Evidence[] {
+export function capEvidence(finding: Finding, added: Evidence[]): Evidence[] {
   return [...finding.evidence, ...added.slice(0, MAX_EVIDENCE)];
 }
 
@@ -154,7 +154,7 @@ function describeStaleBundle(calls: readonly Call[]): string {
 }
 
 /** The first place the call-site reader stopped for a ref that may omit the property. */
-function findFirstStop(
+export function findFirstStop(
   omitting: readonly { call: Call; proofs: Result<SentProof, SentStop | undefined>[] }[],
 ): { usage: ClientRefUsage; stop: SentStop } | undefined {
   for (const { call, proofs } of omitting) {
