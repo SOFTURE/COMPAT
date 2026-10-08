@@ -994,7 +994,7 @@ enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`
 
 | Finding id | Class |
 | --- | --- |
-| `message-added` | `safe` |
+| `message-added` | `safe`; `needs-action` when one project publishes it and another consumes it (see below) |
 | `message-removed` | `needs-action`: drain its queues before the deploy |
 | `message-renamed` | `breaking`: a new full name or namespace changes the message URN; paired by simple name, else by an identical wire shape |
 | `message-entity-name-changed` | `breaking`: `[EntityName]` changed, the builds publish to different exchanges |
@@ -1005,9 +1005,17 @@ enums follow the [`persisted-enums`](#persisted-enums) rules under `enumStorage`
 | `message-property-type-changed` | `breaking` (`System.` qualifiers, `global::`, `Nullable<T>` and type aliases are normalized first) |
 | `message-property-nullability-changed` | `rollback-risk`: only `?` changed; the message says what a null does to a value type (fails to deserialize or reads as a default), to a reference type (deserializes, then throws where code dereferences it) or, for a type declared outside the sources, both |
 | `message-property-required` | `breaking`: an existing property became `required` or `[JsonRequired]` |
-| `queue-added` | `safe` |
+| `queue-added` | `rollback-risk`: after a rollback nothing consumes it; drain or delete it |
 | `queue-removed` | `needs-action`: drain it before the deploy |
 | `enum-member-added`, `enum-member-removed`, `enum-member-renamed`, `enum-member-renumbered`, `enum-member-unresolved`, `enum-added`, `enum-removed` | as in `persisted-enums` |
+
+A new message is checked for deploy order in the revision's C# code. A project (the nearest folder with a `.csproj`)
+publishes it through `Publish<T>`, `Send<T>`, `Publish(new T ...)`, `Send(new T ...)` or `IRequestClient<T>`, and
+consumes it through `IConsumer<T>`; build output and test projects (`*.Tests`) are skipped. When a project other than
+the publisher consumes it, the finding is `needs-action` and names both with their first call site: deploy the
+consumer (or declare its topology) first, because a publish to an exchange with no bound queue is dropped. A message
+published through a variable (`Publish(message)`) is not seen, and two projects that deploy together still count as
+apart; accept the finding then.
 
 The layer fails, keeping its findings, when a source or queue source matches no file at either ref or loses all its
 files in the revision, when a source declares no public type or a queue source finds no queue, and when a

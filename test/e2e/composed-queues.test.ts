@@ -114,7 +114,7 @@ describe("message-contracts composed queues (issue #47)", () => {
     const { layer } = await runCheck("2.3.5", "2.3.6");
     expect(layer.status).toBe("ran");
     expect(summarize(layer.findings)).toEqual([
-      ["queue-added", "safe", "group-queues", "PETSEO.Worker.Sync.Digest"],
+      ["queue-added", "rollback-risk", "group-queues", "PETSEO.Worker.Sync.Digest"],
     ]);
     expect(layer.findings[0].evidence).toEqual([
       expect.objectContaining({ side: "revision", ref: "2.3.6", path: CONSUMER_GROUPS, line: 7 }),
@@ -132,8 +132,8 @@ describe("message-contracts composed queues (issue #47)", () => {
     const { layer } = await runCheck("2.2.4", "2.3.5");
     expect(summarize(layer.findings)).toEqual([
       ["queue-removed", "needs-action", "group-queues", "PETSEO.Worker.Sync-Notifications"],
-      ["queue-added", "safe", "group-queues", "PETSEO.Worker.Sync.Notifications"],
-      ["queue-added", "safe", "group-queues", "PETSEO.Worker.Sync.Broadcast"],
+      ["queue-added", "rollback-risk", "group-queues", "PETSEO.Worker.Sync.Notifications"],
+      ["queue-added", "rollback-risk", "group-queues", "PETSEO.Worker.Sync.Broadcast"],
     ]);
     expect(layer.findings[0].evidence).toEqual([
       expect.objectContaining({ side: "base", ref: "2.2.4", path: CONSUMER_GROUPS, line: 5 }),
