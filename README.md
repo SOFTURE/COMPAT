@@ -431,7 +431,8 @@ What changes, per `openapi` finding of the client's API that is not accepted and
   local `const`, or through one parameter of the enclosing function: its callers, or `mutate`/`mutateAsync` of the
   hook whose `mutationFn` it is) that sets the property to a value that cannot be `undefined` or `null` (a literal,
   a conditional whose branches all qualify, `a ?? b` with `b` qualifying, or a name or `a.b` member whose declared
-  type has neither; a type `z.infer`/`z.output`/`z.input<typeof s>` of a local `s = z.object({ ... })` counts, its
+  type has neither; a type `z.infer`/`z.output`/`z.input<typeof s>` of a local `s = z.object({ ... })` counts, also
+  through `s = base.superRefine(...)` (or `refine`, `strict`, `strip`, `passthrough`, `describe`) of such a schema, its
   members read from the schema: no `.optional()`/`.nullable()`/`.nullish()`, and for `z.input` no `.default()`).
   Then the finding is `safe`, reason `always sent non-null by the call sites of ...`, with the
   literals as evidence. A spread, an argument or value the reader cannot follow, or the client function passed

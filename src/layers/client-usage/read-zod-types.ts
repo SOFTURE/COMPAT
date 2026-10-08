@@ -34,24 +34,30 @@ const NON_NULLISH_BASES = new Set([
 /** Member calls whose result the reader does not follow. */
 const UNFOLLOWED_CALLS = new Set(["transform", "pipe", "catch", "or", "and", "promise"]);
 
+/** A schema `const`: its own `z.object` members, or another schema `const` it only refines. */
+type SchemaDefinition = { kind: "object"; members: SchemaMember[] } | { kind: "derived"; from: string };
+
 /**
  * `type T = z.infer<typeof s>` (or `z.output`, `z.input`) where `s` is a `const` of the sources
- * initialised with `z.object({ ... })`, optionally followed by object-preserving calls: the members of
- * `T` by type name. A member whose schema the reader cannot follow is left out, so it is never proven
- * non-null; a schema with a spread, or declared more than once, gives no type at all.
+ * initialised with `z.object({ ... })`, or with another such `const`, optionally followed by
+ * object-preserving calls: the members of `T` by type name. A member whose schema the reader cannot
+ * follow is left out, so it is never proven non-null; a schema with a spread, or declared more than
+ * once, gives no type at all.
  */
 export function readZodTypes(scans: readonly Scan[]): Map<string, Map<string, TypeMember>> {
-  const schemas = new Map<string, SchemaMember[] | undefined>();
+  const definitions = new Map<string, SchemaDefinition | undefined>();
   for (const s of scans) {
     for (let index = 0; index < s.tokens.length - 3; index++) {
       if (!isIdentifier(s.tokens[index], "const") || !isIdentifier(s.tokens[index + 1])) continue;
       if (!isPunctuation(s.tokens[index + 2], "=")) continue;
       const name = (s.tokens[index + 1] as Token).text;
-      const members = readObjectSchema(s, index + 3);
-      if (members === undefined) continue;
-      schemas.set(name, schemas.has(name) ? undefined : members);
+      const definition = readSchemaDefinition(s, index + 3);
+      if (definition === undefined) continue;
+      definitions.set(name, definitions.has(name) ? undefined : definition);
     }
   }
+  const schemas = new Map<string, SchemaMember[] | undefined>();
+  for (const name of definitions.keys()) schemas.set(name, resolveSchema(definitions, name));
   const types = new Map<string, Map<string, TypeMember>>();
   for (const s of scans) {
     for (let index = 0; index < s.tokens.length; index++) {
@@ -85,6 +91,44 @@ function readAlias(s: Scan, index: number): { name: string; schema: string; side
   const side = SIDES[t[index + 5]?.text ?? ""];
   if (!isAlias || side === undefined) return undefined;
   return { name: (t[index + 1] as Token).text, schema: (t[index + 8] as Token).text, side };
+}
+
+/** The members of the schema `name`, following derived schemas once each; `undefined` if they end elsewhere. */
+function resolveSchema(
+  definitions: ReadonlyMap<string, SchemaDefinition | undefined>,
+  name: string,
+): SchemaMember[] | undefined {
+  const visited = new Set<string>();
+  let definition = definitions.get(name);
+  while (definition?.kind === "derived" && !visited.has(definition.from)) {
+    visited.add(definition.from);
+    definition = definitions.get(definition.from);
+  }
+  return definition?.kind === "object" ? definition.members : undefined;
+}
+
+function readSchemaDefinition(s: Scan, start: number): SchemaDefinition | undefined {
+  const members = readObjectSchema(s, start);
+  if (members !== undefined) return { kind: "object", members };
+  const from = readDerivedSchema(s, start);
+  return from === undefined ? undefined : { kind: "derived", from };
+}
+
+/** `<identifier>` plus object-preserving calls starting at `start`, ending the initialiser: the identifier. */
+function readDerivedSchema(s: Scan, start: number): string | undefined {
+  const t = s.tokens;
+  const from = t[start];
+  if (!isIdentifier(from) || isIdentifier(from, "z")) return undefined;
+  const chain = readCalls(s, start + 1);
+  if (chain === undefined || chain.calls.some((call) => !OBJECT_PRESERVING.has(call.name))) return undefined;
+  const next = t[chain.end];
+  // Anything else after the chain (a call, an index, an operator, `as`) changes what the value is.
+  const isEnd =
+    next === undefined ||
+    isPunctuation(next, ";") ||
+    isPunctuation(next, "}") ||
+    (next.kind === "identifier" && next.text !== "as" && next.text !== "satisfies");
+  return isEnd ? (from as Token).text : undefined;
 }
 
 /** The members of `z.object({ ... })` plus object-preserving calls starting at `start`; `undefined` otherwise. */
