@@ -86,4 +86,35 @@ describe("message-contracts config", () => {
     };
     expect(messageContractsConfigSchema.safeParse(config).success).toBe(true);
   });
+
+  describe("consumers", () => {
+    const consumer = (extra: object) => ({
+      kind: "regex",
+      name: "default",
+      files: "Consumers/**/*.cs",
+      pattern: "IConsumer<(?<message>\\w+)>",
+      queue: "PETSEO.Worker.Sync",
+      ...extra,
+    });
+
+    it("applies defaults", () => {
+      const parsed = messageContractsConfigSchema.parse({ sources: [source], consumers: [consumer({})] });
+      expect(parsed.consumers?.[0]).toEqual({ ...consumer({}), flags: "", comments: "slash" });
+    });
+
+    it("rejects a pattern without a message group and an exclude naming no other source", () => {
+      const parsed = messageContractsConfigSchema.safeParse({
+        sources: [source],
+        consumers: [
+          consumer({ pattern: "IConsumer<(\\w+)>" }),
+          consumer({ name: "group", exclude: ["group", "missing"] }),
+        ],
+      });
+      expect(parsed.error?.issues.map((issue) => [issue.path.join("."), issue.message])).toEqual([
+        ["consumers.0.pattern", "must contain a named group (?<message>...)"],
+        ["consumers.1.exclude.0", "must not name the source itself"],
+        ["consumers.1.exclude.1", 'names "missing", which is not a consumer source'],
+      ]);
+    });
+  });
 });

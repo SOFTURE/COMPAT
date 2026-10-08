@@ -50,7 +50,8 @@ async function check(layer: unknown, options: { revision?: string; env?: NodeJS.
   writeRepoFile(repo, "compat.json", JSON.stringify({ layers: { behaviour: layer } }));
   const run = createIo(repo.dir);
   const args = ["check", "--base", "2.2.4", "--revision", options.revision ?? "2.3.4"];
-  const exitCode = await main([...args, "--config", "compat.json", "--format", "json"], {
+  const logDir = join(scratch, "logs");
+  const exitCode = await main([...args, "--config", "compat.json", "--format", "json", "--log-dir", logDir], {
     ...run.io,
     env: { ...process.env, ...options.env },
   });
@@ -169,8 +170,69 @@ describe("behaviour layer", () => {
     });
     expect(exitCode).toBe(1);
     expect(layer.status).toBe("failed");
+    const log = join(scratch, "logs", "behaviour", "check-test-base.log");
     expect(layer.error).toBe(
-      "test command at base (2.2.4) exited 3 and wrote no file matching results/*.xml; output: cannot build",
+      `test command at base (2.2.4) exited 3 and wrote no file matching results/*.xml; full output in ${log}`,
     );
+    expect(layer.outputs).toEqual([
+      {
+        command: "test command at base (2.2.4) exited 3 and wrote no file matching results/*.xml",
+        tail: "cannot build",
+        log,
+      },
+    ]);
+    expect(readFileSync(log, "utf8")).toBe(
+      "$ echo cannot build >&2; exit 3\n\n# stdout\n\n\n# stderr\ncannot build\n",
+    );
+  });
+
+  it("keeps every line of a failed start in its log and names it in the baseline failure", async () => {
+    const lines = Array.from({ length: 60 }, (_, index) => `step ${index + 1}`);
+    const { layer } = await check({
+      start: { run: `node -e "for (let i = 1; i <= 60; i++) console.error('step ' + i); process.exit(1)"` },
+      test: TEST,
+      baseline: true,
+    });
+    const log = join(scratch, "logs", "behaviour", "baseline-start-base.log");
+    expect(layer.status).toBe("failed");
+    expect(layer.error).toBe(`baseline: start command at base (2.2.4) exited 1; full output in ${log}`);
+    expect(layer.outputs).toEqual([
+      {
+        command: "baseline: start command at base (2.2.4) exited 1",
+        tail: lines.slice(-40).join("\n"),
+        log,
+      },
+    ]);
+    expect(readFileSync(log, "utf8")).toContain(`# stderr\n${lines.join("\n")}\n`);
+    expect(layer.notes).toContain(`command logs in ${join(scratch, "logs", "behaviour")}`);
+  });
+
+  it("runs collect after a failed test run and before stop", async () => {
+    const order = join(scratch, "order");
+    const append = (word: string) =>
+      `node -e "require('fs').appendFileSync(process.env.ORDER_FILE, '${word} ' + process.env.COMPAT_SIDE + '\\n'); console.log('${word} output')"`;
+    const { layer } = await check(
+      { start: START, test: TEST, collect: { run: append("collect") }, stop: { run: append("stop") } },
+      { env: { ORDER_FILE: order } },
+    );
+    expect(layer.status).toBe("ran");
+    expect(readFileSync(order, "utf8")).toBe("collect revision\nstop revision\n");
+    const log = join(scratch, "logs", "behaviour", "check-collect-revision.log");
+    expect(layer.notes).toContain(`collect command output in ${log}`);
+    expect(readFileSync(log, "utf8")).toContain("# stdout\ncollect output\n");
+  });
+
+  it("does not run collect when every test passes", async () => {
+    const order = join(scratch, "order");
+    const { layer } = await check(
+      {
+        start: START,
+        test: TEST,
+        collect: { run: `node -e "require('fs').writeFileSync(process.env.ORDER_FILE, 'collect')"` },
+      },
+      { revision: "2.3.5", env: { ORDER_FILE: order } },
+    );
+    expect(layer.status).toBe("ran");
+    expect(existsSync(order)).toBe(false);
   });
 });

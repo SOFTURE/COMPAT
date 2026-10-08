@@ -51,11 +51,24 @@ export type Finding = {
   enumValues?: string[];
 };
 
+/** The end of what a failed command printed, with its newlines, and where its full output was written. */
+export type CommandOutput = { command: string; tail: string; log?: string };
+
 export type LayerResult =
   | { layer: string; status: "ran"; findings: Finding[]; notes: string[] }
   | { layer: string; status: "skipped"; reason: string }
-  /** A layer that could not finish; the findings it made before failing still count for the gate. */
-  | { layer: string; status: "failed"; error: string; findings: Finding[]; notes: string[] };
+  /**
+   * A layer that could not finish; the findings it made before failing still count for the gate. `outputs` holds
+   * the output of the commands that failed, for the report to show as it was printed.
+   */
+  | {
+      layer: string;
+      status: "failed";
+      error: string;
+      findings: Finding[];
+      notes: string[];
+      outputs?: CommandOutput[];
+    };
 
 export function getClassRank(findingClass: FindingClass): number {
   return FINDING_CLASSES.indexOf(findingClass);

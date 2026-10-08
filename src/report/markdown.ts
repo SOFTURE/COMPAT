@@ -1,11 +1,12 @@
 import {
+  type CommandOutput,
   type Evidence,
   FINDING_CLASSES,
   type Finding,
   type LayerResult,
   type Side,
 } from "../model/finding.js";
-import { getLayerVerdict, type InactiveLayer } from "../model/gate.js";
+import { countAccepted, countReclassifiedBy, getLayerVerdict, type InactiveLayer } from "../model/gate.js";
 import type { RefInfo, Report } from "./report.js";
 
 const CLASSES_BY_SEVERITY = [...FINDING_CLASSES].reverse();
@@ -141,11 +142,23 @@ function formatCollapsedSection(title: string, findings: Finding[]): string[] {
   ];
 }
 
+/** The class columns from the most severe, then the accepted column. */
 function countByClass(result: LayerResult): string[] {
-  if (result.status === "skipped") return CLASSES_BY_SEVERITY.map(() => "-");
-  return CLASSES_BY_SEVERITY.map((findingClass) =>
+  if (result.status === "skipped") return [...CLASSES_BY_SEVERITY.map(() => "-"), "-"];
+  const counts = CLASSES_BY_SEVERITY.map((findingClass) =>
     String(result.findings.filter((finding) => !finding.accepted && finding.class === findingClass).length),
   );
+  return [...counts, String(countAccepted(result))];
+}
+
+/**
+ * The verdict, except that a layer with no findings of its own that changed the class of other layers' findings
+ * (`client-usage`) reads `reclassified 6`, so its row does not suggest it saw nothing.
+ */
+function formatVerdict(result: LayerResult, layers: readonly LayerResult[]): string {
+  const verdict = getLayerVerdict(result);
+  const reclassified = countReclassifiedBy(layers, result.layer);
+  return verdict === "no-findings" && reclassified > 0 ? `reclassified ${reclassified}` : verdict;
 }
 
 function formatRequired(required: string[]): string {
@@ -162,6 +175,18 @@ function formatRefInfo(info: RefInfo, side: Side): string {
   const source = info.source === "config" ? "(config)" : `(--${side})`;
   if (info.resolver === undefined) return `${commit} ${source}`;
   return `${escapeMarkdown(info.resolver)} → ${escapeMarkdown(info.ref)} ${commit} ${source}`;
+}
+
+/** The last lines a failed command printed, as a code block inside the list item, with its newlines kept. */
+function formatCommandOutput(output: CommandOutput): string[] {
+  const log = output.log === undefined ? "" : ` (full output: \`${output.log.replace(/`/g, "'")}\`)`;
+  const heading = `  Last lines of ${escapeMarkdown(output.command)}${log}:`;
+  if (output.tail === "") return ["", heading.replace(/:$/, ": nothing printed")];
+  // A fence longer than any backtick run in the output, so the output cannot close it.
+  const longest = Math.max(0, ...(output.tail.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  const body = output.tail.split("\n").map((line) => `  ${line}`.trimEnd());
+  return ["", heading, "", `  ${fence}text`, ...body, `  ${fence}`];
 }
 
 function formatInactiveStatus(layer: InactiveLayer): string {
@@ -186,19 +211,19 @@ export function renderMarkdown(report: Report): string {
   }
   lines.push(
     "",
-    `| Layer | Verdict | ${CLASSES_BY_SEVERITY.join(" | ")} |`,
-    `| --- | --- |${" --- |".repeat(4)}`,
+    `| Layer | Verdict | ${CLASSES_BY_SEVERITY.join(" | ")} | accepted |`,
+    `| --- | --- |${" --- |".repeat(5)}`,
   );
   for (const result of report.layers) {
     lines.push(
-      `| ${escapeMarkdown(result.layer)} | ${getLayerVerdict(result)} | ${countByClass(result).join(" | ")} |`,
+      `| ${escapeMarkdown(result.layer)} | ${formatVerdict(result, report.layers)} | ${countByClass(result).join(" | ")} |`,
     );
   }
   for (const layer of report.inactive) {
-    lines.push(`| ${escapeMarkdown(layer.layer)} | ${formatInactiveStatus(layer)} | - | - | - | - |`);
+    lines.push(`| ${escapeMarkdown(layer.layer)} | ${formatInactiveStatus(layer)} | - | - | - | - | - |`);
   }
   if (report.layers.length === 0 && report.inactive.length === 0)
-    lines.push("| (none) | - | - | - | - | - |");
+    lines.push("| (none) | - | - | - | - | - | - |");
 
   const findings = report.layers.flatMap((result) => (result.status === "skipped" ? [] : result.findings));
   for (const findingClass of CLASSES_BY_SEVERITY) {
@@ -218,6 +243,7 @@ export function renderMarkdown(report: Report): string {
     for (const result of incomplete) {
       const why = result.status === "skipped" ? result.reason : result.error;
       lines.push(`- **${escapeMarkdown(result.layer)}** ${result.status}: ${escapeMarkdown(why)}`);
+      if (result.status === "failed") lines.push(...(result.outputs ?? []).flatMap(formatCommandOutput));
     }
   }
   const notes = report.layers.flatMap((result) =>

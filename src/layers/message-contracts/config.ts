@@ -17,6 +17,8 @@ export const MESSAGE_CHANGE_IDS = [
   "message-property-required",
   "queue-added",
   "queue-removed",
+  "message-consumer-moved",
+  "message-consumer-removed",
 ] as const;
 
 export const MESSAGE_CONTRACT_FINDING_IDS = [...MESSAGE_CHANGE_IDS, ...ENUM_CHANGE_IDS] as const;
@@ -141,6 +143,73 @@ export const queueSourceSchema = z.discriminatedUnion("kind", [
 
 export type QueueSource = z.infer<typeof queueSourceSchema>;
 
+/** Compiles a consumer pattern, or returns why it cannot be used. */
+export function compileConsumerPattern(
+  pattern: string,
+  flags: string,
+): { regex: RegExp } | { error: string } {
+  let regex: RegExp;
+  try {
+    // `d` gives match indices, so evidence points at the line of the message name.
+    regex = new RegExp(pattern, `${flags}dg`);
+  } catch (error) {
+    return { error: `is not a valid regular expression: ${(error as Error).message}` };
+  }
+  const probe = new RegExp(`(?:${pattern})|`, flags).exec("");
+  if (!Object.hasOwn(probe?.groups ?? {}, "message"))
+    return { error: "must contain a named group (?<message>...)" };
+  return { regex };
+}
+
+/** Which messages one queue consumes: the files of its consumers and a pattern that captures each message type. */
+export const consumerSourceSchema = z
+  .strictObject({
+    kind: z.literal("regex"),
+    name: sourceName,
+    files: globs,
+    /** A pattern with a named group `message` for the consumed type, for example `IConsumer<(?<message>\w+)>`. */
+    pattern: z.string().min(1),
+    flags: z
+      .string()
+      .regex(/^[imsu]*$/, "use only the flags i, m, s and u")
+      .refine((flags) => new Set(flags).size === flags.length, "must not repeat a flag")
+      .default(""),
+    comments: z.enum(COMMENT_STYLES).default("slash"),
+    /** The queue (receive endpoint) the consumers in these files read from. */
+    queue: z.string().min(1),
+    /** Consumer sources whose files this one skips, so a catch-all glob leaves a group's folder to its own source. */
+    exclude: z.array(sourceName).optional(),
+  })
+  .superRefine((source, context) => {
+    if (!/^[imsu]*$/.test(source.flags) || new Set(source.flags).size !== source.flags.length) return;
+    const compiled = compileConsumerPattern(source.pattern, source.flags);
+    if ("error" in compiled) context.addIssue({ code: "custom", path: ["pattern"], message: compiled.error });
+  });
+
+export type ConsumerSource = z.infer<typeof consumerSourceSchema>;
+
+/** Every `exclude` entry names another consumer source of the same list. */
+function checkConsumerExcludes(consumers: ConsumerSource[], context: z.RefinementCtx): void {
+  const names = new Set(consumers.map((consumer) => consumer.name));
+  for (const [position, consumer] of consumers.entries()) {
+    for (const [index, excluded] of (consumer.exclude ?? []).entries()) {
+      if (excluded === consumer.name) {
+        context.addIssue({
+          code: "custom",
+          path: [position, "exclude", index],
+          message: "must not name the source itself",
+        });
+      } else if (!names.has(excluded)) {
+        context.addIssue({
+          code: "custom",
+          path: [position, "exclude", index],
+          message: `names "${excluded}", which is not a consumer source`,
+        });
+      }
+    }
+  }
+}
+
 export const acceptEntrySchema = z.strictObject({
   id: z.enum(MESSAGE_CONTRACT_FINDING_IDS),
   /** The finding subject exactly as reported, for example `Ns.OrderPlaced.Total` or a queue name. */
@@ -186,6 +255,11 @@ export const messageContractsConfigSchema = z.strictObject({
     .array(queueSourceSchema)
     .refine(hasUniqueNames, "queue source names must be unique")
     .superRefine(checkComposedParts)
+    .optional(),
+  consumers: z
+    .array(consumerSourceSchema)
+    .refine(hasUniqueNames, "consumer source names must be unique")
+    .superRefine(checkConsumerExcludes)
     .optional(),
   accept: z.array(acceptEntrySchema).optional(),
 });

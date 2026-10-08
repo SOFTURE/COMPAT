@@ -26,6 +26,22 @@ export function getLayerVerdict(result: LayerResult): LayerVerdict {
   return highest ?? "no-findings";
 }
 
+/** Findings of `result` that the config accepted: the gate ignores them, the report still counts them. */
+export function countAccepted(result: LayerResult): number {
+  if (result.status === "skipped") return 0;
+  return result.findings.filter((finding) => finding.accepted).length;
+}
+
+/** Findings of any layer in `results` whose class the layer `layer` changed, as `client-usage` does for `openapi`. */
+export function countReclassifiedBy(results: readonly LayerResult[], layer: string): number {
+  let count = 0;
+  for (const result of results) {
+    if (result.status === "skipped") continue;
+    count += result.findings.filter((finding) => finding.reclassified?.by === layer).length;
+  }
+  return count;
+}
+
 export function evaluateGate(
   results: LayerResult[],
   options: GateOptions,

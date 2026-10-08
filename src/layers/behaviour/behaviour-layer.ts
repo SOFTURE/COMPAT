@@ -1,5 +1,6 @@
+import { join } from "node:path";
 import type { RefTree } from "../../git/ref-tree.js";
-import type { Finding, LayerResult, Side } from "../../model/finding.js";
+import type { CommandOutput, Finding, LayerResult, Side } from "../../model/finding.js";
 import { defineLayer } from "../layer.js";
 import {
   type AcceptEntry,
@@ -7,7 +8,13 @@ import {
   behaviourConfigSchema,
   matchesTestPattern,
 } from "./config.js";
-import { type MaterializedTree, runStackCycle, type TestSummary } from "./stack-run.js";
+import {
+  type MaterializedTree,
+  runStackCycle,
+  type StackFailure,
+  type StackRunOutcome,
+  type TestSummary,
+} from "./stack-run.js";
 import type { TestCase } from "./test-results.js";
 
 export const BEHAVIOUR_LAYER = "behaviour";
@@ -21,20 +28,31 @@ export const behaviourLayer = defineLayer({
   async run(context) {
     const { config } = context;
     const notes: string[] = [];
-    const errors: string[] = [];
-    const fail = (error: string, findings: Finding[] = []): LayerResult => ({
-      layer: BEHAVIOUR_LAYER,
-      status: "failed",
-      error,
-      findings,
-      notes,
-    });
+    const failures: StackFailure[] = [];
+    const fail = (findings: Finding[] = []): LayerResult => {
+      const outputs = failures.flatMap((failure): CommandOutput[] =>
+        failure.output ? [failure.output] : [],
+      );
+      return {
+        layer: BEHAVIOUR_LAYER,
+        status: "failed",
+        error: failures.map((failure) => failure.error).join("; "),
+        findings,
+        notes,
+        ...(outputs.length > 0 ? { outputs } : {}),
+      };
+    };
+    // Kept after the run (in the cache or --log-dir); the temp dir only when the caller keeps no logs.
+    const logDir = context.logDir ?? join(context.tempDir, "logs");
 
     const trees: Partial<Record<Side, MaterializedTree>> = {};
     for (const side of getUsedSides(config)) {
       const tree = side === "base" ? context.base : context.revision;
       const root = await tree.materialize();
-      if (!root.ok) return fail(`cannot materialize ${side} (${tree.ref}): ${root.error}`);
+      if (!root.ok) {
+        failures.push({ error: `cannot materialize ${side} (${tree.ref}): ${root.error}` });
+        return fail();
+      }
       trees[side] = { tree, root: root.value };
     }
     const materialized = trees as Record<Side, MaterializedTree>;
@@ -49,12 +67,19 @@ export const behaviourLayer = defineLayer({
       const baseline = await runStackCycle({
         config,
         trees: materialized,
-        sides: { start: testSide, test: testSide, stop: testSide },
+        cycle: "baseline",
+        sides: { start: testSide, test: testSide, stop: testSide, collect: config.collect?.side ?? testSide },
+        logDir,
         env: context.env,
         log: (message) => context.log(`baseline: ${message}`),
       });
-      if (baseline.stopError !== undefined) errors.push(`baseline: ${baseline.stopError}`);
-      if (!baseline.tests.ok) return fail([`baseline: ${baseline.tests.error}`, ...errors].join("; "));
+      notes.push(...describeCollected(baseline, "baseline: "));
+      if (!baseline.tests.ok) failures.push(prefixFailure(baseline.tests.error, "baseline: "));
+      if (baseline.stopError !== undefined) failures.push(prefixFailure(baseline.stopError, "baseline: "));
+      if (!baseline.tests.ok) {
+        notes.push(`command logs in ${logDir}`);
+        return fail();
+      }
       alreadyFailing = new Set(baseline.tests.value.failed.map((testCase) => testCase.name));
       notes.push(describeBaseline(baseline.tests.value, materialized[testSide].tree.ref));
     }
@@ -62,16 +87,24 @@ export const behaviourLayer = defineLayer({
     const cycle = await runStackCycle({
       config,
       trees: materialized,
+      cycle: "check",
       sides: {
         start: config.start?.side ?? stackSide,
         test: testSide,
         stop: config.stop?.side ?? stackSide,
+        collect: config.collect?.side ?? config.stop?.side ?? stackSide,
       },
+      logDir,
       env: context.env,
       log: context.log,
     });
-    if (cycle.stopError !== undefined) errors.push(cycle.stopError);
-    if (!cycle.tests.ok) return fail([cycle.tests.error, ...errors].join("; "));
+    notes.push(...describeCollected(cycle, ""));
+    if (!cycle.tests.ok) failures.push(cycle.tests.error);
+    if (cycle.stopError !== undefined) failures.push(cycle.stopError);
+    if (!cycle.tests.ok) {
+      notes.push(`command logs in ${logDir}`);
+      return fail();
+    }
 
     const summary = cycle.tests.value;
     const testTree = materialized[testSide].tree;
@@ -92,8 +125,8 @@ export const behaviourLayer = defineLayer({
       toFinding(testCase, { testTree, stackSide, stackRef: stackTree.ref }),
     );
     const accepted = applyAccept(findings, config.accept ?? []);
-    notes.push(...accepted.notes);
-    if (errors.length > 0) return fail(errors.join("; "), accepted.findings);
+    notes.push(...accepted.notes, `command logs in ${logDir}`);
+    if (failures.length > 0) return fail(accepted.findings);
     return {
       layer: BEHAVIOUR_LAYER,
       status: "ran",
@@ -107,7 +140,21 @@ function getUsedSides(config: BehaviourConfig): Side[] {
   const sides = new Set<Side>([config.test.side]);
   if (config.start) sides.add(config.start.side);
   if (config.stop) sides.add(config.stop.side);
+  if (config.collect?.side) sides.add(config.collect.side);
   return [...sides];
+}
+
+function prefixFailure(failure: StackFailure, prefix: string): StackFailure {
+  const output = failure.output && { ...failure.output, command: `${prefix}${failure.output.command}` };
+  return { error: `${prefix}${failure.error}`, ...(output ? { output } : {}) };
+}
+
+/** Where the `collect` command's output went, or why it is missing. */
+function describeCollected(outcome: StackRunOutcome, prefix: string): string[] {
+  if (outcome.collected === undefined) return [];
+  return outcome.collected.ok
+    ? [`${prefix}collect command output in ${outcome.collected.value}`]
+    : [`${prefix}collect command failed: ${outcome.collected.error}`];
 }
 
 function describeBaseline(summary: TestSummary, ref: string): string {

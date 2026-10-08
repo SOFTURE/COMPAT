@@ -1,4 +1,4 @@
-import { getLayerVerdict } from "../model/gate.js";
+import { countAccepted, countReclassifiedBy, getLayerVerdict } from "../model/gate.js";
 import type { Report } from "./report.js";
 
 export const JSON_REPORT_SCHEMA_VERSION = 1;
@@ -13,7 +13,12 @@ export function renderJson(report: Report): string {
     required: report.required,
     gate: report.gate,
     layers: [
-      ...report.layers.map((result) => ({ ...result, verdict: getLayerVerdict(result) })),
+      ...report.layers.map((result) => ({
+        ...result,
+        verdict: getLayerVerdict(result),
+        acceptedCount: countAccepted(result),
+        reclassifiedCount: countReclassifiedBy(report.layers, result.layer),
+      })),
       ...report.inactive.map(({ layer, status }) => ({
         layer,
         status,

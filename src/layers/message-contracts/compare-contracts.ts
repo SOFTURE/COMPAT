@@ -33,6 +33,8 @@ export type ContractChangeId =
   | "message-property-required"
   | "queue-added"
   | "queue-removed"
+  | "message-consumer-moved"
+  | "message-consumer-removed"
   | EnumChangeId;
 
 export type ContractChange = {

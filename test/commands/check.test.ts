@@ -67,7 +67,7 @@ describe("runCheck", () => {
     const lenient = createIo(repo.dir, layers);
     expect(await runCheck(options({ configPath: "disabled-openapi.json" }), lenient.io)).toBe(0);
     expect(lenient.stdout()).toContain("**Gate: PASS**\n\nNot checked: openapi (disabled)");
-    expect(lenient.stdout()).toContain("| openapi | disabled | - | - | - | - |");
+    expect(lenient.stdout()).toContain("| openapi | disabled | - | - | - | - | - |");
 
     const strict = createIo(repo.dir, layers);
     expect(

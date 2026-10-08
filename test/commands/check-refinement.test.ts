@@ -77,6 +77,8 @@ describe("runCheck with a refining layer", () => {
       findings: [],
       notes: ["refined"],
       verdict: "no-findings",
+      acceptedCount: 0,
+      reclassifiedCount: 1,
     });
   });
 

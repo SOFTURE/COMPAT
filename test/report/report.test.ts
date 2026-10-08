@@ -65,9 +65,9 @@ describe("renderMarkdown", () => {
         "",
         "**Gate: PASS**",
         "",
-        "| Layer | Verdict | breaking | rollback-risk | needs-action | safe |",
-        "| --- | --- | --- | --- | --- | --- |",
-        "| openapi | no-findings | 0 | 0 | 0 | 0 |",
+        "| Layer | Verdict | breaking | rollback-risk | needs-action | safe | accepted |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| openapi | no-findings | 0 | 0 | 0 | 0 | 0 |",
         "",
       ].join("\n"),
     );
@@ -78,8 +78,8 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain(
       "**Gate: FAIL**\n- openapi: 1 finding(s) at or above breaking\n- seed: layer skipped",
     );
-    expect(markdown).toContain("| openapi | breaking | 1 | 0 | 0 | 1 |");
-    expect(markdown).toContain("| seed | skipped | - | - | - | - |");
+    expect(markdown).toContain("| openapi | breaking | 1 | 0 | 0 | 1 | 1 |");
+    expect(markdown).toContain("| seed | skipped | - | - | - | - | - |");
     expect(markdown.indexOf("## breaking (1)")).toBeLessThan(markdown.indexOf("## safe (1)"));
     expect(markdown).toContain(
       "- **openapi / api** `request-property-became-not-nullable` GET /things: a \\| b \\`c\\` (`openapi.yaml:3` @ v2)",
@@ -92,8 +92,97 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain(
       "## Notes\n\n- **openapi**: oasdiff version main\n- **config**: read 2 of 3 sources",
     );
-    expect(markdown).toContain("| config | failed | 0 | 0 | 1 | 0 |");
+    expect(markdown).toContain("| config | failed | 0 | 0 | 1 | 0 | 0 |");
     expect(markdown).toContain("## needs-action (1)\n\n- **config / api** `key-added` Shop__ApiKey");
+  });
+
+  it("counts accepted findings and names a layer that only reclassified others", () => {
+    const markdown = renderMarkdown(
+      buildReport([
+        {
+          layer: "openapi",
+          status: "ran",
+          findings: [
+            createFinding("safe", {
+              layer: "openapi",
+              id: "response-property-removed",
+              reclassified: { from: "breaking", by: "client-usage", reason: "no client reads it" },
+            }),
+            createFinding("safe", {
+              layer: "openapi",
+              id: "request-property-removed",
+              reclassified: { from: "breaking", by: "client-usage", reason: "no client sends it" },
+            }),
+          ],
+          notes: [],
+        },
+        {
+          layer: "dependencies",
+          status: "ran",
+          findings: [
+            createFinding("needs-action", {
+              layer: "dependencies",
+              id: "dependency-upgraded",
+              accepted: { reason: "reviewed the 1.x changelog" },
+            }),
+            createFinding("safe", {
+              layer: "dependencies",
+              id: "dependency-upgraded",
+              accepted: { reason: "minor upgrade" },
+            }),
+          ],
+          notes: [],
+        },
+        {
+          layer: "client-usage",
+          status: "ran",
+          findings: [],
+          notes: ["reclassified 2 openapi finding(s) to safe"],
+        },
+      ]),
+    );
+    expect(markdown).toContain(
+      [
+        "| openapi | safe | 0 | 0 | 0 | 2 | 0 |",
+        "| dependencies | no-findings | 0 | 0 | 0 | 0 | 2 |",
+        "| client-usage | reclassified 2 | 0 | 0 | 0 | 0 | 0 |",
+      ].join("\n"),
+    );
+  });
+
+  it("shows the last lines of a failed command as a code block with its newlines kept", () => {
+    const markdown = renderMarkdown(
+      buildReport([
+        {
+          layer: "behaviour",
+          status: "failed",
+          error:
+            "baseline: start command at base (2.2.4) exited 1; full output in /logs/baseline-start-base.log",
+          findings: [],
+          notes: [],
+          outputs: [
+            {
+              command: "baseline: start command at base (2.2.4) exited 1",
+              tail: "Container db Started\n```\nAborting on container exit...",
+              log: "/logs/baseline-start-base.log",
+            },
+          ],
+        },
+      ]),
+    );
+    expect(markdown).toContain(
+      [
+        "- **behaviour** failed: baseline: start command at base (2.2.4) exited 1; full output in /logs/baseline-start-base.log",
+        "",
+        "  Last lines of baseline: start command at base (2.2.4) exited 1 (full output: `/logs/baseline-start-base.log`):",
+        "",
+        "  ````text",
+        "  Container db Started",
+        "  ```",
+        "  Aborting on container exit...",
+        "  ````",
+      ].join("\n"),
+    );
   });
 
   it("names the resolver, what it resolved to and where each ref was set in the header", () => {
@@ -237,11 +326,11 @@ describe("renderMarkdown with layers that did not run", () => {
         "",
         "Not checked: openapi (disabled), behaviour (not configured)",
         "",
-        "| Layer | Verdict | breaking | rollback-risk | needs-action | safe |",
-        "| --- | --- | --- | --- | --- | --- |",
-        "| seed | no-findings | 0 | 0 | 0 | 0 |",
-        "| openapi | disabled | - | - | - | - |",
-        "| behaviour | not configured | - | - | - | - |",
+        "| Layer | Verdict | breaking | rollback-risk | needs-action | safe | accepted |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| seed | no-findings | 0 | 0 | 0 | 0 | 0 |",
+        "| openapi | disabled | - | - | - | - | - |",
+        "| behaviour | not configured | - | - | - | - | - |",
         "",
       ].join("\n"),
     );
@@ -270,6 +359,16 @@ describe("renderJson", () => {
       ["config", "failed"],
     ]);
     expect(document.layers[0].findings[2].accepted).toEqual({ reason: "unused since 2.0" });
+    expect(
+      document.layers.map((layer: { acceptedCount: number; reclassifiedCount: number }) => [
+        layer.acceptedCount,
+        layer.reclassifiedCount,
+      ]),
+    ).toEqual([
+      [1, 0],
+      [0, 0],
+      [0, 0],
+    ]);
   });
 
   it("lists layers that did not run with their status and the required layers", () => {

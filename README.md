@@ -105,6 +105,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
 | `--require <layer,...>` | check | fail the gate unless these layers ran: disabled, not configured, skipped or failed all fail it, even with `--allow-incomplete` |
 | `--no-download` | check | never download oasdiff; use the verified cache, else skip the `openapi` layer |
+| `--log-dir <dir>` | check | where layers keep the full output of the commands they run, one folder per layer (default: `<cache>/logs/<run>`, the cache being `SOFTURE_COMPAT_CACHE_DIR` or `~/.cache/softure-compat`) |
 | `--force` | init | overwrite an existing config file |
 | `-h`, `--help` | both | show the help |
 | `-v`, `--version` | both | show the version |
@@ -177,10 +178,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0.10.0   # base, revision and fail-on come from "check" in compat.config.json
+      - uses: SOFTURE/COMPAT@v0.11.0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
-Use the tag of a release (`@v0.10.0`); every release has one. The action runs the CLI version released
+Use the tag of a release (`@v0.11.0`); every release has one. The action runs the CLI version released
 from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
@@ -193,7 +194,7 @@ from the same commit, so the action and the CLI never drift apart.
 | `args` | | extra CLI arguments, split on whitespace (`--allow-incomplete --no-download`) |
 | `comment` | `true` | create or update the report comment on pull requests |
 | `comment-key` | `default` | one comment per key, for several checks on one pull request |
-| `artifact` | `true` | upload the JSON report as the artifact `softure-compat-report-<comment-key>` |
+| `artifact` | `true` | upload the JSON report and the command logs (`--log-dir`) as the artifact `softure-compat-report-<comment-key>` |
 | `package` | the released version | npm package spec of the CLI to run instead (a version or a tarball path) |
 | `node-version` | `22` | Node.js set up for the CLI; empty keeps the job's Node.js |
 | `github-token` | `github.token` | token for the resolvers and the comment |
@@ -235,6 +236,12 @@ The Markdown report keeps what needs a decision in front: `safe` and accepted fi
 block. Findings of several layers about one thing (a seed row writing a new enum member and that member) are one
 entry with each layer's view under it, and evidence seen at several refs is one link with the list of refs. The JSON
 report keeps every finding as it is.
+
+The summary table has one row per layer with its verdict (its most severe finding that is not accepted), the count of
+findings per class and the count of accepted ones, so a layer whose findings were all accepted reads `no-findings` with
+its accepted count next to it. A layer with no findings of its own that changed the class of other layers' findings
+(`client-usage`) reads `reclassified 6`. The JSON report gives each layer `acceptedCount` and `reclassifiedCount`;
+its `verdict` stays the gate's view. Accepted findings never fail the gate.
 
 ## Configuration
 
@@ -978,12 +985,13 @@ deploy. It does not prove that the call works.
 | Key | Meaning |
 | --- | --- |
 | `targets[]` | `{ name, files, pattern, flags?, host? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
-| `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; a `path` that is an absolute URL is used as it is |
+| `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; it is a base with a trailing slash, so `../geocode/json` against `maps.googleapis.com/maps/api/place` reads as `maps.googleapis.com/maps/api/geocode/json`; a `path` that is an absolute URL is used as it is |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
 | `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment) |
 
 A target is compared as `host/path`: without the scheme, the query string and the fragment, with a lower-case host
-and no trailing slash, so `https://Maps.googleapis.com/maps/api/geocode/json?address={address}` reads as
+and no trailing slash, and with `.` and `..` segments resolved as RFC 3986 does, so
+`https://Maps.googleapis.com/maps/api/place/../geocode/json?address={address}` reads as
 `maps.googleapis.com/maps/api/geocode/json`. Targets are compared across all sources, so a call moved from one file or
 source to another gives no finding.
 
@@ -993,7 +1001,7 @@ source to another gives no finding.
 | `needs-action` | `outbound-added`: a target the revision calls and the base does not; the evidence points at its first capture |
 
 The layer fails closed and then reports no finding: a source that matches no file or captures no target at the
-revision fails the layer. Every accept entry is noted with the number of findings it accepted, or as unused when it
+revision fails the layer, and so does a target whose `..` segments climb above its host. Every accept entry is noted with the number of findings it accepted, or as unused when it
 matched none.
 
 ### message-contracts
@@ -1019,6 +1027,7 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 | `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
 | `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments?, report? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none`; `report: false` for a source that only feeds a `composed` one |
 | `queues[]` | `{ kind: "composed", name, template, parts }`: names built at runtime, see below |
+| `consumers[]` | `{ kind: "regex", name, files, pattern, queue, exclude?, flags?, comments? }`: which queue consumes which message, see below |
 | `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
 
 Some brokers build queue names at runtime, for example `SOFTURE.MessageBroker.Rabbit` 1.x names a consumer group
@@ -1052,6 +1061,36 @@ evidence points at the last part, in template order, that came from a source. A 
 finding and may find nothing at a ref; the `composed` source fails when it builds no name at either ref. A separator
 that only lives inside a library (not in your configuration) is a `default`, so a library upgrade that changes it is
 reported by [`dependencies`](#dependencies), not here.
+
+Queue names alone do not say which queue consumes which message. When a release moves the consumer of an existing
+message to another receive endpoint (a new consumer group, a renamed endpoint), every name may look compatible, yet
+the messages already in the old queue have no consumer after the deploy. `consumers` declares the mapping, and the
+layer compares it at both refs:
+
+```json
+{
+  "consumers": [
+    { "kind": "regex", "name": "broadcast-group", "files": "src/PETSEO.Worker.Sync/Consumers/**/TermsChange/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queue": "PETSEO.Worker.Sync.Broadcast" },
+    { "kind": "regex", "name": "default", "files": "src/PETSEO.Worker.Sync/Consumers/**/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queue": "PETSEO.Worker.Sync", "exclude": ["broadcast-group"] }
+  ]
+}
+```
+
+Each source reads its `files` (without the files of the sources named in `exclude`) at both refs, and every type its
+`pattern` captures in the named group `message` is consumed from its `queue`; a namespace or outer type in the capture
+is dropped, and `comments` (`slash` by default) are stripped first. Only messages declared in `sources` at both refs
+are compared: a new or removed message is reported as such. For each queue that consumed a message at the base and
+does not in the revision:
+
+| Finding id | Class |
+| --- | --- |
+| `message-consumer-moved` | `needs-action`: the revision consumes the message from a queue the base did not; drain the old queue first, or keep the old endpoint for one release (after a rollback, the base build does not consume the new queue) |
+| `message-consumer-removed` | `needs-action`: the revision consumes the message from no new queue, so what waits in the old one gets no consumer |
+
+A consumer source fails the layer, without consumer findings, when it matches no file or captures no consumer in the
+revision.
 
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire
@@ -1110,6 +1149,7 @@ materialized tree of its side.
     "results": { "kind": "trx", "path": "**/TestResults/*.trx" }
   },
   "stop": { "run": "docker compose -f VPS/DOCKER/TESTS/docker-compose.integration-tests.yml down -v" },
+  "collect": { "run": "docker compose -f VPS/DOCKER/TESTS/docker-compose.integration-tests.yml logs --no-color" },
   "retries": 1,
   "baseline": true,
   "accept": [{ "test": "PETSEO.Integration.Tests.Legacy.*", "reason": "asserts the old paging on purpose" }]
@@ -1121,6 +1161,7 @@ materialized tree of its side.
 | `start` | `{ side?, run, background?, ready?, timeoutSeconds? }`, optional. `side` is `revision` (default) or `base`. A script runs to completion (default timeout 1800 s, a non-zero exit fails the layer); with `background: true` the command is a long-running app, kept alive during the tests and stopped with its whole process group afterwards, and `ready` (an http(s) URL) is polled until it answers 2xx within `timeoutSeconds` |
 | `test` | `{ side?, run, results: { kind, path }, timeoutSeconds? }`. `side` is `base` (default) or `revision`; `kind` is `junit` (JUnit XML) or `trx`; `path` is a glob or list of globs relative to the tree root; default timeout 3600 s |
 | `stop` | `{ side?, run, timeoutSeconds? }`, optional; `side` defaults to `revision`, timeout to 600 s. It always runs, also after a failed `start`, a test timeout or unreadable results |
+| `collect` | `{ side?, run, timeoutSeconds? }`, optional: runs after a failed `start`, a failed test command or failing tests and **before** `stop`, so what only the running stack holds (container logs) survives the teardown; `side` defaults to the side `stop` runs at, timeout to 300 s. Its output is saved as a log; a failed `collect` is a note and does not fail the layer |
 | `retries` | 0 (default) to 5: the test command reruns while tests fail; a test that passes in any attempt passes, with a note |
 | `baseline` | `true` runs a whole cycle with every command at the test side first (base tests against the base stack); tests failing there are not reported |
 | `accept[]` | `{ test, reason }`; `test` is the full test name, `*` matches any run of characters |
@@ -1130,6 +1171,12 @@ Every command runs through the shell with `COMPAT_SIDE`, `COMPAT_REF` and `COMPA
 reach a background app. The exit code of the test command is ignored when result files exist (failing tests exit
 non-zero); files matching `results.path` are deleted before each attempt. A test name is `classname.name` in JUnit
 XML and the full method name in TRX.
+
+The full stdout and stderr of every `start`, `test` (each attempt), `collect` and `stop` command is written to a log
+file named after the cycle, command and side, such as `baseline-start-base.log`, `check-test-base-retry1.log` or
+`check-collect-revision.log`, in the `behaviour` folder of `--log-dir` (default: a folder per run in the cache,
+which nothing removes). A failure names its log file, the JSON report carries it with the last 40 lines of the
+output in the layer's `outputs`, and the Markdown report shows those lines as a code block with their line breaks.
 
 | Finding id | Class |
 | --- | --- |
@@ -1148,7 +1195,7 @@ its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-s
 opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
 [`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked.
 
-Known gaps in 0.10.0:
+Known gaps in 0.11.0:
 
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions
