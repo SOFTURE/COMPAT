@@ -646,7 +646,11 @@ that the base already had and the revision edits is `migration-modified`, one th
       "path": "src/Db/Scripts/migrations.sql",
       "historyTable": "__EFMigrationsHistory",
       "preconditions": { "run": "scripts/prod-max-ids.sh", "timeoutSeconds": 60 },
-      "accept": [{ "id": "update-data", "migration": "20261005073152_AddMissingPetBreeds", "object": "Breeds", "reason": "backfill, old builds ignore the column" }]
+      "writers": [{ "table": "dictionaries.PetBreeds", "files": ["src/**/*.cs"], "patterns": ["new PetBreed(", "INSERT INTO dictionaries.\"PetBreeds\""] }],
+      "accept": [
+        { "id": "update-data", "migration": "20261005073152_AddMissingPetBreeds", "object": "Breeds", "reason": "backfill, old builds ignore the column" },
+        { "id": "insert-explicit-id", "migration": "20261005073152_AddMissingPetBreeds", "object": "dictionaries.PetBreeds", "basis": "migrations-only", "reason": "dictionary rows, only migrations write them" }
+      ]
     }
   ]
 }
@@ -658,8 +662,9 @@ that the base already had and the revision edits is `migration-modified`, one th
 | `dialect` | `postgres` or `sqlserver` |
 | `kind: "folder"` | every file under `path` matching `include` (default `["**/*.sql"]`) is one migration, identified by its path relative to `path` |
 | `kind: "ef-script"` | `path` is an EF Core idempotent script (`dotnet ef migrations script --idempotent`); each `MigrationId` guard block is one migration. `historyTable` defaults to `__EFMigrationsHistory` |
-| `accept[]` | `{ id, migration, object?, reason }`; `migration` is the EF migration id or the file path relative to the folder; `object` is `table` or `table.column` as the report shows it |
+| `accept[]` | `{ id, migration, object?, basis?, reason }`; `migration` is the EF migration id or the file path relative to the folder; `object` is `table` or `table.column` as the report shows it; `basis: "migrations-only"` (only for `insert-explicit-id`, below) |
 | `preconditions` | optional `{ run, timeoutSeconds? }`: a command that answers `insert-explicit-id` with production `max(id)` (below) |
+| `writers[]` | optional `{ table, files, patterns }`: base files matching the `files` globs that contain any of `patterns` (plain text, case-sensitive) write `table` outside the migrations (below) |
 
 Rules and classes:
 
@@ -695,6 +700,23 @@ finding `safe` when the migration also moves the identity sequence (otherwise it
 sequence half); a max at or above it turns the finding `breaking` (the insert collides). A table missing from the
 output keeps its class with a note; a failing command adds a note and changes nothing. `timeoutSeconds` defaults
 to 60.
+
+When production is out of reach, the base often makes the precondition very likely by itself. Every
+`insert-explicit-id` that the preconditions command did not settle also says what the base's migrations (the EF
+script's statements outside the guards included) wrote into the table, with the base line as evidence: `the base
+migrations insert explicit Id up to 417 into dictionaries.PetBreeds, and never move its identity sequence` (or `move
+its identity sequence`, `insert no explicit ids`, `insert explicit ids ... that cannot be read`). With a `writers`
+entry for the table it adds whether base code outside the migrations writes it: `no base code outside the
+migrations matches the writers of dictionaries.PetBreeds`, or `base code outside the migrations writes
+dictionaries.PetBreeds (src/Admin/BreedsController.cs:42)` with that line as evidence. The base's migration files never
+count as writers, so `files` may be as wide as `**/*`.
+
+The finding stays `needs-action`. An accept entry with `"basis": "migrations-only"` accepts it only while that
+evidence holds: a `writers` entry is configured for the table, no base file matches it, the base migrations insert
+explicit integer ids into the table, and the highest of them is below the first new id. Once a writer appears or the
+ids move, the entry accepts nothing and a note says why (`its basis migrations-only does not hold: base code writes
+dictionaries.PetBreeds (src/Admin/BreedsController.cs:42)`), so the accept cannot outlive its reason. A finding the
+preconditions command turned `breaking` is never accepted by such an entry.
 
 ### seed
 

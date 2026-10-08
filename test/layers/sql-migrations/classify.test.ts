@@ -3,6 +3,7 @@ import {
   applyAccept,
   type ClassifiedFinding,
   classifyMigrations,
+  getBaseExplicitIds,
   type Migration,
 } from "../../../src/layers/sql-migrations/classify.js";
 import { type SqlDialect, splitStatements } from "../../../src/sql/statements.js";
@@ -341,5 +342,90 @@ describe("applyAccept", () => {
     ]);
     expect(findings.map((finding) => finding.accepted !== undefined)).toEqual([true, false]);
     expect(usage.map(({ count }) => count)).toEqual([1, 0]);
+  });
+});
+
+describe("getBaseExplicitIds", () => {
+  it("keeps the highest integer id per table with its line, unread ids and the first sequence reset", () => {
+    const tables = getBaseExplicitIds(
+      [
+        migration(
+          "0001",
+          [
+            'INSERT INTO dictionaries."PetBreeds" ("Id", "Name") VALUES (1, \'a\'), (417, \'b\');',
+            'INSERT INTO dictionaries."PetBreeds" ("Id", "Name") VALUES (12, \'c\');',
+            'INSERT INTO "Pets" ("Id", "Name") SELECT "Id", "Name" FROM "Old";',
+            'INSERT INTO "Owners" ("Name") VALUES (\'x\');',
+          ].join("\n"),
+        ),
+        migration(
+          "0002",
+          `SELECT setval(pg_get_serial_sequence('"Pets"', 'Id'), 5);\nALTER SEQUENCE "Pets_Id_seq" RESTART WITH 9;`,
+        ),
+      ],
+      "postgres",
+    );
+    expect([...tables]).toEqual([
+      [
+        "dictionaries.petbreeds",
+        { max: { id: 417, path: "db/0001.sql", line: 1 }, hasUnreadIds: false, sequenceReset: null },
+      ],
+      ["public.pets", { max: null, hasUnreadIds: true, sequenceReset: { path: "db/0002.sql", line: 1 } }],
+    ]);
+  });
+
+  it("returns no table for migrations without explicit ids", () => {
+    expect(getBaseExplicitIds([migration("0001", 'CREATE TABLE "Pets" ("Id" int);')], "postgres").size).toBe(
+      0,
+    );
+  });
+});
+
+describe("applyAccept with a migrations-only basis", () => {
+  const insert = (
+    basis: ClassifiedFinding["basis"],
+    findingClass: "needs-action" | "breaking" = "needs-action",
+  ): ClassifiedFinding => {
+    const [item] = classify([migration("0002", 'INSERT INTO "Breeds" ("Id") VALUES (418);')], {
+      baseTables: ["public.breeds"],
+    });
+    if (item === undefined) throw new Error("no finding");
+    item.finding.class = findingClass;
+    return basis === undefined ? item : { ...item, basis };
+  };
+  const entry = {
+    id: "insert-explicit-id",
+    migration: "0002",
+    basis: "migrations-only" as const,
+    reason: "dictionary",
+  };
+
+  it("accepts only while the basis holds, and records why it refused", () => {
+    const { findings, usage } = applyAccept(
+      [
+        insert({ holds: true }),
+        insert({ holds: false, reason: "no writers are configured for Breeds" }),
+        insert(undefined),
+        insert({ holds: true }, "breaking"),
+      ],
+      [entry],
+    );
+    expect(findings.map((finding) => finding.accepted?.reason ?? null)).toEqual([
+      "dictionary",
+      null,
+      null,
+      null,
+    ]);
+    expect(usage).toEqual([
+      {
+        entry,
+        count: 1,
+        refusals: [
+          "no writers are configured for Breeds",
+          "the finding carries no migrations-only evidence",
+          "the finding is breaking",
+        ],
+      },
+    ]);
   });
 });

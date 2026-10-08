@@ -119,6 +119,8 @@ describe("sql-migrations preconditions", () => {
   const HEAD =
     "inserts 2 row(s) into dictionaries.PetBreeds with explicit Id 418-496; precondition: production max(Id) < 418; the migration moves the identity sequence past them";
 
+  const NO_BASE_IDS = "the base migrations insert no explicit ids into dictionaries.PetBreeds";
+
   it("turns the insert safe when production max(Id) is below the first id, reading COMPAT_TABLES", async () => {
     const result = await run(`printf '%s\\t417\\n' "$COMPAT_TABLES"`);
     expect(result.findings.map((finding) => [finding.id, finding.class, finding.message])).toEqual([
@@ -137,11 +139,14 @@ describe("sql-migrations preconditions", () => {
   it("keeps the class when the table is not listed or the command fails", async () => {
     const missing = await run("printf 'other\\t1\\n'");
     expect(missing.findings.map((finding) => [finding.class, finding.message])).toEqual([
-      ["needs-action", `${HEAD}; dictionaries.PetBreeds not listed by the preconditions command`],
+      [
+        "needs-action",
+        `${HEAD}; dictionaries.PetBreeds not listed by the preconditions command; ${NO_BASE_IDS}`,
+      ],
     ]);
     const failed = await run("echo secret; exit 3");
     expect(failed.findings.map((finding) => [finding.class, finding.message])).toEqual([
-      ["needs-action", HEAD],
+      ["needs-action", `${HEAD}; ${NO_BASE_IDS}`],
     ]);
     expect(failed.notes).toContain(
       'source "db": preconditions command exited 3; explicit-id inserts stay unresolved',

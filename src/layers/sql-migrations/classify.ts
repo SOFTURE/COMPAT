@@ -35,9 +35,37 @@ export type ClassifiedFinding = {
   object: string;
   /** `insert-explicit-id` on a table that already exists: what the preconditions command can settle. */
   explicitIds?: { table: SqlName; ids: ExplicitIds; isSequenceMoved: boolean };
+  /** `insert-explicit-id` only: whether the base alone shows that only migrations wrote the table. */
+  basis?: Basis;
 };
 
-export type AcceptEntry = { id: string; migration: string; object?: string | undefined; reason: string };
+/** Whether the `migrations-only` basis holds for an explicit-id insert, and why not when it does not. */
+export type Basis = { holds: true } | { holds: false; reason: string };
+
+/** What an accept entry may require besides the rule, migration and object. */
+export const ACCEPT_BASES = ["migrations-only"] as const;
+
+export type AcceptEntry = {
+  id: string;
+  migration: string;
+  object?: string | undefined;
+  /** `migrations-only`: the entry matches only while the finding's `basis` holds. */
+  basis?: (typeof ACCEPT_BASES)[number] | undefined;
+  reason: string;
+};
+
+/** A position in a base migration script. */
+export type ScriptLine = { path: string; line: number };
+
+/** What the base's migrations wrote into one table with explicit ids. */
+export type BaseExplicitIds = {
+  /** The highest integer id inserted explicitly, and where; `null` when no insert has integer literal ids. */
+  max: (ScriptLine & { id: number }) | null;
+  /** Whether some explicit-id insert has ids that cannot be read (`INSERT ... SELECT`, expressions). */
+  hasUnreadIds: boolean;
+  /** The first statement that moves the table's identity sequence, or `null` when none does. */
+  sequenceReset: ScriptLine | null;
+};
 
 export type ClassifyOptions = {
   sourceName: string;
@@ -94,6 +122,42 @@ export function getCreatedTables(migrations: Migration[], dialect: SqlDialect): 
   for (const migration of migrations) {
     for (const { match } of matchMigration(migration, dialect, walk)) {
       if (match.kind === "rule" && match.rule === "create-table" && match.table) tables.add(match.table.key);
+    }
+  }
+  return tables;
+}
+
+/**
+ * Per table key, the explicit ids the base's migrations insert and whether they move the identity
+ * sequence; a table with neither is absent.
+ */
+export function getBaseExplicitIds(
+  migrations: Migration[],
+  dialect: SqlDialect,
+): Map<string, BaseExplicitIds> {
+  const tables = new Map<string, BaseExplicitIds>();
+  const getTable = (key: string): BaseExplicitIds => {
+    const existing = tables.get(key);
+    if (existing) return existing;
+    const created: BaseExplicitIds = { max: null, hasUnreadIds: false, sequenceReset: null };
+    tables.set(key, created);
+    return created;
+  };
+  const walk: Walk = { order: 0, definedAt: new Map() };
+  for (const migration of migrations) {
+    for (const { match, line } of matchMigration(migration, dialect, walk)) {
+      if (match.kind === "sequence-reset") {
+        const table = getTable(match.table.key);
+        table.sequenceReset ??= { path: migration.path, line };
+        continue;
+      }
+      if (match.explicitIds === undefined || match.table === null) continue;
+      const table = getTable(match.table.key);
+      const range = match.explicitIds.range;
+      if (range === null) table.hasUnreadIds = true;
+      else if (table.max === null || range.last > table.max.id) {
+        table.max = { id: range.last, path: migration.path, line };
+      }
     }
   }
   return tables;
@@ -290,18 +354,35 @@ function getFindingMessage(id: RuleId, match: RuleMatch, isNewTable: boolean): s
 export function applyAccept(
   classified: ClassifiedFinding[],
   accept: AcceptEntry[],
-): { findings: Finding[]; usage: { entry: AcceptEntry; count: number }[] } {
-  const usage = accept.map((entry) => ({ entry, count: 0 }));
-  const findings = classified.map(({ finding, migration, object }) => {
-    const used = usage.find(
+): { findings: Finding[]; usage: AcceptUsage[] } {
+  const usage: AcceptUsage[] = accept.map((entry) => ({ entry, count: 0, refusals: [] }));
+  const findings = classified.map((item) => {
+    const { finding, migration, object } = item;
+    const candidates = usage.filter(
       ({ entry }) =>
         entry.id === finding.id &&
         entry.migration === migration &&
         (entry.object === undefined || entry.object.toLowerCase() === object.toLowerCase()),
     );
+    const used = candidates.find((candidate) => {
+      const refusal = getBasisRefusal(candidate.entry, item);
+      if (refusal !== null) candidate.refusals.push(refusal);
+      return refusal === null;
+    });
     if (!used) return finding;
     used.count += 1;
     return { ...finding, accepted: { reason: used.entry.reason } };
   });
   return { findings, usage };
+}
+
+/** How many findings an accept entry accepted, and why it refused findings it named when its basis failed. */
+export type AcceptUsage = { entry: AcceptEntry; count: number; refusals: string[] };
+
+/** Why an entry's basis does not hold for the finding, or `null` when the entry has none or it holds. */
+function getBasisRefusal(entry: AcceptEntry, item: ClassifiedFinding): string | null {
+  if (entry.basis === undefined) return null;
+  if (item.finding.class === "breaking") return "the finding is breaking";
+  if (item.basis === undefined) return "the finding carries no migrations-only evidence";
+  return item.basis.holds ? null : item.basis.reason;
 }
