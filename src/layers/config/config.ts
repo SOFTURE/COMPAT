@@ -4,6 +4,7 @@ import { CONFIG_FINDING_IDS } from "./classify.js";
 import { COMMENT_STYLES } from "./comments.js";
 import { KEY_MATCHING_MODES } from "./keys.js";
 import { presenceSchema } from "./presence.js";
+import { DEFAULT_PLACEHOLDER } from "./scan-appsettings.js";
 
 export const DEFAULT_COMPOSE_FILES = ["**/{docker-compose,compose}{,.*}.{yml,yaml}"];
 
@@ -118,6 +119,29 @@ const regexSourceSchema = z
       context.addIssue({ code: "custom", path: [compiled.field], message: compiled.error });
   });
 
+const appsettingsSourceSchema = z
+  .strictObject({
+    kind: z.literal("appsettings"),
+    name: sourceName,
+    files: globs,
+    /** A value matching this pattern (case-insensitive) is a placeholder: the key needs a value from the environment. */
+    placeholder: z.string().min(1).default(DEFAULT_PLACEHOLDER),
+    /** Layers `appsettings.{environment}.json` from the same folder over each file, as .NET does. */
+    environment: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]+$/, "use letters, digits, '_' or '-'")
+      .optional(),
+    /** The compose service that runs the app; a key its `environment` sets needs no value elsewhere. */
+    service: z.string().min(1).optional(),
+    composeFiles: globs.default(DEFAULT_COMPOSE_FILES),
+    prefix,
+  })
+  .superRefine((source, context) => {
+    const compiled = compilePattern(source.placeholder, "i");
+    if ("error" in compiled)
+      context.addIssue({ code: "custom", path: ["placeholder"], message: compiled.error });
+  });
+
 export const configSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("compose"),
@@ -133,6 +157,7 @@ export const configSourceSchema = z.discriminatedUnion("kind", [
     prefix,
   }),
   regexSourceSchema,
+  appsettingsSourceSchema,
 ]);
 
 export type ConfigSource = z.infer<typeof configSourceSchema>;

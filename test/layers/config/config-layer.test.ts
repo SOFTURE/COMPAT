@@ -480,3 +480,145 @@ describe("config layer key normalization (issue #18)", () => {
     );
   });
 });
+
+describe("config layer appsettings sources (issue #85)", () => {
+  let appRepo: TestRepo;
+  let appBase: RefTree;
+  let appRevision: RefTree;
+
+  const settings = (secretKey: string, extra = "") =>
+    `{\n  "Stripe": {\n    "SecretKey": "${secretKey}",\n    "Url": "https://stripe.test"\n  }${extra}\n}\n`;
+
+  beforeAll(async () => {
+    appRepo = createRepo([
+      {
+        files: {
+          "src/Api/appsettings.json": settings("real-secret-value"),
+          "src/Admin/appsettings.json": settings("real-secret-value"),
+          "src/Admin/appsettings.Production.json": '{ "Stripe": { "Url": "https://prod.test" } }\n',
+          "docker-compose.yml": "services:\n  api:\n    image: api\n  admin:\n    image: admin\n",
+        },
+        tag: "v1",
+      },
+      {
+        files: {
+          "src/Api/appsettings.json": settings("sk_placeholder", ',\n  "Shop": { "ApiKey": "set-via-env" }'),
+          "src/Admin/appsettings.json": settings("sk_placeholder"),
+          "src/Admin/appsettings.Production.json": '{ "Stripe": { "Url": "https://prod2.test" } }\n',
+          "docker-compose.yml": [
+            "services:",
+            "  api:",
+            "    image: api",
+            "    environment:",
+            "      - Stripe__SecretKey=${STRIPE_SECRET_KEY}",
+            "  admin:",
+            "    image: admin",
+            "",
+          ].join("\n"),
+        },
+        tag: "v2",
+      },
+    ]);
+    const opened = await Promise.all([
+      openRefTree({ repoDir: appRepo.dir, ref: "v1", side: "base", tempRoot }),
+      openRefTree({ repoDir: appRepo.dir, ref: "v2", side: "revision", tempRoot }),
+    ]);
+    if (!opened[0].ok || !opened[1].ok) throw new Error("cannot open refs");
+    appBase = opened[0].value;
+    appRevision = opened[1].value;
+  });
+
+  afterAll(() => appRepo.cleanup());
+
+  const runApp = (sources: unknown[]) => run({ sources }, { base: appBase, revision: appRevision });
+
+  it("reports a value replaced by a placeholder and a new placeholder key without printing values", async () => {
+    const result = await runApp([{ kind: "appsettings", name: "api", files: ["src/Api/appsettings.json"] }]);
+    expect(result.status).toBe("ran");
+    if (result.status !== "ran") return;
+    expect(result.findings.map((f) => `${f.subject} ${f.id} ${f.class}`)).toEqual([
+      "SHOP_API_KEY config-key-added-required needs-action",
+      "STRIPE_SECRET_KEY config-key-default-removed needs-action",
+    ]);
+    const secret = result.findings[1];
+    expect(secret?.evidence.map((e) => `${e.side} ${e.path}:${e.line}`)).toEqual([
+      "base src/Api/appsettings.json:3",
+      "revision src/Api/appsettings.json:3",
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/real-secret-value|sk_placeholder/);
+  });
+
+  it("turns the finding safe when the compose service sets the key, with the compose line as evidence", async () => {
+    const result = await runApp([
+      { kind: "appsettings", name: "api", files: ["src/Api/appsettings.json"], service: "api" },
+    ]);
+    if (result.status !== "ran") throw new Error(result.status);
+    const secret = result.findings.find((f) => f.subject === "STRIPE_SECRET_KEY");
+    expect(secret).toMatchObject({
+      id: "config-key-default-removed",
+      class: "safe",
+      message: expect.stringMatching(/; compose service "api" sets it$/),
+    });
+    expect(secret?.evidence.map((e) => `${e.side} ${e.path}:${e.line}`)).toEqual([
+      "base src/Api/appsettings.json:3",
+      "revision src/Api/appsettings.json:3",
+      "revision docker-compose.yml:5",
+    ]);
+    expect(result.findings.find((f) => f.subject === "SHOP_API_KEY")).toMatchObject({
+      class: "needs-action",
+      message: expect.stringMatching(/; compose service "api" does not set it$/),
+    });
+  });
+
+  it("keeps needs-action for a second app whose service has no override, and names that service", async () => {
+    const result = await runApp([
+      { kind: "appsettings", name: "api", files: ["src/Api/appsettings.json"], service: "api" },
+      { kind: "appsettings", name: "admin", files: ["src/Admin/appsettings.json"], service: "admin" },
+    ]);
+    if (result.status !== "ran") throw new Error(result.status);
+    expect(result.findings.find((f) => f.subject === "STRIPE_SECRET_KEY")).toMatchObject({
+      id: "config-key-default-removed",
+      class: "needs-action",
+      scope: "admin",
+      message: expect.stringMatching(/; compose service "admin" does not set it$/),
+    });
+    expect(result.findings.filter((f) => f.subject === "STRIPE_SECRET_KEY")).toHaveLength(1);
+  });
+
+  it("layers appsettings.{environment}.json over the file and compares under the base file", async () => {
+    const result = await runApp([
+      {
+        kind: "appsettings",
+        name: "admin",
+        files: ["src/Admin/appsettings.json"],
+        environment: "Production",
+      },
+    ]);
+    if (result.status !== "ran") throw new Error(result.status);
+    expect(
+      result.findings.map((f) => `${f.subject} ${f.id} ${f.evidence.map((e) => e.path).join(" ")}`),
+    ).toEqual([
+      "STRIPE_SECRET_KEY config-key-default-removed src/Admin/appsettings.json src/Admin/appsettings.json",
+      "STRIPE_URL config-key-default-changed src/Admin/appsettings.Production.json src/Admin/appsettings.Production.json",
+    ]);
+  });
+
+  it("fails a source whose compose service is missing in the revision", async () => {
+    const result = await runApp([
+      { kind: "appsettings", name: "api", files: ["src/Api/appsettings.json"], service: "api-b2c" },
+    ]);
+    expect(result).toMatchObject({
+      status: "failed",
+      error:
+        'source "api": compose service "api-b2c" is not in any file matching "**/{docker-compose,compose}{,.*}.{yml,yaml}" in the revision',
+    });
+  });
+
+  it("fails a source whose file is not valid JSON", async () => {
+    const result = await runApp([{ kind: "appsettings", name: "bad", files: ["docker-compose.yml"] }]);
+    expect(result).toMatchObject({
+      status: "failed",
+      error: 'source "bad": docker-compose.yml at v1 is not valid JSON',
+    });
+  });
+});
