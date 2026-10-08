@@ -30,6 +30,12 @@ export type Finding = {
   message: string;
   evidence: Evidence[];
   accepted?: { reason: string };
+  /**
+   * What the finding is about across layers, when it differs from `subject`: a seed row that writes
+   * a new enum member carries the member (`NotificationType.TermsChange`), so the report shows both
+   * layers' findings as one entry.
+   */
+  topic?: string;
   /** Set when a later layer changed `class`, for example `client-usage` on an `openapi` finding. */
   reclassified?: { from: FindingClass; by: string; reason: string };
   /** Set when a later layer tried to re-classify the finding and could not: why, and where it stopped. */

@@ -117,7 +117,108 @@ describe("renderMarkdown", () => {
 
   it("escapes table and code characters", () => {
     expect(escapeMarkdown("a|b`c\\d\ne")).toBe("a\\|b\\`c\\\\d e");
-    expect(escapeMarkdown("<!-- @team/owners -->")).toBe("&lt;!-- @\u200bteam/owners --&gt;");
+    expect(escapeMarkdown("<!-- @team/owners -->")).toBe("\\<!-- @\u200bteam/owners -->");
+    expect(escapeMarkdown("<script> </b> <?x")).toBe("\\<script> \\</b> \\<?x");
+  });
+
+  it("leaves a comparison that cannot open a tag as it is", () => {
+    expect(escapeMarkdown("precondition: production max(Id) < 418, a <= b, c > d")).toBe(
+      "precondition: production max(Id) < 418, a <= b, c > d",
+    );
+  });
+});
+
+describe("renderMarkdown sections", () => {
+  const evidenceAt = (ref: string, line = 187) => ({
+    side: "client" as const,
+    ref,
+    commit: "c".repeat(40),
+    path: "app/pet/[id].tsx",
+    line,
+  });
+
+  it("counts safe findings per layer and rule and folds them into a details block", () => {
+    const findings = [
+      createFinding("safe", { layer: "error-codes", id: "error-code-added", subject: "PET_1" }),
+      createFinding("safe", { layer: "error-codes", id: "error-code-unknown-to-client", subject: "PET_2" }),
+      createFinding("safe", { layer: "error-codes", id: "error-code-unknown-to-client", subject: "PET_3" }),
+      createFinding("safe", { layer: "openapi", id: "endpoint-added", subject: "GET /api/shop" }),
+    ];
+    const markdown = renderMarkdown(buildReport([{ layer: "all", status: "ran", findings, notes: [] }]));
+    expect(markdown).toContain(
+      [
+        "## safe (4)",
+        "",
+        "- error-codes: 2 × `error-code-unknown-to-client`, 1 × `error-code-added`",
+        "- openapi: 1 × `endpoint-added`",
+        "",
+        "<details><summary>All safe findings</summary>",
+        "",
+        "- **error-codes / api** `error-code-added` PET_1: a safe change (`openapi.yaml:3` @ v2)",
+      ].join("\n"),
+    );
+    expect(markdown).toMatch(/GET \/api\/shop: a safe change \(`openapi.yaml:3` @ v2\)\n\n<\/details>\n$/);
+  });
+
+  it("folds accepted findings the same way", () => {
+    const findings = [createFinding("breaking", { id: "api-path-removed", accepted: { reason: "unused" } })];
+    const markdown = renderMarkdown(buildReport([{ layer: "stub", status: "ran", findings, notes: [] }]));
+    expect(markdown).toContain(
+      "## Accepted (1)\n\n- stub: 1 × `api-path-removed`\n\n<details><summary>All accepted findings</summary>\n\n- **stub / api**",
+    );
+    expect(markdown).not.toContain("## breaking");
+  });
+
+  it("shows findings of several layers about one topic as one entry with each layer's view", () => {
+    const seedRow = createFinding("rollback-risk", {
+      layer: "seed",
+      scope: "db",
+      id: "row-added",
+      subject: "seed.sql: NotificationTemplates",
+      topic: "NotificationType.TermsChange",
+      reclassified: { from: "safe", by: "persisted-enums", reason: "writes a new member" },
+    });
+    const member = createFinding("rollback-risk", {
+      layer: "persisted-enums",
+      scope: "NotificationType",
+      id: "enum-member-added",
+      subject: "NotificationType.TermsChange",
+    });
+    const other = createFinding("rollback-risk", { layer: "seed", subject: "seed.sql: Banners" });
+    const layers: LayerResult[] = [
+      { layer: "seed", status: "ran", findings: [seedRow, other], notes: [] },
+      { layer: "persisted-enums", status: "ran", findings: [member], notes: [] },
+    ];
+    expect(renderMarkdown(buildReport(layers))).toContain(
+      [
+        "## rollback-risk (2)",
+        "",
+        "- **NotificationType.TermsChange** (seed, persisted-enums)",
+        "  - **seed / db** `row-added` seed.sql: NotificationTemplates: a rollback-risk change (`openapi.yaml:3` @ v2)",
+        "    - reclassified from safe by persisted-enums: writes a new member",
+        "  - **persisted-enums / NotificationType** `enum-member-added` NotificationType.TermsChange: a rollback-risk change (`openapi.yaml:3` @ v2)",
+        "- **seed / api** `rule-rollback-risk` seed.sql: Banners: a rollback-risk change (`openapi.yaml:3` @ v2)",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps findings of one layer that share a subject as separate entries", () => {
+    const findings = [
+      createFinding("breaking", { layer: "openapi", id: "a" }),
+      createFinding("breaking", { layer: "openapi", id: "b" }),
+    ];
+    const markdown = renderMarkdown(buildReport([{ layer: "openapi", status: "ran", findings, notes: [] }]));
+    expect(markdown).toContain("## breaking (2)\n\n- **openapi / api** `a`");
+  });
+
+  it("lists every ref of a location once in one evidence link", () => {
+    const finding = createFinding("breaking", {
+      evidence: [evidenceAt("2.0.1"), evidenceAt("2.0.2"), evidenceAt("2.0.1"), evidenceAt("2.1.1", 9)],
+    });
+    const markdown = renderMarkdown(
+      buildReport([{ layer: "stub", status: "ran", findings: [finding], notes: [] }]),
+    );
+    expect(markdown).toContain("(`app/pet/[id].tsx:187` @ 2.0.1, 2.0.2; `app/pet/[id].tsx:9` @ 2.1.1)");
   });
 });
 

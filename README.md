@@ -230,6 +230,12 @@ internet access: the cached oasdiff is still used, and without one provide oasdi
 `--json-output <file>`: `check --output compat-report.md --json-output compat-report.json` writes the Markdown and the
 JSON report without running the layers twice.
 
+The Markdown report keeps what needs a decision in front: `safe` and accepted findings show a count per layer and rule
+(`error-codes: 36 × error-code-unknown-to-client, 18 × error-code-added`) and fold the findings into a `<details>`
+block. Findings of several layers about one thing (a seed row writing a new enum member and that member) are one
+entry with each layer's view under it, and evidence seen at several refs is one link with the list of refs. The JSON
+report keeps every finding as it is.
+
 ## Configuration
 
 `check` and `init` use `compat.config.json` in the `--repo` directory (default: the current directory), or the
@@ -720,7 +726,8 @@ literal body (`EXEC(@sql)`, `EXECUTE format(...)`, concatenation), `COPY ... FRO
 When [`persisted-enums`](#persisted-enums) runs too, a `row-added` or `row-changed` finding whose rows write a string
 literal equal to a member that `persisted-enums` reports as `enum-member-added` (string storage) becomes
 `rollback-risk`, with the enum declaration as evidence: a base build that reads the table fails on those rows after a
-rollback.
+rollback. When the rows write one such member, the finding carries `topic` (`NotificationType.TermsChange`) and the
+Markdown report shows it together with the member's finding.
 
 ### persisted-enums
 

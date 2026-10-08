@@ -80,7 +80,9 @@ export async function probeOasdiff(options: {
       isMissing: false,
     });
   }
-  return ok({ path: options.path, version: probe.value.stdout.trim(), source: options.source });
+  // `oasdiff --version` prints `oasdiff version 1.33.0`; keep the version only.
+  const version = probe.value.stdout.trim().replace(/^oasdiff version\s+/, "");
+  return ok({ path: options.path, version, source: options.source });
 }
 
 export async function runOasdiffChangelog(options: {
