@@ -1,6 +1,7 @@
 // A tiny API for the behaviour layer tests. It listens on COMPAT_PORT and answers GET /pets/count
 // with the body of pets-count.json next to it, so base and revision differ only in that file.
 // APP_PID_FILE: the process id is written there.
+// GET /version answers the commit the app was started at (COMPAT_COMMIT), or STALE_REVISION when it is set.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 
@@ -10,6 +11,12 @@ const server = createServer((request, response) => {
   if (request.url === "/hc") {
     response.writeHead(200);
     response.end("Healthy");
+    return;
+  }
+  if (request.url === "/version") {
+    // STALE_REVISION stands for an image built from another tree under the same tag.
+    response.writeHead(200);
+    response.end(`${process.env.STALE_REVISION ?? process.env.COMPAT_COMMIT}\n`);
     return;
   }
   if (request.url === "/pets/count") {

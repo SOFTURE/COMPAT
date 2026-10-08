@@ -73,6 +73,7 @@ export const behaviourLayer = defineLayer({
         env: context.env,
         log: (message) => context.log(`baseline: ${message}`),
       });
+      notes.push(...baseline.notes.map((note) => `baseline: ${note}`));
       notes.push(...describeCollected(baseline, "baseline: "));
       if (!baseline.tests.ok) failures.push(prefixFailure(baseline.tests.error, "baseline: "));
       if (baseline.stopError !== undefined) failures.push(prefixFailure(baseline.stopError, "baseline: "));
@@ -98,6 +99,7 @@ export const behaviourLayer = defineLayer({
       env: context.env,
       log: context.log,
     });
+    notes.push(...cycle.notes);
     notes.push(...describeCollected(cycle, ""));
     if (!cycle.tests.ok) failures.push(cycle.tests.error);
     if (cycle.stopError !== undefined) failures.push(cycle.stopError);

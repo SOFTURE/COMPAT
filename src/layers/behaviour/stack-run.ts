@@ -7,10 +7,11 @@ import {
   findFreePort,
   startBackgroundProcess,
 } from "../../process/background-process.js";
-import { pollUrl } from "../../process/http-poll.js";
+import { describeFetchError, pollUrl } from "../../process/http-poll.js";
 import { describeProcessError, getTailLines, runProcess } from "../../process/run-process.js";
 import { err, ok, type Result } from "../../result.js";
 import { type BehaviourConfig, PORT_PLACEHOLDER } from "./config.js";
+import { describeObserved, expandIdentity, matchesIdentity } from "./stack-identity.js";
 import {
   findResultFiles,
   readTestResults,
@@ -20,6 +21,7 @@ import {
 } from "./test-results.js";
 
 const OUTPUT_TAIL_LINES = 40;
+const SHORT_COMMIT_CHARS = 12;
 
 export type MaterializedTree = { tree: RefTree; root: string };
 
@@ -55,16 +57,19 @@ export type StackRunOutcome = {
   stopError?: StackFailure;
   /** Set when `collect` ran: where its output is, or why it failed. */
   collected?: Result<string, string>;
+  /** What the cycle observed about its stack: how long `start` took, whether its code was verified. */
+  notes: string[];
 };
 
 /**
- * One cycle: picks a free port, runs `start`, runs the tests (with retries), runs `collect` when something failed,
- * and always runs `stop` and stops a background app, also after a failure or a timeout. Every command's full output
- * goes to a file in `logDir`.
+ * One cycle: picks a free port, runs `start`, probes the stack's identity with `verify`, runs the tests (with
+ * retries), runs `collect` when something failed, and always runs `stop` and stops a background app, also after a
+ * failure or a timeout. Every command's full output goes to a file in `logDir`.
  */
 export async function runStackCycle(options: StackRunOptions): Promise<StackRunOutcome> {
+  const notes: string[] = [];
   const port = await findFreePort();
-  if (!port.ok) return { tests: err({ error: port.error }) };
+  if (!port.ok) return { tests: err({ error: port.error }), notes };
   const withPort = (text: string) => text.replaceAll(PORT_PLACEHOLDER, String(port.value));
   const env: NodeJS.ProcessEnv = { ...options.env, COMPAT_PORT: String(port.value) };
   const context: CommandContext = { withPort, env, app: {} };
@@ -72,8 +77,12 @@ export async function runStackCycle(options: StackRunOptions): Promise<StackRunO
   let collected: Result<string, string> | undefined;
   let stopError: StackFailure | undefined;
   try {
+    const startedAt = Date.now();
     const started = await startStack(options, context);
-    tests = started.ok ? await runTests(options, context) : started;
+    if (options.config.start !== undefined) notes.push(describeStartTime(options, Date.now() - startedAt));
+    const verified = started.ok ? await verifyStack(options, context) : started;
+    if (verified.ok) notes.push(verified.value);
+    tests = verified.ok ? await runTests(options, context) : verified;
     if (!tests.ok || tests.value.failed.length > 0) collected = await collect(options, context);
   } finally {
     stopError = await stopStack(options, context);
@@ -84,6 +93,7 @@ export async function runStackCycle(options: StackRunOptions): Promise<StackRunO
     tests,
     ...(stopError === undefined ? {} : { stopError }),
     ...(collected === undefined ? {} : { collected }),
+    notes,
   };
 }
 
@@ -156,15 +166,15 @@ async function runShell(
   return ok({ exitCode, stdout, stderr, ...(log === undefined ? {} : { log }) });
 }
 
-/** Runs a command that must exit 0. */
+/** Runs a command that must exit 0; returns what it printed and where its log is. */
 async function runChecked(
   options: StackRunOptions,
   context: CommandContext,
   command: ShellCommand,
-): Promise<Result<string | undefined, StackFailure>> {
+): Promise<Result<{ stdout: string; stderr: string; log?: string }, StackFailure>> {
   const result = await runShell(options, context, command);
   if (!result.ok) return result;
-  if (result.value.exitCode === 0) return ok(result.value.log);
+  if (result.value.exitCode === 0) return ok(result.value);
   const { tree } = options.trees[command.side];
   const label = `${command.name} at ${tree.side} (${tree.ref}) exited ${result.value.exitCode}`;
   return err(describeOutput(label, joinOutput(result.value.stdout, result.value.stderr), result.value.log));
@@ -217,6 +227,67 @@ async function startStack(
   const logName = getLogName(options, "start", side);
   const log = await writeLog(options, logName, `$ ${context.withPort(start.run)}\n\n${app.getOutput()}`);
   return err(describeOutput(`${label}: ${reason} (last: ${outcome.lastObservation})`, app.getOutput(), log));
+}
+
+/** The wall time of `start` (a background app: until it was ready); near-identical short ones hint at a cache. */
+function describeStartTime(options: StackRunOptions, elapsedMs: number): string {
+  const { tree } = options.trees[options.sides.start];
+  return `start command at ${tree.side} (${tree.ref}) took ${(elapsedMs / 1000).toFixed(1)} s`;
+}
+
+/**
+ * Runs the `verify` probe against the started stack. Returns the note to report, or a failure when the probe
+ * cannot run or the stack reports another identity than the one of the side it was started at.
+ */
+async function verifyStack(
+  options: StackRunOptions,
+  context: CommandContext,
+): Promise<Result<string, StackFailure>> {
+  const verify = options.config.verify;
+  const side = options.sides.start;
+  const { tree } = options.trees[side];
+  const where = `${tree.side} (${tree.ref}, ${tree.commit.slice(0, SHORT_COMMIT_CHARS)})`;
+  if (verify === undefined)
+    return ok(`the stack's code was not verified to be ${where}; set verify to prove it`);
+  const expected = expandIdentity(verify.expect, tree);
+  options.log(`verifying the stack runs ${tree.side} (${tree.ref})`);
+  const mismatch = (label: string, observed: string) =>
+    `${label}: the stack reported ${describeObserved(observed)}, expected ${expected}`;
+  if ("run" in verify) {
+    const label = `verify command at ${tree.side} (${tree.ref})`;
+    const probed = await runChecked(options, context, {
+      name: "verify command",
+      run: verify.run,
+      side,
+      timeoutSeconds: verify.timeoutSeconds,
+      logName: getLogName(options, "verify", side),
+    });
+    if (!probed.ok) return probed;
+    const { stdout, stderr, log } = probed.value;
+    if (!matchesIdentity(stdout, expected))
+      return err(describeOutput(mismatch(label, stdout), joinOutput(stdout, stderr), log));
+  } else {
+    const url = context.withPort(verify.url);
+    const label = `verify URL ${url} at ${tree.side} (${tree.ref})`;
+    const body = await fetchText(url, verify.timeoutSeconds);
+    if (!body.ok) return err({ error: `${label}: ${body.error}` });
+    if (!matchesIdentity(body.value, expected)) return err({ error: mismatch(label, body.value) });
+  }
+  return ok(`verified the stack runs ${where}: it reported ${expected}`);
+}
+
+/** One GET whose 2xx body is returned; any other outcome is described. */
+async function fetchText(url: string, timeoutSeconds: number): Promise<Result<string, string>> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutSeconds * 1000) });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return err(`HTTP ${response.status}`);
+    }
+    return ok(await response.text());
+  } catch (error) {
+    return err(describeFetchError(error));
+  }
 }
 
 /** Writes everything a background app printed, once it is stopped. */
@@ -309,9 +380,9 @@ async function collect(
     logName: getLogName(options, "collect", side),
   });
   if (!collected.ok) return err(collected.error.error);
-  return collected.value === undefined
+  return collected.value.log === undefined
     ? err("collect command ran, but its output could not be written")
-    : ok(collected.value);
+    : ok(collected.value.log);
 }
 
 /** Runs `stop`; returns why it failed, or `undefined`. */
