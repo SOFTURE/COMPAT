@@ -208,6 +208,7 @@ describe.skipIf(shouldSkipRealOasdiff(oasdiff))("PETSEO acceptance table, all v1
       ["client-usage", "not-configured"],
       ["error-codes", "not-configured"],
       ["dependencies", "not-configured"],
+      ["outbound", "not-configured"],
       ["message-contracts", "not-configured"],
       ["behaviour", "not-configured"],
     ]);
