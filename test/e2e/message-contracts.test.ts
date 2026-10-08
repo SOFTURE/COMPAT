@@ -137,7 +137,7 @@ async function runCheck(base: string, revision: string, config?: string) {
 }
 
 describe("message-contracts layer (research F8)", () => {
-  it("reports the three new broadcast messages and the new queue as safe, and nothing else", async () => {
+  it("reports the three new broadcast messages as safe and the new queue as rollback-risk, and nothing else", async () => {
     const { exitCode, layer } = await runCheck("2.2.4", "2.3.4");
     expect(exitCode).toBe(0);
     expect(layer.status).toBe("ran");
@@ -159,7 +159,7 @@ describe("message-contracts layer (research F8)", () => {
         "safe",
         "PETSEO.Contract.Internal.Messages.NotificationBroadcasts.BroadcastScheduled",
       ],
-      ["queue-added", "safe", "PETSEO.Worker.Sync.Broadcast"],
+      ["queue-added", "rollback-risk", "PETSEO.Worker.Sync.Broadcast"],
     ]);
     const queue = layer.findings.at(-1);
     expect(queue.scope).toBe("consumer-groups");
@@ -168,6 +168,7 @@ describe("message-contracts layer (research F8)", () => {
     ]);
     expect(layer.notes).toEqual([
       'source "internal": 1 type(s) and 1 enum(s) in 1 file(s) at the base, 4 type(s) and 1 enum(s) in 4 file(s) in the revision',
+      "deploy order: 0 of 3 new message(s) published and consumed in different projects",
       'queue source "consumer-groups": 1 queue(s) at the base, 2 in the revision',
     ]);
   });

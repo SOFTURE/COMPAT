@@ -3,6 +3,7 @@ import type { Evidence, Finding, LayerResult, Side } from "../../model/finding.j
 import { err, ok, type Result } from "../../result.js";
 import { createLineLocator, stripComments } from "../config/comments.js";
 import { defineLayer } from "../layer.js";
+import { findBrokerUsage, type MessageUsage } from "./broker-usage.js";
 import {
   buildContractIndex,
   type ContractChange,
@@ -88,9 +89,18 @@ export const messageContractsLayer = defineLayer({
     const unreadable = new Set(
       [...scans.base, ...scans.revision].flatMap((scan) => scan.failures.map(getFailureName)),
     );
-    changes.push(
-      ...compareContracts(withoutNames(indexes.base, unreadable), withoutNames(indexes.revision, unreadable)),
+    const compared = compareContracts(
+      withoutNames(indexes.base, unreadable),
+      withoutNames(indexes.revision, unreadable),
     );
+    const ordered = await applyDeployOrder(compared, sides.revision);
+    if (ordered.ok) {
+      changes.push(...ordered.value.changes);
+      notes.push(...ordered.value.notes);
+    } else {
+      changes.push(...compared);
+      errors.push(`deploy order at ${sides.revision.ref}: ${ordered.error}`);
+    }
 
     const queues = await scanAllQueues(context.config.queues ?? [], sides);
     errors.push(...queues.errors);
@@ -117,6 +127,59 @@ export const messageContractsLayer = defineLayer({
     } satisfies LayerResult;
   },
 });
+
+const getSimpleName = (fullName: string) => fullName.split(/[.+]/).at(-1)?.replace(/`\d+$/, "") ?? fullName;
+
+const formatProjects = (projects: Map<string, Site>) =>
+  [...projects].map(([project, site]) => `${project} (${site.path}:${site.line})`).join(", ");
+
+/** Whether publishers and consumers deploy separately: some publisher project is not the one consumer. */
+function isDeployedApart(usage: MessageUsage | undefined): usage is MessageUsage {
+  if (usage === undefined || usage.publishers.size === 0 || usage.consumers.size === 0) return false;
+  const [publisher] = usage.publishers.keys();
+  return !(
+    usage.publishers.size === 1 &&
+    usage.consumers.size === 1 &&
+    usage.consumers.has(publisher as string)
+  );
+}
+
+/**
+ * A new message published by one project and consumed by another is `needs-action`: until the
+ * consumer runs the revision its queue is not bound, and a publish to an unbound exchange is dropped.
+ */
+async function applyDeployOrder(
+  changes: ContractChange[],
+  revision: RefTree,
+): Promise<Result<{ changes: ContractChange[]; notes: string[] }>> {
+  const added = changes.filter((change) => change.id === "message-added");
+  if (added.length === 0) return ok({ changes, notes: [] });
+  const usages = await findBrokerUsage(
+    revision,
+    new Set(added.map((change) => getSimpleName(change.subject))),
+  );
+  if (!usages.ok) return usages;
+  let apart = 0;
+  const ordered = changes.map((change) => {
+    if (change.id !== "message-added") return change;
+    const usage = usages.value.get(getSimpleName(change.subject));
+    if (!isDeployedApart(usage)) return change;
+    apart += 1;
+    return {
+      ...change,
+      class: "needs-action" as const,
+      message:
+        `the type is new in the revision, published by ${formatProjects(usage.publishers)} and consumed by ${formatProjects(usage.consumers)}: ` +
+        "deploy the consumer (or declare its topology) before the publisher, or messages published in between are dropped; after a rollback, drain or delete its queue",
+    };
+  });
+  return ok({
+    changes: ordered,
+    notes: [
+      `deploy order: ${apart} of ${added.length} new message(s) published and consumed in different projects`,
+    ],
+  });
+}
 
 /** Failures are prefixed with the path and carry the quoted name the parser gave them. */
 function getFailureName(failure: string): string {
@@ -337,10 +400,11 @@ function compareQueues(source: QueueSource, base: QueueScan, revision: QueueScan
     if (base.queues.has(queue)) continue;
     changes.push({
       id: "queue-added",
-      class: "safe",
+      class: "rollback-risk",
       scope: source.name,
       subject: queue,
-      message: "a new queue; the base build neither publishes to it nor consumes it",
+      message:
+        "a new queue the base build does not consume: after a rollback, messages already in it or still routed to it stay there; drain or delete it",
       revision: site,
     });
   }

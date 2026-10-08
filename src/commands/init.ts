@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG_FILE, parseConfig } from "../config/config.js";
 import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
 import { DEFAULT_COMPOSE_FILES, DEFAULT_DOTENV_FILES } from "../layers/config/config.js";
 import { DEFAULT_NPM_FILES, DEFAULT_NUGET_FILES } from "../layers/dependencies/config.js";
+import { BROKER_GENERIC, BROKER_NEW, readTypeArguments } from "../layers/message-contracts/broker-usage.js";
 import { LAYERS } from "../layers/registry.js";
 import { guessCheckDefaults } from "../resolve/guess-check-defaults.js";
 import { err, ok, type Result } from "../result.js";
@@ -58,10 +59,6 @@ const CONTRACT_GLOBS = ["**/*Contract*/**/*.cs", "**/*Messages/**/*.cs"];
 const CONTRACT_FOLDER = /Contract|Messages$/;
 /** Folder names that hold broker messages by convention, without a reference to check. */
 const BROKER_FOLDER = /(?:Messages|Events)$/;
-/** Generic broker APIs whose type arguments name messages: MassTransit's consumers, contexts and clients. */
-const BROKER_GENERIC = /\b(?:IConsumer|ConsumeContext|IRequestClient|Publish|Send)\s*</g;
-/** `Publish(new T ...)` and `Send(new T ...)`: the message type follows `new`. */
-const BROKER_NEW = /\b(?:Publish|Send)\s*\(\s*new\s+([\w.]+)/g;
 const TYPE_DECLARATION = /\b(?:class|record|struct|interface|enum)\s+@?([A-Za-z_]\w*)/g;
 const TEST_FOLDER = /(?:^|\.)Tests?$/i;
 
@@ -495,17 +492,6 @@ function detectClientUsage(openapi: StarterLayer): StarterLayer {
     example,
     "list the live client refs and their generated TypeScript client to re-classify openapi findings by what they call",
   );
-}
-
-/** The text between the `<` at `open` and its matching `>`; empty when the statement ends first. */
-function readTypeArguments(text: string, open: number): string {
-  let depth = 0;
-  for (let index = open; index < text.length; index++) {
-    if (text[index] === "<") depth++;
-    else if (text[index] === ">" && --depth === 0) return text.slice(open + 1, index);
-    else if (text[index] === ";" || text[index] === "{") break;
-  }
-  return "";
 }
 
 /** Simple names of the types that broker APIs name in the repository's C# files. */
