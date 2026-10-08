@@ -17,6 +17,7 @@ import {
   type ConfigSource,
   compileRegexSource,
   configLayerConfigSchema,
+  DEFAULT_COMPOSE_FILES,
 } from "./config.js";
 import { getKeyIdentity, type KeyIdentity } from "./keys.js";
 import { applyPresence, hasResolvableFindings, type PresenceSettings, readPresentKeys } from "./presence.js";
@@ -26,7 +27,8 @@ import { scanDotenv } from "./scan-dotenv.js";
 import { scanRegex } from "./scan-regex.js";
 import { applyWatch } from "./watch.js";
 
-export type SourceScan = { index: KeyIndex; files: string[] };
+/** `notes` are about the ref that was scanned; only the revision's are reported. */
+export type SourceScan = { index: KeyIndex; files: string[]; notes?: string[] };
 
 const MAX_LISTED_FILES = 5;
 
@@ -43,12 +45,14 @@ export const configLayer = defineLayer({
     const errors: string[] = [];
     const identify = getKeyIdentity(context.config.keyMatching);
     const scannedSources = new Map<string, SourceIndexes>();
+    const deployComposeFiles = getDeployComposeFiles(context.config.sources);
     // A source is used only when both refs were read; one side alone would invent added or removed keys.
     for (const source of context.config.sources) {
       const scanned = await scanSourceAtBothRefs(source, {
         base: context.base,
         revision: context.revision,
         identify,
+        deployComposeFiles,
       });
       if (!scanned.ok) {
         errors.push(`source "${source.name}": ${scanned.error}`);
@@ -63,6 +67,7 @@ export const configLayer = defineLayer({
         if (atBaseFiles.has(path)) pairedFiles.add(getFileId(source.name, path));
       }
       notes.push(describeSource(source, atBase, atRevision));
+      notes.push(...(atRevision.notes ?? []).map((note) => `source "${source.name}": ${note}`));
     }
     const classified = classifyKeys({
       base,
@@ -166,9 +171,9 @@ async function resolvePresence(
  */
 async function scanSourceAtBothRefs(
   source: ConfigSource,
-  { base, revision, identify }: { base: RefTree; revision: RefTree; identify: KeyIdentity },
+  { base, revision, identify, deployComposeFiles }: ScanOptions & { base: RefTree; revision: RefTree },
 ): Promise<Result<[SourceScan, SourceScan]>> {
-  const scanAt = getRefScanner(source, identify);
+  const scanAt = getRefScanner(source, { identify, deployComposeFiles });
   if (!scanAt.ok) return scanAt;
   const atBase = await scanAt.value(base);
   if (!atBase.ok) return atBase;
@@ -217,9 +222,15 @@ async function scanSource(
 
 type RefScanner = (tree: RefTree) => Promise<Result<SourceScan>>;
 
-function getRefScanner(source: ConfigSource, identify: KeyIdentity): Result<RefScanner> {
+type ScanOptions = { identify: KeyIdentity; deployComposeFiles: string[] };
+
+function getRefScanner(
+  source: ConfigSource,
+  { identify, deployComposeFiles }: ScanOptions,
+): Result<RefScanner> {
   if (source.kind === "appsettings") {
-    return ok((tree) => scanAppsettingsSource(source, tree, identify));
+    const composeFiles = source.composeFiles ?? deployComposeFiles;
+    return ok((tree) => scanAppsettingsSource(source, tree, { identify, composeFiles }));
   }
   const scan = getScanner(source);
   if (!scan.ok) return scan;
@@ -242,6 +253,15 @@ function getScanner(
       return ok((text) => scanRegex(text, { ...compiled, comments: source.comments }));
     }
   }
+}
+
+/**
+ * The globs an `appsettings` source without `composeFiles` looks its service up in: the files of
+ * the layer's `compose` sources, which are the deploy, else every compose file.
+ */
+function getDeployComposeFiles(sources: ConfigSource[]): string[] {
+  const files = sources.flatMap((source) => (source.kind === "compose" ? source.files : []));
+  return files.length > 0 ? [...new Set(files)] : DEFAULT_COMPOSE_FILES;
 }
 
 function withPrefix(declaration: KeyDeclaration, prefix: string | undefined): KeyDeclaration {

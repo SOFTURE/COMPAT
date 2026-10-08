@@ -178,10 +178,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0.11.0   # base, revision and fail-on come from "check" in compat.config.json
+      - uses: SOFTURE/COMPAT@v0.12.0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
-Use the tag of a release (`@v0.11.0`); every release has one. The action runs the CLI version released
+Use the tag of a release (`@v0.12.0`); every release has one. The action runs the CLI version released
 from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
@@ -818,7 +818,7 @@ Reports configuration keys the revision needs that production may not have.
 | `compose` | `${VAR}` interpolation in compose files (default `files`: `**/{docker-compose,compose}{,.*}.{yml,yaml}`); `${VAR:-x}` has a default, `${VAR}` and `${VAR:?msg}` are required. Block scalars (`\|`, `>`) and multi-line quoted scalars are read, a `#` inside them is text. Pass-through `environment` entries (`- KEY`, `[KEY]`, `KEY:`, `KEY: ~`, also through `*alias` and `<<: *alias`) are required: the host supplies the value |
 | `dotenv` | keys of `.env` examples (default `files`: `**/.env.{example,sample,template,dist}`, `**/{example,sample}.env`); with `valuesAreDefaults: false` (the default) every key is required, with `true` a key with a value has a default |
 | `regex` | your own pattern over `files`: named group `key` and an optional `default`; `flags` from `i`, `m`, `s`, `u`; `comments` `none`, `hash` or `slash` blanks comments first. `key` builds the key from several named groups instead, e.g. `"{section}__{member}"`; a group can also come from `enclosing`, a pattern whose nearest match before the key lends its groups (the settings class around a member). A placeholder nothing fills stays empty |
-| `appsettings` | .NET `appsettings*.json` `files` (comments and trailing commas allowed); each leaf is a key named by its configuration path (`Stripe:SecretKey`, arrays by index: `Stripe:Plans:0:ProductId`). A value matching `placeholder` (case-insensitive regex, default `placeholder\|set-via-env\|changeme\|^$`) or `null` has no default, so a real value replaced by a placeholder is `config-key-default-removed` and a new placeholder key `config-key-added-required`; other values are defaults. `environment` (e.g. `"Production"`) layers the sibling `appsettings.{environment}.json` over each file. `service` names the compose service that runs the app: a key without a default that its `environment` sets (`Stripe__SecretKey=...`) is `safe`, with the compose line as evidence, and one it does not set names the service; the service must exist in `composeFiles` (default: the compose globs) in the revision |
+| `appsettings` | .NET `appsettings*.json` `files` (comments and trailing commas allowed); each leaf is a key named by its configuration path (`Stripe:SecretKey`, arrays by index: `Stripe:Plans:0:ProductId`). A value matching `placeholder` (case-insensitive regex, default `placeholder\|set-via-env\|changeme\|^$`) or `null` has no default, so a real value replaced by a placeholder is `config-key-default-removed` and a new placeholder key `config-key-added-required`; other values are defaults. `environment` (e.g. `"Production"`) layers the sibling `appsettings.{environment}.json` over each file. `service` names the compose service that runs the app: a key without a default that its `environment` sets (`Stripe__SecretKey=...`) is `safe`, with the compose line as evidence, and one it does not set names the service; the service must exist in `composeFiles` in the revision. `composeFiles` defaults to the `files` of the layer's `compose` sources, so a local-dev compose with the same service name is not read as the deploy; only without a `compose` source does it default to every compose file (`**/{docker-compose,compose}{,.*}.{yml,yaml}`). When the service is in more than one of those files, their entries are merged (the first file in listing order wins per key) and a note names the files |
 
 Upgrading from 0.2.x: the `compose` source now also reads block scalars, multi-line quoted scalars and pass-through
 `environment` entries, so a check that passed before may report keys it missed; record intended ones in `accept`.
@@ -1195,7 +1195,7 @@ its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-s
 opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
 [`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked.
 
-Known gaps in 0.11.0:
+Known gaps in 0.12.0:
 
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions

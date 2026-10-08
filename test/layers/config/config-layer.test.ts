@@ -640,3 +640,99 @@ describe("config layer appsettings sources (issue #85)", () => {
     });
   });
 });
+
+describe("config layer appsettings service lookup (issue #126)", () => {
+  let devRepo: TestRepo;
+  let devBase: RefTree;
+  let devRevision: RefTree;
+
+  const settings = (secretKey: string) => `{\n  "Stripe": {\n    "WebhookSecret": "${secretKey}"\n  }\n}\n`;
+  const service = (environment: string[]) =>
+    ["services:", "  api:", "    image: api", "    environment:", ...environment, ""].join("\n");
+  const deployCompose = service(["      - ConnectionStrings__Main=${DB}"]);
+  const devCompose = service([
+    "      - ConnectionStrings__Main=Host=localhost",
+    "      - Stripe__WebhookSecret=${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}",
+  ]);
+
+  beforeAll(async () => {
+    devRepo = createRepo([
+      {
+        files: {
+          "APP/src/Api/appsettings.json": settings("real-secret-value"),
+          "APP/docker-compose.yml": devCompose,
+          "deploy/docker-compose.yml": deployCompose,
+        },
+        tag: "v1",
+      },
+      {
+        files: { "APP/src/Api/appsettings.json": settings("placeholder") },
+        tag: "v2",
+      },
+    ]);
+    const opened = await Promise.all([
+      openRefTree({ repoDir: devRepo.dir, ref: "v1", side: "base", tempRoot }),
+      openRefTree({ repoDir: devRepo.dir, ref: "v2", side: "revision", tempRoot }),
+    ]);
+    if (!opened[0].ok || !opened[1].ok) throw new Error("cannot open refs");
+    devBase = opened[0].value;
+    devRevision = opened[1].value;
+  });
+
+  afterAll(() => devRepo.cleanup());
+
+  const runDev = (sources: unknown[]) => run({ sources }, { base: devBase, revision: devRevision });
+  const api = { kind: "appsettings", name: "api", files: ["APP/src/Api/appsettings.json"], service: "api" };
+
+  it("looks the service up in the compose source's files, so a local-dev compose does not turn a key safe", async () => {
+    const result = await runDev([{ kind: "compose", files: ["deploy/docker-compose*.yml"] }, api]);
+    if (result.status !== "ran") throw new Error(result.status);
+    const secret = result.findings.find((f) => f.subject === "STRIPE_WEBHOOK_SECRET");
+    expect(secret).toMatchObject({
+      id: "config-key-default-removed",
+      class: "needs-action",
+      message: expect.stringMatching(/; compose service "api" does not set it$/),
+    });
+    expect(secret?.evidence.map((e) => `${e.side} ${e.path}:${e.line}`)).toEqual([
+      "base APP/src/Api/appsettings.json:3",
+      "revision APP/src/Api/appsettings.json:3",
+    ]);
+    expect(result.notes.filter((note) => note.includes("is in 2 files"))).toEqual([]);
+  });
+
+  it("keeps an explicit composeFiles over the compose source's files", async () => {
+    const result = await runDev([
+      { kind: "compose", files: ["deploy/docker-compose*.yml"] },
+      { ...api, composeFiles: ["APP/docker-compose.yml"] },
+    ]);
+    if (result.status !== "ran") throw new Error(result.status);
+    const secret = result.findings.find((f) => f.subject === "STRIPE_WEBHOOK_SECRET");
+    expect(secret?.class).toBe("safe");
+    expect(secret?.evidence.at(-1)).toMatchObject({
+      side: "revision",
+      path: "APP/docker-compose.yml",
+      line: 6,
+    });
+  });
+
+  it("names every compose file that defines the service when it merges them", async () => {
+    const result = await runDev([api]);
+    if (result.status !== "ran") throw new Error(result.status);
+    expect(result.notes).toContain(
+      'source "api": compose service "api" is in 2 files (APP/docker-compose.yml, deploy/docker-compose.yml); ' +
+        "a key any of them sets counts as set, so list only the deploy files in `composeFiles` if one is not",
+    );
+  });
+
+  it("names the compose source's globs when the service is not in them", async () => {
+    const result = await runDev([
+      { kind: "compose", files: ["deploy/docker-compose*.yml"] },
+      { ...api, service: "worker" },
+    ]);
+    expect(result).toMatchObject({
+      status: "failed",
+      error:
+        'source "api": compose service "worker" is not in any file matching "deploy/docker-compose*.yml" in the revision',
+    });
+  });
+});
