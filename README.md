@@ -1027,6 +1027,7 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 | `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
 | `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments?, report? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none`; `report: false` for a source that only feeds a `composed` one |
 | `queues[]` | `{ kind: "composed", name, template, parts }`: names built at runtime, see below |
+| `consumers[]` | `{ kind: "regex", name, files, pattern, queue, exclude?, flags?, comments? }`: which queue consumes which message, see below |
 | `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
 
 Some brokers build queue names at runtime, for example `SOFTURE.MessageBroker.Rabbit` 1.x names a consumer group
@@ -1060,6 +1061,36 @@ evidence points at the last part, in template order, that came from a source. A 
 finding and may find nothing at a ref; the `composed` source fails when it builds no name at either ref. A separator
 that only lives inside a library (not in your configuration) is a `default`, so a library upgrade that changes it is
 reported by [`dependencies`](#dependencies), not here.
+
+Queue names alone do not say which queue consumes which message. When a release moves the consumer of an existing
+message to another receive endpoint (a new consumer group, a renamed endpoint), every name may look compatible, yet
+the messages already in the old queue have no consumer after the deploy. `consumers` declares the mapping, and the
+layer compares it at both refs:
+
+```json
+{
+  "consumers": [
+    { "kind": "regex", "name": "broadcast-group", "files": "src/PETSEO.Worker.Sync/Consumers/**/TermsChange/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queue": "PETSEO.Worker.Sync.Broadcast" },
+    { "kind": "regex", "name": "default", "files": "src/PETSEO.Worker.Sync/Consumers/**/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queue": "PETSEO.Worker.Sync", "exclude": ["broadcast-group"] }
+  ]
+}
+```
+
+Each source reads its `files` (without the files of the sources named in `exclude`) at both refs, and every type its
+`pattern` captures in the named group `message` is consumed from its `queue`; a namespace or outer type in the capture
+is dropped, and `comments` (`slash` by default) are stripped first. Only messages declared in `sources` at both refs
+are compared: a new or removed message is reported as such. For each queue that consumed a message at the base and
+does not in the revision:
+
+| Finding id | Class |
+| --- | --- |
+| `message-consumer-moved` | `needs-action`: the revision consumes the message from a queue the base did not; drain the old queue first, or keep the old endpoint for one release (after a rollback, the base build does not consume the new queue) |
+| `message-consumer-removed` | `needs-action`: the revision consumes the message from no new queue, so what waits in the old one gets no consumer |
+
+A consumer source fails the layer, without consumer findings, when it matches no file or captures no consumer in the
+revision.
 
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire

@@ -24,6 +24,7 @@ import {
   type QueueSource,
   type RegexQueueSource,
 } from "./config.js";
+import { compareConsumers } from "./consumers.js";
 import { parseContracts } from "./parse-contracts.js";
 
 export const MESSAGE_CONTRACTS_LAYER = "message-contracts";
@@ -107,6 +108,16 @@ export const messageContractsLayer = defineLayer({
     changes.push(...queues.changes);
     notes.push(...queues.notes);
 
+    const consumers = await compareConsumers({
+      sources: context.config.consumers ?? [],
+      sides,
+      messages: getSharedMessageNames(indexes.base, indexes.revision),
+      readFiles,
+    });
+    errors.push(...consumers.errors);
+    changes.push(...consumers.changes);
+    notes.push(...consumers.notes);
+
     const findings = changes.map((change) => toFinding(change, sides));
     const accepted = applyAccept(findings, context.config.accept ?? []);
     notes.push(...accepted.notes);
@@ -179,6 +190,14 @@ async function applyDeployOrder(
       `deploy order: ${apart} of ${added.length} new message(s) published and consumed in different projects`,
     ],
   });
+}
+
+/** Simple names of the message types declared at both refs; a consumer of a new or removed type is not compared. */
+function getSharedMessageNames(base: ContractIndex, revision: ContractIndex): Set<string> {
+  const names = (index: ContractIndex) =>
+    new Set([...index.types.values()].map((located) => getSimpleName(located.type.fullName)));
+  const atRevision = names(revision);
+  return new Set([...names(base)].filter((name) => atRevision.has(name)));
 }
 
 /** Failures are prefixed with the path and carry the quoted name the parser gave them. */
