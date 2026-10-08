@@ -1,8 +1,9 @@
 import type { Evidence, Finding } from "../../model/finding.js";
+import { err, ok, type Result } from "../../result.js";
 import type { FindingRevision } from "../layer.js";
 import { OPENAPI_LAYER } from "../openapi/classify.js";
 import { CLIENT_USAGE_LAYER } from "./config.js";
-import { findSentLiterals, type SentSite, type SourceFile } from "./find-sent-literals.js";
+import { findSentLiterals, type SentSite, type SentStop, type SourceFile } from "./find-sent-literals.js";
 import { isSamePath, parseOperation } from "./paths.js";
 import type { ClientModel, ClientOperation, TypeMember } from "./read-typescript-client.js";
 
@@ -88,20 +89,21 @@ function toMemberPath(propertyPath: string[]): string[] | undefined {
 type SentProof = { by: "type"; member: TypeMember } | { by: "call-sites"; sites: SentSite[] };
 
 /**
- * How the call always sends the property under `rule`, else `undefined`. The generated type mirrors the
- * base contract, which allowed the omission, so when it does not prove it the call sites' literals may.
+ * How the call always sends the property under `rule`. The generated type mirrors the base contract,
+ * which allowed the omission, so when it does not prove it the call sites' literals may. The error is
+ * where the call-site reader stopped, `undefined` when it did not run.
  */
 function findAlwaysSent(
   usage: ClientRefUsage,
   operation: ClientOperation,
   propertyPath: string[],
   rule: "required" | "not-nullable",
-): SentProof | undefined {
+): Result<SentProof, SentStop | undefined> {
   const memberPath = toMemberPath(propertyPath);
-  if (memberPath === undefined || operation.body === undefined) return undefined;
+  if (memberPath === undefined || operation.body === undefined) return err(undefined);
   const member = findDeclaredAlwaysSent(usage.model, operation, memberPath, rule);
-  if (member !== undefined) return { by: "type", member };
-  if (usage.sources === undefined || operation.functionName === undefined) return undefined;
+  if (member !== undefined) return ok({ by: "type", member });
+  if (usage.sources === undefined || operation.functionName === undefined) return err(undefined);
   const sites = findSentLiterals({
     sources: usage.sources,
     functionName: operation.functionName,
@@ -109,7 +111,7 @@ function findAlwaysSent(
     memberPath,
     clientTypes: usage.model.types,
   });
-  return sites === undefined ? undefined : { by: "call-sites", sites };
+  return sites.ok ? ok({ by: "call-sites", sites: sites.value }) : sites;
 }
 
 /** The declaration of the property if the body type always sends it under `rule`, else `undefined`. */
@@ -151,6 +153,18 @@ function describeStaleBundle(calls: readonly Call[]): string {
     : "";
 }
 
+/** The first place the call-site reader stopped for a ref that may omit the property. */
+function findFirstStop(
+  omitting: readonly { call: Call; proofs: Result<SentProof, SentStop | undefined>[] }[],
+): { usage: ClientRefUsage; stop: SentStop } | undefined {
+  for (const { call, proofs } of omitting) {
+    for (const proof of proofs) {
+      if (!proof.ok && proof.error !== undefined) return { usage: call.usage, stop: proof.error };
+    }
+  }
+  return undefined;
+}
+
 function refineFinding(finding: Finding, usages: readonly ClientRefUsage[]): Finding | undefined {
   const operation = parseOperation(finding.subject);
   if (operation === undefined) return undefined;
@@ -181,20 +195,20 @@ function refineFinding(finding: Finding, usages: readonly ClientRefUsage[]): Fin
       call,
       proofs: call.operations.map((item) => findAlwaysSent(call.usage, item, propertyPath, rule)),
     }));
-    const omitting = sent.filter(({ proofs }) => proofs.some((proof) => proof === undefined));
+    const omitting = sent.filter(({ proofs }) => proofs.some((proof) => !proof.ok));
     const property = propertyPath.join("/");
     if (omitting.length === 0) {
       const what = rule === "required" ? "always sent" : "always sent non-null";
       const proofs = sent.flatMap(({ call, proofs }) =>
-        proofs.map((proof) => ({ usage: call.usage, proof })),
+        proofs.flatMap((proof) => (proof.ok ? [{ usage: call.usage, proof: proof.value }] : [])),
       );
-      const where = proofs.some(({ proof }) => proof?.by === "call-sites") ? "the call sites of " : "";
+      const where = proofs.some(({ proof }) => proof.by === "call-sites") ? "the call sites of " : "";
       return {
         ...finding,
         class: "safe",
         evidence: capEvidence(
           finding,
-          proofs.flatMap(({ usage, proof }) => toProofEvidence(usage, proof as SentProof)),
+          proofs.flatMap(({ usage, proof }) => toProofEvidence(usage, proof)),
         ),
         reclassified: {
           from: finding.class,
@@ -204,14 +218,26 @@ function refineFinding(finding: Finding, usages: readonly ClientRefUsage[]): Fin
       };
     }
     const omitters = formatRefs(omitting.map(({ call }) => call.usage));
-    return {
+    const attempt = findFirstStop(omitting);
+    const stoppedAt =
+      attempt?.stop.site === undefined
+        ? undefined
+        : { ...toEvidence(attempt.usage, attempt.stop.site.line), path: attempt.stop.site.path };
+    const refined: Finding = {
       ...finding,
-      message: `${finding.message}; ${omitters} may send it without \`${property}\`${rule === "not-nullable" ? " or with null" : ""} (client-usage)${describeStaleBundle(omitting.map(({ call }) => call))}`,
-      evidence: capEvidence(
-        finding,
-        omitting.flatMap(({ call }) => call.operations.map((item) => toEvidence(call.usage, item.line))),
-      ),
+      message: `${finding.message}; ${omitters} may send it without \`${property}\`${rule === "not-nullable" ? " or with null" : ""} (client-usage${attempt === undefined ? "" : `: ${attempt.stop.reason}`})${describeStaleBundle(omitting.map(({ call }) => call))}`,
+      evidence: capEvidence(finding, [
+        ...(stoppedAt === undefined ? [] : [stoppedAt]),
+        ...omitting.flatMap(({ call }) => call.operations.map((item) => toEvidence(call.usage, item.line))),
+      ]),
     };
+    if (attempt !== undefined) {
+      refined.reclassifyAttempt = {
+        reason: attempt.stop.reason,
+        ...(stoppedAt === undefined ? {} : { stoppedAt }),
+      };
+    }
+    return refined;
   }
 
   return {
