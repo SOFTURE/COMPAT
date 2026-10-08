@@ -410,12 +410,37 @@ An entry of `refs` is one of:
 | a [resolver](#finding-the-production-ref): `"github-deployment:<environment>"`, `"github-workflow:<file>"`, `"latest-tag[:<glob>]"` | one ref, as for `--base`; a web client deployed with the server is `"github-deployment:prod"` |
 | `{ "tags": "<pattern>", "since"?: "<version>" }` | local tags matching the `git tag --list` pattern, at or above the `since` version |
 | `{ "workflowRuns": "<file>", "since"?: "<version or YYYY-MM-DD>" }` | the head commit of every successful run of that workflow, labelled by the run's tag or branch (the newest run per label); `since` keeps labels at or above a version, or runs created on or after a date |
+| `{ "easUpdates": { "run": "<command>", "timeoutSeconds"?: <n> } }` | the over-the-air updates the command prints, one `commit<TAB>label[<TAB>dirty]` line each: every distinct commit becomes the ref `ota:<label>` (see below) |
+| `{ "ref": "<ref or resolver>" }` | the same as the plain string; use it to add `optional` |
+
+Every object entry takes `"optional": true`: when it resolves to nothing (no run yet, no update, a failing command),
+the layer adds a note naming it instead of failing. A list where no entry resolves still fails.
 
 For a mobile client built by a workflow on its tags, `{ "workflowRuns": "eas-prod.yml", "since": "2.0.1" }` lists
 exactly the shipped builds, even when server tags are interleaved with them. The GitHub entries use the token and
 repository of the `--base` resolvers, and more than 1000 successful runs need a date `since`. A resolver that finds
 nothing, or a resolved commit missing from the clone, fails the layer. The layer notes name what each resolver
 resolved to, e.g. `client "mobile": workflowRuns:eas-prod.yml since 2.0.1 → 2.0.1, 2.0.2, 2.1.1, 2.1.2, 2.2.4`.
+
+With an over-the-air channel (Expo EAS Update, CodePush), an installed build runs the newest update published to its
+channel and runtime version, not the code of the build's commit. List the updates next to the builds, so a call kept
+only by an OTA bundle keeps its class. The command runs in the repository with the check's environment, so the tool
+itself needs no Expo token; for example (check the JSON fields against your `eas-cli` version):
+
+```json
+"refs": [
+  { "workflowRuns": "eas-prod.yml", "since": "2.0.1" },
+  {
+    "easUpdates": {
+      "run": "eas update:list --branch production --json --non-interactive | jq -r '.currentPage[] | [.gitCommitHash, .group, (if .isGitWorkingTreeDirty then \"dirty\" else \"\" end)] | @tsv'"
+    },
+    "optional": true
+  }
+]
+```
+
+An update marked `dirty` adds a note: its commit only approximates the bundle. Each OTA commit must be in the clone,
+like any other client ref.
 
 What changes, per `openapi` finding of the client's API that is not accepted and not `safe`, for an operation
 (`METHOD /path`):
@@ -506,7 +531,7 @@ both refs and each client's translation map at the client's live refs.
 | `codes[]` | `{ kind?: "regex", name, files, pattern, flags?, report? }`: server files read at the base and the revision; the named group `code` of `pattern` captures one code; `report: false` for a source that only feeds a `composed` one |
 | `codes[]` | `{ kind: "composed", name, template, parts }`: codes built at runtime, see below |
 | `clients[]` | `{ name, refs, files, pattern, flags? }`: the client's translation map files, read at every live ref; the named group `code` captures one translated code |
-| `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags` and `workflowRuns` selectors) |
+| `clients[].refs` | the live client builds, exactly as [`client-usage` refs](#client-usage) (refs, resolvers, `tags`, `workflowRuns` and `easUpdates` selectors, `optional`) |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
 | `clients[].usage` | the [`client-usage`](#client-usage) clients whose calls are this client's, for `returnedBy`; defaults to the one with the same name |
 | `clients[].deployedWith` | optional `"revision"` for a web client deployed with the server: its map files are also read at the revision, and a new code the revision build translates is `safe`, reason `only web@2.2.4 tabs opened before the deploy; web@<revision> translates it` |

@@ -131,7 +131,7 @@ async function readClient(
   if (!refs.ok) return refs;
   const usages: ClientRefUsage[] = [];
   const notes: string[] = [];
-  for (const { ref, commit, resolver } of refs.value) {
+  for (const { ref, commit, resolver } of refs.value.refs) {
     const tree = await openRefTree({
       repoDir: context.repoDir,
       ref: commit ?? ref,

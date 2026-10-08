@@ -140,6 +140,13 @@ describe("refListSchema", () => {
     [{ tags: "2.*", since: "2.0.1" }],
     [{ workflowRuns: "eas-prod.yml" }],
     [["latest-tag:web-*", { workflowRuns: "eas-prod.yml", since: "2026-01-01" }, { tags: "m-*" }]],
+    [
+      [
+        { workflowRuns: "eas-update-prod.yml", optional: true },
+        { ref: "github-deployment:prod", optional: true },
+      ],
+    ],
+    [{ easUpdates: { run: "eas update:list", timeoutSeconds: 30 }, optional: true }],
   ])("accepts %j", (value) => {
     expect(refListSchema.safeParse(value).success).toBe(true);
   });
@@ -150,6 +157,9 @@ describe("refListSchema", () => {
     [{ workflowRuns: "a.yml", tags: "2.*" }],
     [{ workflowRuns: "" }],
     [{ since: "2" }],
+    [{ ref: "-x" }],
+    [{ easUpdates: { run: "" } }],
+    [{ tags: "2.*", optional: "yes" }],
   ])("rejects %j", (value) => {
     expect(refListSchema.safeParse(value).success).toBe(false);
   });
@@ -161,6 +171,9 @@ describe("formatRefListEntry", () => {
     expect(formatRefListEntry("github-deployment:prod")).toBe("github-deployment:prod");
     expect(formatRefListEntry({ tags: "2.*", since: "2.0.1" })).toBe("tags:2.* since 2.0.1");
     expect(formatRefListEntry({ workflowRuns: "eas-prod.yml" })).toBe("workflowRuns:eas-prod.yml");
+    expect(formatRefListEntry({ ref: "2.2.4", optional: true })).toBeUndefined();
+    expect(formatRefListEntry({ ref: "latest-tag", optional: true })).toBe("latest-tag");
+    expect(formatRefListEntry({ easUpdates: { run: "x" } })).toBe("easUpdates");
   });
 });
 
@@ -179,18 +192,21 @@ describe("resolveRefList", () => {
     );
     expect(result).toEqual({
       ok: true,
-      value: [
-        { ref: "2.0.1" },
-        { ref: "2.2.4", commit: sha("e"), resolver: "github-deployment:prod" },
-        { ref: "2.3.5", resolver: "latest-tag" },
-        { ref: "2.0.1", commit: sha("a"), resolver: "workflowRuns:eas-prod.yml" },
-      ],
+      value: {
+        refs: [
+          { ref: "2.0.1" },
+          { ref: "2.2.4", commit: sha("e"), resolver: "github-deployment:prod" },
+          { ref: "2.3.5", resolver: "latest-tag" },
+          { ref: "2.0.1", commit: sha("a"), resolver: "workflowRuns:eas-prod.yml" },
+        ],
+        notes: [],
+      },
     });
   });
 
   it("drops a repeated literal ref", async () => {
     const result = await resolveRefList(["2.0.1", "2.0.1"], { repoDir: repo.dir, env: GITHUB_ENV });
-    expect(result).toEqual({ ok: true, value: [{ ref: "2.0.1" }] });
+    expect(result).toEqual({ ok: true, value: { refs: [{ ref: "2.0.1" }], notes: [] } });
   });
 
   it("resolves a tags selector on its own", async () => {
@@ -200,10 +216,13 @@ describe("resolveRefList", () => {
     );
     expect(result).toEqual({
       ok: true,
-      value: [
-        { ref: "2.2.4", resolver: "tags:2.* since 2.2.0" },
-        { ref: "2.3.5", resolver: "tags:2.* since 2.2.0" },
-      ],
+      value: {
+        refs: [
+          { ref: "2.2.4", resolver: "tags:2.* since 2.2.0" },
+          { ref: "2.3.5", resolver: "tags:2.* since 2.2.0" },
+        ],
+        notes: [],
+      },
     });
   });
 
@@ -225,6 +244,64 @@ describe("resolveRefList", () => {
     expect(result).toEqual({
       ok: false,
       error: "no local tag matches 9.*; fetch tags (actions/checkout with fetch-depth: 0)",
+    });
+  });
+
+  it("notes an optional entry that resolves to nothing instead of failing (issue #93)", async () => {
+    const github = createFakeGitHub({ [runsPath(1)]: { workflow_runs: [] } });
+    const result = await resolveRefList(["2.0.1", { workflowRuns: "eas-prod.yml", optional: true }], {
+      repoDir: repo.dir,
+      env: GITHUB_ENV,
+      fetch: github.fetch,
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        refs: [{ ref: "2.0.1" }],
+        notes: [
+          'optional entry skipped: cannot resolve workflowRuns:eas-prod.yml: no successful run of workflow "eas-prod.yml" in acme/shop',
+        ],
+      },
+    });
+  });
+
+  it("fails when no entry resolves, even if every entry is optional", async () => {
+    const result = await resolveRefList([{ tags: "9.*", optional: true }], {
+      repoDir: repo.dir,
+      env: GITHUB_ENV,
+    });
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "no entry of refs resolved to a ref (optional entry skipped: no local tag matches 9.*; fetch tags (actions/checkout with fetch-depth: 0))",
+    });
+  });
+
+  it("resolves the commits an easUpdates command prints, labelled ota:<label>", async () => {
+    const result = await resolveRefList(
+      { easUpdates: { run: `printf '${sha("a")}\\tg1\\n${sha("b")}\\tg2\\n'` } },
+      { repoDir: repo.dir, env: GITHUB_ENV },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        refs: [
+          { ref: "ota:g1", commit: sha("a"), resolver: "easUpdates" },
+          { ref: "ota:g2", commit: sha("b"), resolver: "easUpdates" },
+        ],
+        notes: [],
+      },
+    });
+  });
+
+  it("fails on an easUpdates command that exits non-zero", async () => {
+    const result = await resolveRefList(
+      { easUpdates: { run: "echo not logged in >&2; exit 3" } },
+      { repoDir: repo.dir, env: GITHUB_ENV },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "cannot resolve easUpdates: easUpdates command exited 3: not logged in",
     });
   });
 });
