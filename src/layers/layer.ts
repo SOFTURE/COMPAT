@@ -23,6 +23,11 @@ export type LayerContext<C> = {
   results?: readonly LayerResult[];
   /** What live client refs call, shared by `client-usage` when it ran before this layer. */
   calls?: readonly ClientRefCalls[];
+  /**
+   * The globs of the `config` layer's `compose` sources, which are the deploy; absent when that layer is not enabled
+   * or has no `compose` source.
+   */
+  deployComposeFiles?: readonly string[];
 };
 
 /** The operations one live client ref calls: method lower-case or `*` when unknown, path normalized. */

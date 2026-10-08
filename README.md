@@ -178,10 +178,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0.13.0   # base, revision and fail-on come from "check" in compat.config.json
+      - uses: SOFTURE/COMPAT@v0.14.0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
-Use the tag of a release (`@v0.13.0`); every release has one. The action runs the CLI version released
+Use the tag of a release (`@v0.14.0`); every release has one. The action runs the CLI version released
 from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
@@ -1011,7 +1011,7 @@ deploy. It does not prove that the call works.
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
 | `targets[].keyFrom` | `appsettings`: each capture's configuration key is the .NET path of the JSON leaf that holds it (`Shop:BaseUrl`); a named group `key` in `pattern` gives the key instead, for example the variable of `GetEnvironmentVariable("CRM_URL") ?? "https://..."`. Requires `service` |
 | `targets[].service` | the compose service that runs the app; a target whose key its `environment` sets is reported as that key (see below). Requires `keyFrom` or a `key` group |
-| `targets[].composeFiles` | where `service` is looked up, default `**/{docker-compose,compose}{,.*}.{yml,yaml}`; list only the deploy files, so a local-dev compose that sets the same key never counts. The service must be in one of them in the revision |
+| `targets[].composeFiles` | where `service` is looked up. Default: the `files` of the [`config`](#config) layer's `compose` sources, so a local-dev compose that sets the same key never counts as the deploy; only without such a source every compose file (`**/{docker-compose,compose}{,.*}.{yml,yaml}`). The service must be in one of them in the revision |
 | `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment), or the key of a target the deploy sets (`Shop:BaseUrl`) |
 
 A target is compared as `host/path`: without the scheme, the query string and the fragment, with a lower-case host
@@ -1285,7 +1285,7 @@ its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-s
 opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
 [`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked.
 
-Known gaps in 0.13.0:
+Known gaps in 0.14.0:
 
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions
