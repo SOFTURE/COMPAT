@@ -193,6 +193,16 @@ const acceptEntrySchema = z.unknown().transform((value, context) => {
   return z.NEVER;
 });
 
+/** A key whose findings get at least `class`, with its defaults printed; the key is declared non-secret. */
+export const configWatchEntrySchema = z.strictObject({
+  /** A key in any spelling; `*` matches any run of characters and `?` one. */
+  key: z.string().min(1),
+  class: z.enum(FINDING_CLASSES),
+  reason: z.string().min(1).optional(),
+});
+
+export type ConfigWatchEntry = z.infer<typeof configWatchEntrySchema>;
+
 export const CHAIN_SCOPES = ["changed", "all"] as const;
 
 /** Sources where every key present in one must be present in all the others. */
@@ -223,6 +233,7 @@ export const configLayerConfigSchema = z
     /** Lists the key names of the target environment, never values; resolves keys that need a value there. */
     presence: presenceSchema.optional(),
     chains: z.array(configChainSchema).optional(),
+    watch: z.array(configWatchEntrySchema).optional(),
     accept: z.array(acceptEntrySchema).optional(),
   })
   .superRefine((config, context) => {
