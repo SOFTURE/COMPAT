@@ -9,6 +9,7 @@ import { OUTBOUND_FINDING_CLASSES } from "../src/layers/outbound/config.js";
 import { ENUM_CHANGE_IDS } from "../src/layers/persisted-enums/config.js";
 import { LAYERS } from "../src/layers/registry.js";
 import { SEED_RULE_CLASSES } from "../src/layers/seed/classify.js";
+import { sqlMigrationsConfigSchema } from "../src/layers/sql-migrations/config.js";
 import { RULE_CLASSES } from "../src/layers/sql-migrations/rules.js";
 import { USAGE } from "../src/main.js";
 
@@ -41,6 +42,15 @@ describe("README reference", () => {
     for (const id of ["migration-modified", "migration-removed"]) {
       expect(getClassRow(section, "needs-action"), id).toContain(`\`${id}\``);
     }
+  });
+
+  it("has a sql-migrations example that the config schema accepts, writers and a basis included", () => {
+    const example = /```json\n([\s\S]*?)\n```/.exec(getSection("sql-migrations"))?.[1] ?? "";
+    const parsed = sqlMigrationsConfigSchema.safeParse(JSON.parse(example));
+    expect(parsed.error).toBeUndefined();
+    const legacy = parsed.data?.sources[1];
+    expect(legacy?.writers?.[0]?.table).toBe("dictionaries.PetBreeds");
+    expect(legacy?.accept?.map((entry) => entry.basis)).toEqual([undefined, "migrations-only"]);
   });
 
   it("lists every seed finding under its class", () => {

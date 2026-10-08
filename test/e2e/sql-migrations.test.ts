@@ -82,6 +82,7 @@ describe.each([
     expect(unsafe[0]?.message).toContain("79 row(s)");
     expect(unsafe[0]?.message).toContain("418-496");
     expect(unsafe[0]?.message).toContain("max(Id) < 418");
+    expect(unsafe[0]?.message).toContain("; the base migrations insert no explicit ids into Breeds");
     expect(unsafe[0]?.evidence[0]).toMatchObject({ path: "db/migrations.sql", line: expect.any(Number) });
   });
 

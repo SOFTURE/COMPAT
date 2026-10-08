@@ -32,7 +32,46 @@ describe("sql-migrations config", () => {
     expect(parsed.success && parsed.data.sources.map((source) => source.path)).toEqual(["db", ""]);
   });
 
+  it("accepts writers and a migrations-only basis on an explicit-id insert", () => {
+    const writers = [
+      { table: "dictionaries.PetBreeds", files: ["src/**/*.cs"], patterns: ["new PetBreed("] },
+    ];
+    const accept = [
+      { id: "insert-explicit-id", migration: "0002.sql", basis: "migrations-only", reason: "dictionary" },
+    ];
+    const parsed = parse({ sources: [folder({ writers, accept })] });
+    expect(parsed.success && parsed.data.sources[0]).toMatchObject({ writers, accept });
+  });
+
   it.each([
+    [
+      "a basis on another rule",
+      {
+        sources: [
+          folder({
+            accept: [{ id: "drop-column", migration: "0001.sql", basis: "migrations-only", reason: "x" }],
+          }),
+        ],
+      },
+    ],
+    [
+      "an unknown basis",
+      {
+        sources: [
+          folder({
+            accept: [{ id: "insert-explicit-id", migration: "0001.sql", basis: "trust-me", reason: "x" }],
+          }),
+        ],
+      },
+    ],
+    [
+      "a writer without patterns",
+      { sources: [folder({ writers: [{ table: "T", files: ["**/*.cs"], patterns: [] }] })] },
+    ],
+    [
+      "a writer with a parent glob",
+      { sources: [folder({ writers: [{ table: "T", files: ["../*.cs"], patterns: ["x"] }] })] },
+    ],
     ["an unknown kind", { sources: [folder({ kind: "liquibase" })] }],
     ["an unknown dialect", { sources: [folder({ dialect: "mysql" })] }],
     ["duplicate names", { sources: [folder(), folder()] }],

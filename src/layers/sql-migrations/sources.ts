@@ -21,6 +21,8 @@ export type SourceChanges = {
   changed: ChangedMigration[];
   /** Keys of the tables the base's migrations create. */
   baseTables: Set<string>;
+  /** Every migration the base has, statements outside EF guards included: what production already ran. */
+  baseMigrations: Migration[];
 };
 
 export type ReadSourceOptions = { source: MigrationSource; base: RefTree; revision: RefTree };
@@ -87,7 +89,12 @@ async function readFolder(
       statements: splitStatements(text.value ?? "", source.dialect),
     });
   }
-  return ok({ newMigrations, changed, baseTables: getCreatedTables(baseMigrations, source.dialect) });
+  return ok({
+    newMigrations,
+    changed,
+    baseTables: getCreatedTables(baseMigrations, source.dialect),
+    baseMigrations,
+  });
 }
 
 async function readEfScript(
@@ -131,11 +138,19 @@ async function readEfScript(
   );
   if (newUnguarded.length > 0)
     newMigrations.push(toMigration({ id: UNGUARDED_MIGRATION, statements: newUnguarded }));
+  const baseMigrations = baseScript.value.migrations.map(toMigration);
   return ok({
     newMigrations,
     changed: baseScript.value.migrations
       .filter((migration) => !revisionIds.has(migration.id))
       .map((migration) => ({ kind: "removed", migration: migration.id, path: source.path, side: "base" })),
-    baseTables: getCreatedTables(baseScript.value.migrations.map(toMigration), source.dialect),
+    baseTables: getCreatedTables(baseMigrations, source.dialect),
+    baseMigrations:
+      baseScript.value.unguarded.length === 0
+        ? baseMigrations
+        : [
+            ...baseMigrations,
+            toMigration({ id: UNGUARDED_MIGRATION, statements: baseScript.value.unguarded }),
+          ],
   });
 }
