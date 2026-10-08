@@ -206,4 +206,49 @@ function save(form: Form) {
     const optional = text.replace("form.days", "form.note");
     expect(find(source(optional))).toEqual(stop("cannot prove form.note non-null", 4));
   });
+
+  describe("members typed by a zod schema (issue #83)", () => {
+    const schema = (days: string, side = "output") =>
+      source(
+        `
+import { z } from "zod";
+export const medicationSchema = z.object({
+  name: z.string().min(1),
+  days: ${days},
+}).superRefine((value, ctx) => {});
+export type MedicationFormData = z.${side}<typeof medicationSchema>;`,
+        "schemas/medication.schema.ts",
+      );
+    const screen = source(`
+const onSubmit = async (data: MedicationFormData) => {
+  await client.postMedication({ daysOfWeek: data.frequencyMode === "weekdays" ? data.days : [] });
+};`);
+
+    it.each([
+      ["z.output and a default", "z.array(z.string()).default([])", "output"],
+      ["z.infer and a required member", "z.array(z.nativeEnum(DayOfWeek))", "infer"],
+      ["an optional member with a default", "z.array(z.string()).optional().default([])", "output"],
+    ])("proves a member read through %s", (_, days, side) => {
+      expect(find(schema(days, side), screen)).toEqual(ok([{ path: "app/medications.ts", line: 3 }]));
+    });
+
+    it.each([
+      ["z.input, where a default leaves the member optional", "z.array(z.string()).default([])", "input"],
+      ["an optional member", "z.array(z.string()).optional()", "output"],
+      ["a nullable member", "z.array(z.string()).nullable().default([])", "output"],
+      ["a transformed member", 'z.string().transform((value) => value.split(","))', "output"],
+      ["a union", "z.union([z.array(z.string()), z.null()])", "output"],
+    ])("stops on %s", (_, days, side) => {
+      expect(find(schema(days, side), screen)).toEqual(
+        stop(`cannot prove data.frequencyMode === "weekdays" ? data.days : [] non-null`, 3),
+      );
+    });
+
+    it("stops when the schema spreads another shape", () => {
+      const spread = schema("z.array(z.string()), ...base.shape");
+      expect(find(spread, screen)).toEqual(
+        stop(`cannot prove data.frequencyMode === "weekdays" ? data.days : [] non-null`, 3),
+      );
+    });
+  });
 });

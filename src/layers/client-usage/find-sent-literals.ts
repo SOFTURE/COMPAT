@@ -8,6 +8,7 @@ import {
   scan,
   type TypeMember,
 } from "./read-typescript-client.js";
+import { readZodTypes } from "./read-zod-types.js";
 
 /** One file of a client's own sources. */
 export type SourceFile = { path: string; text: string };
@@ -83,6 +84,9 @@ export function findSentLiterals(query: SentQuery): Result<SentSite[], SentStop>
   const types = new Map(query.clientTypes);
   for (const file of files) {
     for (const [name, members] of readTypes(file.s)) if (!types.has(name)) types.set(name, members);
+  }
+  for (const [name, members] of readZodTypes(files.map((file) => file.s))) {
+    if (!types.has(name)) types.set(name, members);
   }
   const context: Context = { files, types };
   const calls = findCalls(context, query.functionName);
