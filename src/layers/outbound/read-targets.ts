@@ -1,8 +1,8 @@
 import { err, ok, type Result } from "../../result.js";
 import { createLineLocator } from "../error-codes/read-codes.js";
 
-/** One outbound target a pattern captured, with the 1-based line of the capture. */
-export type TargetOccurrence = { target: string; line: number };
+/** One outbound target a pattern captured, with the 1-based line of the capture and its `key` capture, if any. */
+export type TargetOccurrence = { target: string; line: number; key?: string };
 
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 
@@ -45,7 +45,8 @@ function buildTarget(host: string | undefined, path: string | undefined): Result
 }
 
 /**
- * Every target the named groups `host` and `path` capture in `text`, in text order. A match without a
+ * Every target the named groups `host` and `path` capture in `text`, in text order, with the configuration key
+ * the group `key` captures. A match without a
  * `host` capture takes `defaultHost`; a match that captures nothing is skipped. A target whose `..` segments climb
  * above its host fails the whole read, since the URL the code calls is then unknown. `regex` must carry `g` and `d`.
  */
@@ -62,7 +63,8 @@ export function readTargets(text: string, regex: RegExp, defaultHost?: string): 
     const target = buildTarget(host ?? defaultHost, path);
     if (!target.ok) return err(`line ${line}: ${target.error}`);
     if (target.value === "") continue;
-    occurrences.push({ target: target.value, line });
+    const key = match.groups?.key?.trim() || undefined;
+    occurrences.push({ target: target.value, line, ...(key === undefined ? {} : { key }) });
   }
   return ok(occurrences);
 }

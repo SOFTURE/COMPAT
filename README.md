@@ -984,16 +984,47 @@ deploy. It does not prove that the call works.
 
 | Key | Meaning |
 | --- | --- |
-| `targets[]` | `{ name, files, pattern, flags?, host? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
+| `targets[]` | `{ name, files, pattern, flags?, host?, keyFrom?, service?, composeFiles? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
 | `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; it is a base with a trailing slash, so `../geocode/json` against `maps.googleapis.com/maps/api/place` reads as `maps.googleapis.com/maps/api/geocode/json`; a `path` that is an absolute URL is used as it is |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
-| `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment) |
+| `targets[].keyFrom` | `appsettings`: each capture's configuration key is the .NET path of the JSON leaf that holds it (`Shop:BaseUrl`); a named group `key` in `pattern` gives the key instead, for example the variable of `GetEnvironmentVariable("CRM_URL") ?? "https://..."`. Requires `service` |
+| `targets[].service` | the compose service that runs the app; a target whose key its `environment` sets is reported as that key (see below). Requires `keyFrom` or a `key` group |
+| `targets[].composeFiles` | where `service` is looked up, default `**/{docker-compose,compose}{,.*}.{yml,yaml}`; list only the deploy files, so a local-dev compose that sets the same key never counts. The service must be in one of them in the revision |
+| `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment), or the key of a target the deploy sets (`Shop:BaseUrl`) |
 
 A target is compared as `host/path`: without the scheme, the query string and the fragment, with a lower-case host
 and no trailing slash, and with `.` and `..` segments resolved as RFC 3986 does, so
 `https://Maps.googleapis.com/maps/api/place/../geocode/json?address={address}` reads as
 `maps.googleapis.com/maps/api/geocode/json`. Targets are compared across all sources, so a call moved from one file or
 source to another gives no finding.
+
+A URL in `appsettings.json` is often only the default the deploy replaces: with `Shop__BaseUrl=${SHOP_BASE_URL}` in
+the compose `environment` of the app, production calls whatever the secret holds, never the host in the file. A source
+with `service` reads that compose `environment` at each ref (`Shop__BaseUrl` sets `Shop:BaseUrl`, case-insensitive, as
+.NET reads it), and a target whose key the service sets is compared and reported as the key, not as the file's host:
+
+```json
+{
+  "targets": [
+    {
+      "name": "appsettings-urls",
+      "files": ["src/**/appsettings.json"],
+      "pattern": "\"BaseUrl\"\\s*:\\s*\"(?<host>https?://[^\"/]+)",
+      "keyFrom": "appsettings",
+      "service": "api",
+      "composeFiles": ["deploy/docker-compose.yml"]
+    }
+  ]
+}
+```
+
+That gives `outbound-added Shop:BaseUrl` with the message `outbound call through config key Shop:BaseUrl
+(SHOP_BASE_URL at deploy via Shop__BaseUrl of compose service api; file default api-shop-dev.example.com) is new in the
+revision`, and the file line and the compose entry as evidence. A new file default under a key the deploy sets gives
+no finding, since production does not call it. The finding's topic is the variable the compose value interpolates
+(`SHOP_BASE_URL`), or the key in upper snake case, so the Markdown report shows it in one entry with the `config`
+finding of the same key. Only the compose service is read; a key set elsewhere in the deploy (an Ansible role, a
+vault) is not seen, and its target stays the file's host.
 
 | Class | Finding ids |
 | --- | --- |
