@@ -1144,6 +1144,7 @@ materialized tree of its side.
 ```json
 {
   "start": { "run": "SCRIPTS/rebuild-integration-stack.sh", "timeoutSeconds": 1800 },
+  "verify": { "run": "docker run --rm --entrypoint cat ghcr.io/acme/api:ci /app/REVISION", "expect": "{commit}" },
   "test": {
     "run": "dotnet test APP/API/TESTS/PETSEO.Integration.Tests --logger trx",
     "results": { "kind": "trx", "path": "**/TestResults/*.trx" }
@@ -1159,6 +1160,7 @@ materialized tree of its side.
 | Key | Meaning |
 | --- | --- |
 | `start` | `{ side?, run, background?, ready?, timeoutSeconds? }`, optional. `side` is `revision` (default) or `base`. A script runs to completion (default timeout 1800 s, a non-zero exit fails the layer); with `background: true` the command is a long-running app, kept alive during the tests and stopped with its whole process group afterwards, and `ready` (an http(s) URL) is polled until it answers 2xx within `timeoutSeconds` |
+| `verify` | `{ run, expect?, timeoutSeconds? }` or `{ url, expect?, timeoutSeconds? }`, optional: an identity probe that runs after `start` and before the tests in every cycle and proves the stack runs the code of the side `start` ran at. `run` is a command at that side (default timeout 120 s, a non-zero exit fails the layer) whose stdout is checked; `url` is an http(s) URL (`{port}` allowed) fetched once (default timeout 30 s) whose 2xx body is checked. `expect` defaults to `{commit}`; see below |
 | `test` | `{ side?, run, results: { kind, path }, timeoutSeconds? }`. `side` is `base` (default) or `revision`; `kind` is `junit` (JUnit XML) or `trx`; `path` is a glob or list of globs relative to the tree root; default timeout 3600 s |
 | `stop` | `{ side?, run, timeoutSeconds? }`, optional; `side` defaults to `revision`, timeout to 600 s. It always runs, also after a failed `start`, a test timeout or unreadable results |
 | `collect` | `{ side?, run, timeoutSeconds? }`, optional: runs after a failed `start`, a failed test command or failing tests and **before** `stop`, so what only the running stack holds (container logs) survives the teardown; `side` defaults to the side `stop` runs at, timeout to 300 s. Its output is saved as a log; a failed `collect` is a note and does not fail the layer |
@@ -1172,9 +1174,21 @@ reach a background app. The exit code of the test command is ignored when result
 non-zero); files matching `results.path` are deleted before each attempt. A test name is `classname.name` in JUnit
 XML and the full method name in TRX.
 
+A `start` script that builds images under a fixed tag (`:ci`, `:latest`), rebuilds only what it thinks changed or
+reuses a cached image from another tree can leave the base and the revision cycles running the same build, and a
+green result then proves nothing. `verify` closes that gap. In `expect`, `{commit}` and `{ref}` expand to the
+resolved commit and the ref of the side the stack was started at (the test side in the `baseline` cycle). The probe
+matches when its trimmed output contains the expanded value; when that value is a full commit id, a hex word of at
+least 7 characters in the output that is a prefix of it matches too, so an image labelled with a short SHA passes
+(hex digits compare without case). A mismatch fails the layer, not a test: the error holds both what the stack
+reported and what was expected, the tests do not run, and `collect` and `stop` still run. Without `verify` each
+cycle adds the note `the stack's code was not verified to be <side> (<ref>, <commit>)`. Each cycle also notes the
+wall time of `start` (for a background app, until `ready` answered): two near-identical, very short start times
+for the baseline and the check are a hint that nothing was rebuilt.
+
 The full stdout and stderr of every `start`, `test` (each attempt), `collect` and `stop` command is written to a log
 file named after the cycle, command and side, such as `baseline-start-base.log`, `check-test-base-retry1.log` or
-`check-collect-revision.log`, in the `behaviour` folder of `--log-dir` (default: a folder per run in the cache,
+`check-collect-revision.log` (and of a `verify` command, such as `check-verify-revision.log`), in the `behaviour` folder of `--log-dir` (default: a folder per run in the cache,
 which nothing removes). A failure names its log file, the JSON report carries it with the last 40 lines of the
 output in the layer's `outputs`, and the Markdown report shows those lines as a code block with their line breaks.
 
@@ -1182,7 +1196,8 @@ output in the layer's `outputs`, and the Markdown report shows those lines as a 
 | --- | --- |
 | `base-test-failed` | `breaking`: the base test failed (or errored, or timed out) against the stack; the message holds the first lines of its failure |
 
-The layer fails, keeping its findings, when `start` fails or the app is not ready in time, when the test command
+The layer fails, keeping its findings, when `start` fails or the app is not ready in time, when `verify` cannot
+run or the stack reports another identity, when the test command
 times out, cannot start, writes no result file or results without any test case, when a result file is not valid
 JUnit XML or TRX, and when `stop` fails (the stack may still be running). `init` writes it disabled with example
 commands: nothing in a repository says how its stack starts. The materialized trees are shared with the other layers of the run.

@@ -222,6 +222,110 @@ describe("behaviour layer", () => {
     expect(readFileSync(log, "utf8")).toContain("# stdout\ncollect output\n");
   });
 
+  describe("verify", () => {
+    const commitOf = (ref: string) => repo.git("rev-parse", `${ref}^{commit}`).trim();
+
+    it("notes that the stack was not verified and how long start took", async () => {
+      const { layer } = await check({ start: START, test: TEST, baseline: true });
+      const revision = commitOf("2.3.4").slice(0, 12);
+      const base = commitOf("2.2.4").slice(0, 12);
+      expect(layer.notes).toContain(
+        `the stack's code was not verified to be revision (2.3.4, ${revision}); set verify to prove it`,
+      );
+      expect(layer.notes).toContain(
+        `baseline: the stack's code was not verified to be base (2.2.4, ${base}); set verify to prove it`,
+      );
+      expect(layer.notes).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^start command at revision \(2\.3\.4\) took \d+\.\d s$/),
+          expect.stringMatching(/^baseline: start command at base \(2\.2\.4\) took \d+\.\d s$/),
+        ]),
+      );
+    });
+
+    it("runs the tests when the stack's URL reports the side's commit", async () => {
+      const { layer } = await check({
+        start: START,
+        test: TEST,
+        verify: { url: "http://127.0.0.1:{port}/version" },
+      });
+      expect(layer.status).toBe("ran");
+      expect(layer.findings).toHaveLength(1);
+      const commit = commitOf("2.3.4");
+      expect(layer.notes).toContain(
+        `verified the stack runs revision (2.3.4, ${commit.slice(0, 12)}): it reported ${commit}`,
+      );
+    });
+
+    it("fails the layer, without running the tests, when the stack reports another commit, and still stops it", async () => {
+      const stopMarker = join(scratch, "stopped");
+      const stale = commitOf("2.2.4");
+      const { exitCode, layer } = await check(
+        {
+          start: START,
+          test: TEST,
+          verify: { url: "http://127.0.0.1:{port}/version", expect: "{commit}" },
+          stop: { run: `node -e "require('fs').writeFileSync(process.env.STOP_MARKER, '1')"` },
+        },
+        { env: { STALE_REVISION: stale, STOP_MARKER: stopMarker } },
+      );
+      expect(exitCode).toBe(1);
+      expect(layer.status).toBe("failed");
+      expect(layer.findings).toEqual([]);
+      expect(layer.error).toMatch(
+        new RegExp(
+          `^verify URL http://127\\.0\\.0\\.1:\\d+/version at revision \\(2\\.3\\.4\\): ` +
+            `the stack reported "${stale}", expected ${commitOf("2.3.4")}$`,
+        ),
+      );
+      expect(existsSync(stopMarker)).toBe(true);
+      expect(existsSync(join(scratch, "logs", "behaviour", "check-test-base.log"))).toBe(false);
+    });
+
+    it("accepts a short commit printed by a verify command at the stack's side", async () => {
+      const { layer } = await check({
+        start: START,
+        test: TEST,
+        verify: { run: `node -e "console.log('revision ' + process.env.COMPAT_COMMIT.slice(0, 7))"` },
+      });
+      expect(layer.status).toBe("ran");
+      expect(layer.notes).toContain(
+        `verified the stack runs revision (2.3.4, ${commitOf("2.3.4").slice(0, 12)}): it reported ${commitOf("2.3.4")}`,
+      );
+    });
+
+    it("expands {ref} and names the log of a verify command that reports something else", async () => {
+      const { layer } = await check({
+        start: START,
+        test: TEST,
+        verify: { run: "echo 2.2.4", expect: "{ref}" },
+      });
+      const log = join(scratch, "logs", "behaviour", "check-verify-revision.log");
+      expect(layer.status).toBe("failed");
+      expect(layer.error).toBe(
+        `verify command at revision (2.3.4): the stack reported "2.2.4", expected 2.3.4; full output in ${log}`,
+      );
+      expect(layer.outputs).toEqual([
+        {
+          command: 'verify command at revision (2.3.4): the stack reported "2.2.4", expected 2.3.4',
+          tail: "2.2.4",
+          log,
+        },
+      ]);
+    });
+
+    it("verifies the baseline stack against the test side's commit", async () => {
+      const { layer } = await check(
+        { start: START, test: TEST, baseline: true, verify: { url: "http://127.0.0.1:{port}/version" } },
+        { env: { STALE_REVISION: "0000000" } },
+      );
+      expect(layer.status).toBe("failed");
+      expect(layer.error).toMatch(
+        /^baseline: verify URL \S+ at base \(2\.2\.4\): the stack reported "0000000", expected [0-9a-f]{40}$/,
+      );
+    });
+  });
+
   it("does not run collect when every test passes", async () => {
     const order = join(scratch, "order");
     const { layer } = await check(

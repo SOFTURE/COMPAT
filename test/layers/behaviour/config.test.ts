@@ -28,7 +28,21 @@ describe("behaviour config", () => {
   });
 
   it.each([
+    [{ run: "cat REVISION" }, { run: "cat REVISION", expect: "{commit}", timeoutSeconds: 120 }],
+    [
+      { url: "http://127.0.0.1:{port}/version", expect: "{ref}" },
+      { url: "http://127.0.0.1:{port}/version", expect: "{ref}", timeoutSeconds: 30 },
+    ],
+  ])("applies the verify defaults to %j", (verify, expected) => {
+    expect(behaviourConfigSchema.parse({ test, verify }).verify).toEqual(expected);
+  });
+
+  it.each([
     ["no test", { start: { run: "x" } }],
+    ["a verify with both run and url", { test, verify: { run: "x", url: "http://localhost/v" } }],
+    ["a verify with neither run nor url", { test, verify: { expect: "{commit}" } }],
+    ["a verify URL that is not http", { test, verify: { url: "file:///REVISION" } }],
+    ["an empty verify expect", { test, verify: { run: "x", expect: "" } }],
     ["an unknown results kind", { test: { ...test, results: { kind: "nunit", path: "x" } } }],
     ["a ready URL without background", { start: { run: "x", ready: "http://localhost/hc" }, test }],
     ["a ready value that is not a URL", { start: { run: "x", background: true, ready: "hc" }, test }],

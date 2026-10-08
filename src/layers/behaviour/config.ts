@@ -13,6 +13,11 @@ export const DEFAULT_START_TIMEOUT_SECONDS = 1800;
 export const DEFAULT_TEST_TIMEOUT_SECONDS = 3600;
 export const DEFAULT_STOP_TIMEOUT_SECONDS = 600;
 export const DEFAULT_COLLECT_TIMEOUT_SECONDS = 300;
+export const DEFAULT_VERIFY_RUN_TIMEOUT_SECONDS = 120;
+export const DEFAULT_VERIFY_URL_TIMEOUT_SECONDS = 30;
+/** Stand for the resolved commit and the ref of the side whose stack `verify` probes. */
+export const COMMIT_PLACEHOLDER = "{commit}";
+export const REF_PLACEHOLDER = "{ref}";
 const MAX_TIMEOUT_SECONDS = 86_400;
 const MAX_RETRIES = 5;
 
@@ -87,6 +92,29 @@ export const collectCommandSchema = z.strictObject({
 
 export type CollectCommand = z.infer<typeof collectCommandSchema>;
 
+/** The value the stack must report; `{commit}` and `{ref}` expand to the stack side's commit and ref. */
+const expectedIdentity = z.string().min(1).default(COMMIT_PLACEHOLDER);
+
+/**
+ * An identity probe that runs after `start` and before the tests: it proves the started stack runs the code of the
+ * side it was started at (and not an image built from another tree under a fixed tag). Either a shell command whose
+ * stdout must match `expect`, or a URL whose 2xx body must match it.
+ */
+export const verifyCommandSchema = z.union([
+  z.strictObject({
+    run: z.string().min(1),
+    expect: expectedIdentity,
+    timeoutSeconds: timeoutSeconds.default(DEFAULT_VERIFY_RUN_TIMEOUT_SECONDS),
+  }),
+  z.strictObject({
+    url: portUrl,
+    expect: expectedIdentity,
+    timeoutSeconds: timeoutSeconds.default(DEFAULT_VERIFY_URL_TIMEOUT_SECONDS),
+  }),
+]);
+
+export type VerifyCommand = z.infer<typeof verifyCommandSchema>;
+
 export const acceptEntrySchema = z.strictObject({
   /** The full test name; `*` matches any run of characters. */
   test: z.string().min(1),
@@ -99,6 +127,7 @@ export const behaviourConfigSchema = z.strictObject({
   start: startCommandSchema.optional(),
   test: testCommandSchema,
   stop: stopCommandSchema.optional(),
+  verify: verifyCommandSchema.optional(),
   collect: collectCommandSchema.optional(),
   /** How many times the test command reruns while tests fail. */
   retries: z.number().int().min(0).max(MAX_RETRIES).default(0),
