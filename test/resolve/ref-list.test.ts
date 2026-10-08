@@ -111,11 +111,11 @@ describe("resolveWorkflowRuns", () => {
     });
   });
 
-  it("fails when no run is at or above since", async () => {
+  it("finds nothing when no run is at or above since", async () => {
     const { result } = resolveRuns("3.0.0", { [runsPath(1)]: PETSEO_RUNS });
     expect(await result).toEqual({
-      ok: false,
-      error: 'no successful run of workflow "eas-prod.yml" since 3.0.0 in acme/shop',
+      ok: true,
+      value: { nothingFound: 'no successful run of workflow "eas-prod.yml" since 3.0.0 in acme/shop' },
     });
   });
 
@@ -243,7 +243,8 @@ describe("resolveRefList", () => {
     const result = await resolveRefList({ tags: "9.*" }, { repoDir: repo.dir, env: GITHUB_ENV });
     expect(result).toEqual({
       ok: false,
-      error: "no local tag matches 9.*; fetch tags (actions/checkout with fetch-depth: 0)",
+      error:
+        "cannot resolve tags:9.*: no local tag matches 9.*; fetch tags (actions/checkout with fetch-depth: 0)",
     });
   });
 
@@ -259,7 +260,7 @@ describe("resolveRefList", () => {
       value: {
         refs: [{ ref: "2.0.1" }],
         notes: [
-          'optional entry skipped: cannot resolve workflowRuns:eas-prod.yml: no successful run of workflow "eas-prod.yml" in acme/shop',
+          'optional entry workflowRuns:eas-prod.yml resolved to nothing: no successful run of workflow "eas-prod.yml" in acme/shop',
         ],
       },
     });
@@ -273,7 +274,7 @@ describe("resolveRefList", () => {
     expect(result).toEqual({
       ok: false,
       error:
-        "no entry of refs resolved to a ref (optional entry skipped: no local tag matches 9.*; fetch tags (actions/checkout with fetch-depth: 0))",
+        "no entry of refs resolved to a ref (optional entry tags:9.* resolved to nothing: no local tag matches 9.*; fetch tags (actions/checkout with fetch-depth: 0))",
     });
   });
 
@@ -302,6 +303,53 @@ describe("resolveRefList", () => {
     expect(result).toEqual({
       ok: false,
       error: "cannot resolve easUpdates: easUpdates command exited 3: not logged in",
+    });
+  });
+
+  it("fails on an optional entry whose GitHub lookup fails, instead of skipping it (issue #98)", async () => {
+    const github = createFakeGitHub({});
+    const result = await resolveRefList(["2.0.1", { workflowRuns: "eas-prod.yml", optional: true }], {
+      repoDir: repo.dir,
+      env: GITHUB_ENV,
+      fetch: github.fetch,
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(
+      /^cannot resolve workflowRuns:eas-prod\.yml: GET .* returned HTTP 404/,
+    );
+  });
+
+  describe("an optional easUpdates entry (issue #98)", () => {
+    const resolveOptionalOta = (command: string) =>
+      resolveRefList(["2.0.1", { easUpdates: { run: command }, optional: true }], {
+        repoDir: repo.dir,
+        env: GITHUB_ENV,
+      });
+
+    it("adds a note when the command exits 0 and prints nothing", async () => {
+      expect(await resolveOptionalOta("true")).toEqual({
+        ok: true,
+        value: {
+          refs: [{ ref: "2.0.1" }],
+          notes: [
+            "optional entry easUpdates resolved to nothing: the command exited 0 and printed no update",
+          ],
+        },
+      });
+    });
+
+    it("fails with the exit code and stderr tail when the command exits non-zero", async () => {
+      expect(await resolveOptionalOta("echo no EXPO_TOKEN >&2; exit 3")).toEqual({
+        ok: false,
+        error: "cannot resolve easUpdates: easUpdates command exited 3: no EXPO_TOKEN",
+      });
+    });
+
+    it("fails with the parse error when the command prints a malformed line", async () => {
+      expect(await resolveOptionalOta("printf '\\tlabel\\n'")).toEqual({
+        ok: false,
+        error: 'cannot resolve easUpdates: line 1 is not "commit<TAB>label": \tlabel',
+      });
     });
   });
 });

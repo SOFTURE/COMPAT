@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describeProcessError, getTailLines, runProcess } from "../process/run-process.js";
 import { err, ok, type Result } from "../result.js";
-import type { ResolvedRef } from "./resolve-ref.js";
+import type { NothingFound, ResolvedRef } from "./resolve-ref.js";
 
 export const DEFAULT_OTA_TIMEOUT_SECONDS = 120;
 
@@ -25,9 +25,10 @@ export type OtaUpdates = { refs: ResolvedRef[]; notes: string[] };
 /**
  * Reads the output of an OTA command. Each distinct commit becomes one ref labelled `ota:<label>`
  * (its first line wins); a third column `dirty` (or `true`) adds a note, since the commit only
- * approximates a bundle published from a dirty working tree. Blank lines are skipped.
+ * approximates a bundle published from a dirty working tree. Blank lines are skipped; an output with
+ * no line is nothing found (no update published yet), a malformed line is an error.
  */
-export function parseOtaOutput(output: string): Result<OtaUpdates> {
+export function parseOtaOutput(output: string): Result<OtaUpdates | NothingFound> {
   const refs: ResolvedRef[] = [];
   const notes: string[] = [];
   const seen = new Set<string>();
@@ -49,18 +50,21 @@ export function parseOtaOutput(output: string): Result<OtaUpdates> {
       );
     }
   }
-  if (refs.length === 0) return err("the command printed no update");
+  if (refs.length === 0) return ok({ nothingFound: "the command exited 0 and printed no update" });
   return ok({ refs, notes });
 }
 
 type ReadOtaUpdatesOptions = { settings: OtaUpdatesSettings; cwd: string; env: NodeJS.ProcessEnv };
 
-/** Runs the OTA command in the consumer's repository and reads the updates it prints. */
+/**
+ * Runs the OTA command in the consumer's repository and reads the updates it prints. A command that
+ * cannot run, times out or exits non-zero is an error.
+ */
 export async function readOtaUpdates({
   settings,
   cwd,
   env,
-}: ReadOtaUpdatesOptions): Promise<Result<OtaUpdates>> {
+}: ReadOtaUpdatesOptions): Promise<Result<OtaUpdates | NothingFound>> {
   const timeoutSeconds = settings.timeoutSeconds ?? DEFAULT_OTA_TIMEOUT_SECONDS;
   const result = await runProcess({
     command: settings.run,

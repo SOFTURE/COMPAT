@@ -4,9 +4,10 @@ import { err, ok, type Result } from "../result.js";
 import { otaUpdatesSchema, readOtaUpdates } from "./ota-updates.js";
 import { parseRefSpec } from "./ref-spec.js";
 import {
+  findRefSpec,
+  type NothingFound,
   type ResolvedRef,
   type ResolveRefOptions,
-  resolveRefSpec,
   resolveWorkflowRuns,
 } from "./resolve-ref.js";
 import { selectTags } from "./versions.js";
@@ -18,7 +19,10 @@ const gitRef = z
   .min(1)
   .refine((ref) => !ref.startsWith("-"), "must not start with '-'");
 
-/** `true`: an entry that resolves to nothing adds a note instead of failing the layer. */
+/**
+ * `true`: an entry that resolves to nothing (no run, tag or update yet) adds a note instead of failing
+ * the layer. A resolver that fails (an API error, a command that exits non-zero) still fails it.
+ */
 const optional = z.boolean().optional();
 
 const refEntrySchema = z.strictObject({
@@ -81,7 +85,8 @@ export type ResolvedRefList = { refs: ResolvedRef[]; notes: string[] };
 /**
  * Resolves every entry to refs; a ref seen twice (same commit, or same name without one) is kept once,
  * at its first place. Each ref of a non-literal entry carries that entry's label as `resolver`. An
- * `optional` entry that fails adds a note instead; a list that resolves to no ref at all fails.
+ * entry that resolves to nothing fails unless it is `optional`, which adds a note instead; an entry
+ * whose resolver fails always fails, and so does a list that resolves to no ref at all.
  */
 export async function resolveRefList(
   list: RefList,
@@ -93,13 +98,18 @@ export async function resolveRefList(
   const seen = new Set<string>();
   for (const entry of entries) {
     const refs = await resolveEntry(entry, options);
-    if (!refs.ok) {
-      if (typeof entry === "string" || entry.optional !== true) return refs;
-      notes.push(`optional entry skipped: ${refs.error}`);
+    if (!refs.ok) return refs;
+    const resolver = formatRefListEntry(entry);
+    if ("nothingFound" in refs.value) {
+      // A literal ref never finds nothing, so the entry has a resolver label.
+      const label = resolver ?? "ref";
+      if (typeof entry === "string" || entry.optional !== true) {
+        return err(`cannot resolve ${label}: ${refs.value.nothingFound}`);
+      }
+      notes.push(`optional entry ${label} resolved to nothing: ${refs.value.nothingFound}`);
       continue;
     }
     notes.push(...refs.value.notes);
-    const resolver = formatRefListEntry(entry);
     for (const ref of refs.value.refs) {
       const key = ref.commit ?? ref.ref;
       if (seen.has(key)) continue;
@@ -114,11 +124,13 @@ export async function resolveRefList(
 async function resolveEntry(
   entry: RefListEntry,
   options: ResolveRefOptions,
-): Promise<Result<ResolvedRefList>> {
+): Promise<Result<ResolvedRefList | NothingFound>> {
   if (typeof entry === "string" || "ref" in entry) {
     const spec = typeof entry === "string" ? entry : entry.ref;
-    const ref = await resolveRefSpec(parseRefSpec(spec), options);
-    return ref.ok ? ok({ refs: [ref.value], notes: [] }) : ref;
+    const ref = await findRefSpec(parseRefSpec(spec), options);
+    if (!ref.ok) return ref;
+    if ("nothingFound" in ref.value) return ok(ref.value);
+    return ok({ refs: [ref.value], notes: [] });
   }
   if ("easUpdates" in entry) {
     const updates = await readOtaUpdates({
@@ -130,12 +142,14 @@ async function resolveEntry(
   }
   if ("tags" in entry) {
     const tags = await resolveTags(entry.tags, entry.since, options);
-    return tags.ok ? ok({ refs: tags.value, notes: [] }) : tags;
+    if (!tags.ok) return tags;
+    if ("nothingFound" in tags.value) return ok(tags.value);
+    return ok({ refs: tags.value, notes: [] });
   }
   const runs = await resolveWorkflowRuns({ workflow: entry.workflowRuns, since: entry.since }, options);
-  return runs.ok
-    ? ok({ refs: runs.value, notes: [] })
-    : err(`cannot resolve ${formatRefListEntry(entry)}: ${runs.error}`);
+  if (!runs.ok) return err(`cannot resolve ${formatRefListEntry(entry)}: ${runs.error}`);
+  if ("nothingFound" in runs.value) return ok(runs.value);
+  return ok({ refs: runs.value, notes: [] });
 }
 
 /** Local tags matching the `git tag --list` pattern, in version order, at or above `since`. */
@@ -143,7 +157,7 @@ async function resolveTags(
   pattern: string,
   since: string | undefined,
   options: ResolveRefOptions,
-): Promise<Result<ResolvedRef[]>> {
+): Promise<Result<ResolvedRef[] | NothingFound>> {
   const listed = await runProcess({
     command: "git",
     args: ["tag", "--list", pattern],
@@ -163,7 +177,9 @@ async function resolveTags(
   if (!selected.ok) return selected;
   if (selected.value.length === 0) {
     const scope = since === undefined ? "" : ` since ${since}`;
-    return err(`no local tag matches ${pattern}${scope}; fetch tags (actions/checkout with fetch-depth: 0)`);
+    return ok({
+      nothingFound: `no local tag matches ${pattern}${scope}; fetch tags (actions/checkout with fetch-depth: 0)`,
+    });
   }
   return ok(selected.value.map((ref) => ({ ref })));
 }

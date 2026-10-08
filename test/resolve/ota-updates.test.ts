@@ -33,8 +33,11 @@ describe("parseOtaOutput", () => {
     });
   });
 
-  it("fails on empty output", () => {
-    expect(parseOtaOutput("\n")).toEqual({ ok: false, error: "the command printed no update" });
+  it("finds nothing on empty output, without failing (issue #98)", () => {
+    expect(parseOtaOutput("\n")).toEqual({
+      ok: true,
+      value: { nothingFound: "the command exited 0 and printed no update" },
+    });
   });
 
   it.each([["not-a-commit\tg1"], [`${sha("a")}`], [`${sha("a")}\t`]])("fails on the line %j", (line) => {
