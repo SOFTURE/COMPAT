@@ -629,6 +629,19 @@ export async function buildStarterConfig(tree: RefTree): Promise<Result<StarterL
     dependencies.value,
     messageContracts.value,
     disabled(
+      "outbound",
+      {
+        targets: [
+          {
+            name: "http",
+            files: ["src/**/*.cs"],
+            pattern: '"(?<host>https://[\\w.-]+)(?<path>/[^"{?]*)?',
+          },
+        ],
+      },
+      "where outbound URLs are written is project-specific; set the patterns that capture each host and path",
+    ),
+    disabled(
       "behaviour",
       {
         start: { run: "./scripts/start-integration-stack.sh" },
