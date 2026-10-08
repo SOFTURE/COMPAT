@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SQL_DIALECTS } from "../../sql/statements.js";
+import { preconditionsSchema } from "./preconditions.js";
 
 const DEFAULT_INCLUDE = ["**/*.sql"];
 export const DEFAULT_HISTORY_TABLE = "__EFMigrationsHistory";
@@ -41,6 +42,7 @@ const common = {
   name: z.string().regex(/^[A-Za-z0-9._-]+$/, "use letters, digits, '.', '_' or '-'"),
   dialect: z.enum(SQL_DIALECTS),
   accept: z.array(acceptEntrySchema).optional(),
+  preconditions: preconditionsSchema.optional(),
 };
 
 export const sourceSchema = z.discriminatedUnion("kind", [

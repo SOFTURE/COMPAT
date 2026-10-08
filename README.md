@@ -558,7 +558,8 @@ that the base already had and the revision edits is `migration-modified`, one th
       "kind": "ef-script",
       "path": "src/Db/Scripts/migrations.sql",
       "historyTable": "__EFMigrationsHistory",
-      "accept": [{ "id": "insert-explicit-id", "migration": "20261005073152_AddMissingPetBreeds", "object": "Breeds", "reason": "production max(Id) is 417" }]
+      "preconditions": { "run": "scripts/prod-max-ids.sh", "timeoutSeconds": 60 },
+      "accept": [{ "id": "update-data", "migration": "20261005073152_AddMissingPetBreeds", "object": "Breeds", "reason": "backfill, old builds ignore the column" }]
     }
   ]
 }
@@ -571,6 +572,7 @@ that the base already had and the revision edits is `migration-modified`, one th
 | `kind: "folder"` | every file under `path` matching `include` (default `["**/*.sql"]`) is one migration, identified by its path relative to `path` |
 | `kind: "ef-script"` | `path` is an EF Core idempotent script (`dotnet ef migrations script --idempotent`); each `MigrationId` guard block is one migration. `historyTable` defaults to `__EFMigrationsHistory` |
 | `accept[]` | `{ id, migration, object?, reason }`; `migration` is the EF migration id or the file path relative to the folder; `object` is `table` or `table.column` as the report shows it |
+| `preconditions` | optional `{ run, timeoutSeconds? }`: a command that answers `insert-explicit-id` with production `max(id)` (below) |
 
 Rules and classes:
 
@@ -586,6 +588,26 @@ range and the precondition (for example "production `max(Id) < 418`"). When the 
 table's identity sequence past those ids (`setval(...)` with `MAX(...)` or a higher literal, `ALTER SEQUENCE ...
 RESTART WITH n`, `ALTER TABLE ... ALTER COLUMN ... RESTART WITH n`), the sequence half of the precondition is
 dropped and that statement is added as evidence.
+
+`preconditions` settles that precondition with a command you own, so nobody runs the query by hand or keeps a
+stale number in an `accept` reason. It runs once per source, in the repository's working directory (not a
+checked-out ref), and only when an `insert-explicit-id` finding with integer ids exists. `COMPAT_TABLES` holds the
+tables, one per line as the report shows them (`dictionaries.PetBreeds`); the command prints `table<TAB>maxId`
+lines, an empty or `NULL` max meaning an empty table. Nothing else from the output is kept or printed.
+
+```sh
+#!/usr/bin/env bash
+# scripts/prod-max-ids.sh
+while read -r table; do
+  printf '%s\t%s\n' "$table" "$(psql "$PROD_READONLY_URL" -At -c "SELECT max(\"Id\") FROM $table")"
+done <<< "$COMPAT_TABLES"
+```
+
+A max below the first inserted id adds `production max(Id) = 417 < 418 (preconditions command)` and turns the
+finding `safe` when the migration also moves the identity sequence (otherwise it stays `needs-action` for the
+sequence half); a max at or above it turns the finding `breaking` (the insert collides). A table missing from the
+output keeps its class with a note; a failing command adds a note and changes nothing. `timeoutSeconds` defaults
+to 60.
 
 ### seed
 
