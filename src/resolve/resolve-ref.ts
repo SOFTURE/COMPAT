@@ -10,6 +10,9 @@ export type ResolvedRef = { ref: string; commit?: string; resolver?: string };
 
 export type ResolveRefOptions = { repoDir: string; env: NodeJS.ProcessEnv; fetch?: FetchFn };
 
+/** A lookup that ran and found nothing (no deployment, run or tag yet), with the reason; not an error. */
+export type NothingFound = { nothingFound: string };
+
 const DEPLOYMENTS_PAGE_SIZE = 100;
 const RUNS_PAGE_SIZE = 100;
 const RUNS_MAX_PAGES = 10;
@@ -24,7 +27,10 @@ const workflowRunsSchema = z.object({
   ),
 });
 
-async function resolveDeployment(context: GitHubContext, environment: string): Promise<Result<ResolvedRef>> {
+async function resolveDeployment(
+  context: GitHubContext,
+  environment: string,
+): Promise<Result<ResolvedRef | NothingFound>> {
   const deployments = await getRepoJson(
     context,
     `/deployments?environment=${encodeURIComponent(environment)}&per_page=${DEPLOYMENTS_PAGE_SIZE}`,
@@ -41,14 +47,18 @@ async function resolveDeployment(context: GitHubContext, environment: string): P
     if (!statuses.ok) return statuses;
     if (statuses.value[0]?.state === "success") return ok({ ref: deployment.ref, commit: deployment.sha });
   }
-  return err(
-    deployments.value.length === 0
-      ? `no deployment to environment "${environment}" in ${context.owner}/${context.repo}`
-      : `none of the newest ${deployments.value.length} deployments to environment "${environment}" in ${context.owner}/${context.repo} is currently successful`,
-  );
+  return ok({
+    nothingFound:
+      deployments.value.length === 0
+        ? `no deployment to environment "${environment}" in ${context.owner}/${context.repo}`
+        : `none of the newest ${deployments.value.length} deployments to environment "${environment}" in ${context.owner}/${context.repo} is currently successful`,
+  });
 }
 
-async function resolveWorkflow(context: GitHubContext, workflow: string): Promise<Result<ResolvedRef>> {
+async function resolveWorkflow(
+  context: GitHubContext,
+  workflow: string,
+): Promise<Result<ResolvedRef | NothingFound>> {
   const runs = await getRepoJson(
     context,
     `/actions/workflows/${encodeURIComponent(workflow)}/runs?status=success&per_page=1`,
@@ -56,12 +66,18 @@ async function resolveWorkflow(context: GitHubContext, workflow: string): Promis
   );
   if (!runs.ok) return runs;
   const run = runs.value.workflow_runs[0];
-  if (run === undefined)
-    return err(`no successful run of workflow "${workflow}" in ${context.owner}/${context.repo}`);
+  if (run === undefined) {
+    return ok({
+      nothingFound: `no successful run of workflow "${workflow}" in ${context.owner}/${context.repo}`,
+    });
+  }
   return ok({ ref: run.head_branch || run.head_sha, commit: run.head_sha });
 }
 
-async function resolveLatestTag(repoDir: string, glob: string | undefined): Promise<Result<ResolvedRef>> {
+async function resolveLatestTag(
+  repoDir: string,
+  glob: string | undefined,
+): Promise<Result<ResolvedRef | NothingFound>> {
   const result = await runProcess({
     command: "git",
     args: ["tag", "--list", "--sort=-v:refname", ...(glob === undefined ? [] : [glob])],
@@ -71,11 +87,12 @@ async function resolveLatestTag(repoDir: string, glob: string | undefined): Prom
   if (!result.ok || result.value.exitCode !== 0) return err(`git tag --list failed in ${repoDir}`);
   const tag = result.value.stdout.split("\n").find((line) => line.trim() !== "");
   if (tag === undefined) {
-    return err(
-      glob === undefined
-        ? `no tag in ${repoDir}; fetch tags (actions/checkout with fetch-depth: 0)`
-        : `no tag matches "${glob}" in ${repoDir}; fetch tags (actions/checkout with fetch-depth: 0)`,
-    );
+    return ok({
+      nothingFound:
+        glob === undefined
+          ? `no tag in ${repoDir}; fetch tags (actions/checkout with fetch-depth: 0)`
+          : `no tag matches "${glob}" in ${repoDir}; fetch tags (actions/checkout with fetch-depth: 0)`,
+    });
   }
   return ok({ ref: tag.trim() });
 }
@@ -85,17 +102,31 @@ export async function resolveRefSpec(
   spec: RefSpec,
   options: ResolveRefOptions,
 ): Promise<Result<ResolvedRef>> {
+  const found = await findRefSpec(spec, options);
+  if (!found.ok) return found;
+  if ("nothingFound" in found.value) {
+    return err(`cannot resolve ${formatRefSpec(spec)}: ${found.value.nothingFound}`);
+  }
+  return ok(found.value);
+}
+
+/** Like `resolveRefSpec`, but a resolver that ran and found nothing returns the reason instead of an error. */
+export async function findRefSpec(
+  spec: RefSpec,
+  options: ResolveRefOptions,
+): Promise<Result<ResolvedRef | NothingFound>> {
   if (spec.kind === "literal") return ok({ ref: spec.ref });
   const resolver = formatRefSpec(spec);
   const resolved = await resolveWith(spec, options);
   if (!resolved.ok) return err(`cannot resolve ${resolver}: ${resolved.error}`);
+  if ("nothingFound" in resolved.value) return resolved;
   return ok({ ...resolved.value, resolver });
 }
 
 async function resolveWith(
   spec: Exclude<RefSpec, { kind: "literal" }>,
   options: ResolveRefOptions,
-): Promise<Result<ResolvedRef>> {
+): Promise<Result<ResolvedRef | NothingFound>> {
   if (spec.kind === "latest-tag") {
     if (spec.glob === "") return err("a tag glob is required after the colon");
     return resolveLatestTag(options.repoDir, spec.glob);
@@ -123,7 +154,7 @@ export type WorkflowRunsOptions = { workflow: string; since?: string };
 export async function resolveWorkflowRuns(
   { workflow, since }: WorkflowRunsOptions,
   options: ResolveRefOptions,
-): Promise<Result<ResolvedRef[]>> {
+): Promise<Result<ResolvedRef[] | NothingFound>> {
   if (workflow === "") return err("a workflow file is required");
   const sinceDate = since !== undefined && DATE_PATTERN.test(since) ? since : undefined;
   const sinceVersion = sinceDate === undefined ? since : undefined;
@@ -154,9 +185,9 @@ export async function resolveWorkflowRuns(
   if (!selected.ok) return err(`${selected.error} and is not a date (YYYY-MM-DD)`);
   if (selected.value.length === 0) {
     const scope = since === undefined ? "" : ` since ${since}`;
-    return err(
-      `no successful run of workflow "${workflow}"${scope} in ${context.value.owner}/${context.value.repo}`,
-    );
+    return ok({
+      nothingFound: `no successful run of workflow "${workflow}"${scope} in ${context.value.owner}/${context.value.repo}`,
+    });
   }
   // Every selected label is a key of `commits`.
   return ok(selected.value.map((ref) => ({ ref, commit: commits.get(ref) as string })));

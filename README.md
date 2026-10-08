@@ -413,8 +413,11 @@ An entry of `refs` is one of:
 | `{ "easUpdates": { "run": "<command>", "timeoutSeconds"?: <n> } }` | the over-the-air updates the command prints, one `commit<TAB>label[<TAB>dirty]` line each: every distinct commit becomes the ref `ota:<label>` (see below) |
 | `{ "ref": "<ref or resolver>" }` | the same as the plain string; use it to add `optional` |
 
-Every object entry takes `"optional": true`: when it resolves to nothing (no run yet, no update, a failing command),
-the layer adds a note naming it instead of failing. A list where no entry resolves still fails.
+Every object entry takes `"optional": true`: when it resolves to nothing (no successful run, no matching tag or
+deployment, an `easUpdates` command that exits 0 and prints no line), the layer adds a note naming it instead of
+failing, e.g. `optional entry easUpdates resolved to nothing: the command exited 0 and printed no update`. A resolver
+that fails still fails the layer, optional or not: a GitHub API error, or a command that exits non-zero, times out or
+prints a malformed line. A list where no entry resolves still fails.
 
 For a mobile client built by a workflow on its tags, `{ "workflowRuns": "eas-prod.yml", "since": "2.0.1" }` lists
 exactly the shipped builds, even when server tags are interleaved with them. The GitHub entries use the token and
@@ -424,20 +427,27 @@ resolved to, e.g. `client "mobile": workflowRuns:eas-prod.yml since 2.0.1 → 2.
 
 With an over-the-air channel (Expo EAS Update, CodePush), an installed build runs the newest update published to its
 channel and runtime version, not the code of the build's commit. List the updates next to the builds, so a call kept
-only by an OTA bundle keeps its class. The command runs in the repository with the check's environment, so the tool
-itself needs no Expo token; for example (check the JSON fields against your `eas-cli` version):
+only by an OTA bundle keeps its class. The command runs in the repository root with the check's environment, so the
+tool itself needs no Expo token, but the CI step does (`EXPO_TOKEN`). With Expo EAS Update, `eas branch:list --json`
+lists each branch's live updates with their `gitCommitHash` (`eas update:list --json` does not carry the commit). In a
+monorepo, `cd` into the Expo app first:
 
 ```json
 "refs": [
   { "workflowRuns": "eas-prod.yml", "since": "2.0.1" },
   {
     "easUpdates": {
-      "run": "eas update:list --branch production --json --non-interactive | jq -r '.currentPage[] | [.gitCommitHash, .group, (if .isGitWorkingTreeDirty then \"dirty\" else \"\" end)] | @tsv'"
+      "run": "cd apps/mobile && branches=$(eas branch:list --json --non-interactive) && printf '%s' \"$branches\" | jq -r '.[] | select(.name == \"production\") | .updates[] | [.gitCommitHash, (.runtimeVersion + \"-\" + .platform), (if .isGitWorkingTreeDirty then \"dirty\" else \"\" end)] | @tsv'"
     },
     "optional": true
   }
 ]
 ```
+
+The command runs in `sh`, so a failing `eas` call has to stop it before `jq`, which would otherwise exit 0 on empty
+input and hide the error: the example captures the JSON first and pipes it only after `eas` succeeded (in a `bash`
+script, `set -o pipefail` does the same). A branch with no update yet then prints nothing, which `optional` turns into
+a note; a missing token or a changed JSON shape fails the layer. Check the JSON fields against your `eas-cli` version.
 
 An update marked `dirty` adds a note: its commit only approximates the bundle. Each OTA commit must be in the clone,
 like any other client ref.

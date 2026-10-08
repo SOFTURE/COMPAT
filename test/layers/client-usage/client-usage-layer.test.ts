@@ -179,7 +179,7 @@ describe("client-usage layer", () => {
     expect(output.status === "failed" ? output.error : output.status).toBe("ran");
     expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
       'client "mobile" (API "b2c"): mobile@app-1; 1 operation(s) read',
-      'client "mobile": optional entry skipped: cannot resolve workflowRuns:build.yml: no successful run of workflow "build.yml" in acme/shop',
+      'client "mobile": optional entry workflowRuns:build.yml resolved to nothing: no successful run of workflow "build.yml" in acme/shop',
     ]);
   });
 
@@ -245,7 +245,7 @@ describe("client-usage layer", () => {
     [{ sources: ["web/**/*.ts"] }, 'client "mobile": app-1: sources web/**/*.ts match no file'],
     [
       { refs: { tags: "web-*" } },
-      'client "mobile": no local tag matches web-*; fetch tags (actions/checkout with fetch-depth: 0)',
+      'client "mobile": cannot resolve tags:web-*: no local tag matches web-*; fetch tags (actions/checkout with fetch-depth: 0)',
     ],
   ])("fails and revises nothing for %j", async (client, error) => {
     const output = await run(client);
