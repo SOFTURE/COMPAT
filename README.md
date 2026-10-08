@@ -16,6 +16,7 @@ It works only from git. It never connects to a production server or database.
 | [`persisted-enums`](#persisted-enums) | enums stored in the database as strings or numbers (C# and TypeScript) |
 | [`config`](#config) | configuration keys a release needs (compose interpolation, `.env` examples, your own patterns) |
 | [`dependencies`](#dependencies) | runtime package versions (NuGet, npm), classified by semver |
+| [`outbound`](#outbound) | external API hosts and paths the revision starts calling, which production must allow |
 | [`message-contracts`](#message-contracts) | C# message contracts (types, wire properties, enums) and queue names, for messages in flight |
 | [`behaviour`](#behaviour) | the base ref's black-box tests, run against the revision's running stack |
 
@@ -928,6 +929,50 @@ Names in both are globs (`*`, `?`, `{a,b}`) matched case-insensitively. `accept[
 | `dependency-changed` | `needs-action`: the declared version is not a version number at one ref (`latest`, a git URL, an unresolved `$(Property)`, named with the imports that were not followed) |
 | `dependency-added` | `safe` |
 | `dependency-removed` | `safe` |
+### outbound
+
+A release that starts calling a new endpoint of a third-party API with a credential production already has changes
+no contract of ours and adds no configuration key, yet it fails in production when the key does not allow that API
+(an API not enabled for the key, key restrictions, quotas, egress or firewall rules). This layer reads the outbound
+targets you declare at both refs and reports the ones new in the revision, so someone checks production before the
+deploy. It does not prove that the call works.
+
+```json
+{
+  "targets": [
+    {
+      "name": "google-maps",
+      "files": ["src/**/Google*.cs"],
+      "pattern": "GetStringAsync\\(\\$?\"(?<path>[^\"]*)\"",
+      "host": "maps.googleapis.com/maps/api"
+    },
+    { "name": "absolute", "files": ["src/**/*.cs"], "pattern": "\"(?<host>https://[\\w.-]+)(?<path>/[^\"?{]*)" }
+  ],
+  "accept": [{ "target": "maps.googleapis.com/maps/api/geocode/**", "reason": "Geocoding API enabled on the prod key" }]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `targets[]` | `{ name, files, pattern, flags?, host? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
+| `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; a `path` that is an absolute URL is used as it is |
+| `flags` | regex flags out of `i`, `m`, `s`, `u` |
+| `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment) |
+
+A target is compared as `host/path`: without the scheme, the query string and the fragment, with a lower-case host
+and no trailing slash, so `https://Maps.googleapis.com/maps/api/geocode/json?address={address}` reads as
+`maps.googleapis.com/maps/api/geocode/json`. Targets are compared across all sources, so a call moved from one file or
+source to another gives no finding.
+
+| Class | Finding ids |
+| --- | --- |
+| `safe` | `outbound-removed`: a target called at the base and no longer at the revision |
+| `needs-action` | `outbound-added`: a target the revision calls and the base does not; the evidence points at its first capture |
+
+The layer fails closed and then reports no finding: a source that matches no file or captures no target at the
+revision fails the layer. Every accept entry is noted with the number of findings it accepted, or as unused when it
+matched none.
+
 ### message-contracts
 
 Messages that wait in a broker queue during a deploy are produced by one build and consumed by the other. The layer

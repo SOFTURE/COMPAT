@@ -6,6 +6,7 @@ import { errorCodesLayer } from "./error-codes/error-codes-layer.js";
 import type { Layer } from "./layer.js";
 import { messageContractsLayer } from "./message-contracts/message-contracts-layer.js";
 import { openapiLayer } from "./openapi/openapi-layer.js";
+import { outboundLayer } from "./outbound/outbound-layer.js";
 import { persistedEnumsLayer } from "./persisted-enums/persisted-enums-layer.js";
 import { seedLayer } from "./seed/seed-layer.js";
 import { sqlMigrationsLayer } from "./sql-migrations/sql-migrations-layer.js";
@@ -22,6 +23,7 @@ export const LAYERS: Layer[] = [
   errorCodesLayer,
   configLayer,
   dependenciesLayer,
+  outboundLayer,
   messageContractsLayer,
   behaviourLayer,
 ];
