@@ -978,12 +978,13 @@ deploy. It does not prove that the call works.
 | Key | Meaning |
 | --- | --- |
 | `targets[]` | `{ name, files, pattern, flags?, host? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
-| `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; a `path` that is an absolute URL is used as it is |
+| `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; it is a base with a trailing slash, so `../geocode/json` against `maps.googleapis.com/maps/api/place` reads as `maps.googleapis.com/maps/api/geocode/json`; a `path` that is an absolute URL is used as it is |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
 | `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment) |
 
 A target is compared as `host/path`: without the scheme, the query string and the fragment, with a lower-case host
-and no trailing slash, so `https://Maps.googleapis.com/maps/api/geocode/json?address={address}` reads as
+and no trailing slash, and with `.` and `..` segments resolved as RFC 3986 does, so
+`https://Maps.googleapis.com/maps/api/place/../geocode/json?address={address}` reads as
 `maps.googleapis.com/maps/api/geocode/json`. Targets are compared across all sources, so a call moved from one file or
 source to another gives no finding.
 
@@ -993,7 +994,7 @@ source to another gives no finding.
 | `needs-action` | `outbound-added`: a target the revision calls and the base does not; the evidence points at its first capture |
 
 The layer fails closed and then reports no finding: a source that matches no file or captures no target at the
-revision fails the layer. Every accept entry is noted with the number of findings it accepted, or as unused when it
+revision fails the layer, and so does a target whose `..` segments climb above its host. Every accept entry is noted with the number of findings it accepted, or as unused when it
 matched none.
 
 ### message-contracts

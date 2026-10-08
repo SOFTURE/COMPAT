@@ -145,6 +145,20 @@ describe("outbound layer", () => {
     });
   });
 
+  it("fails the source whose relative path climbs above its host", async () => {
+    const result = await run({
+      targets: [{ ...targets[0], name: "climbing", host: "maps.googleapis.com/.." }],
+    });
+    expect(result).toEqual({
+      layer: "outbound",
+      status: "failed",
+      error:
+        'target source "climbing": src/Places.cs at 2.2.4: line 2: target "maps.googleapis.com/../place/findplacefromtext/json?input={q}" climbs above its host maps.googleapis.com',
+      findings: [],
+      notes: [],
+    });
+  });
+
   it("rejects a config whose pattern has no host or path group and duplicate source names", () => {
     const parsed = outboundLayer.configSchema.safeParse({
       targets: [

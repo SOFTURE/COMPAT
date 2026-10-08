@@ -70,7 +70,9 @@ async function readTree(
   for (const path of files.value) {
     const text = await tree.readFile(path);
     if (!text.ok) return err(`cannot read ${path} at ${tree.ref}: ${text.error}`);
-    for (const { target, line } of readTargets(text.value ?? "", regex, source.host)) {
+    const occurrences = readTargets(text.value ?? "", regex, source.host);
+    if (!occurrences.ok) return err(`${path} at ${tree.ref}: ${occurrences.error}`);
+    for (const { target, line } of occurrences.value) {
       if (targets.has(target)) continue;
       targets.set(target, {
         source: source.name,
