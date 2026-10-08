@@ -222,6 +222,24 @@ describe("config layer", () => {
   });
 });
 
+describe("config layer watch (issue #103)", () => {
+  it("raises a watched key added with a default and prints its defaults at both refs", async () => {
+    const result = await run({
+      sources: [{ kind: "compose" }],
+      watch: [{ key: "prod_*", class: "needs-action", reason: "changes how production runs" }],
+    });
+    if (result.status !== "ran") throw new Error(result.status);
+    expect(result.findings.find((f) => f.subject === "PROD_ONLY")).toMatchObject({
+      id: "config-key-added-optional",
+      class: "needs-action",
+      message: expect.stringMatching(
+        /; watched key \(prod_\*\): changes how production runs; default absent → "x"$/,
+      ),
+    });
+    expect(result.findings.find((f) => f.subject === "NEW")?.message).not.toMatch(/watched/);
+  });
+});
+
 describe("config layer key normalization (issue #18)", () => {
   let shopRepo: TestRepo;
   let shopBase: RefTree;

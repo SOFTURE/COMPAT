@@ -126,6 +126,21 @@ describe("config layer schema", () => {
     expect(issues({ sources: [regexSource, { ...regexSource }] })).toHaveLength(1);
   });
 
+  it("accepts watch entries with a class and rejects one without a class or with an unknown class", () => {
+    expect(
+      issues({
+        sources: [{ kind: "compose" }],
+        watch: [{ key: "RABBIT_*", class: "needs-action", reason: "x" }],
+      }),
+    ).toEqual([]);
+    expect(issues({ sources: [{ kind: "compose" }], watch: [{ key: "A" }] })).toEqual([
+      expect.stringMatching(/^watch\.0\.class: /),
+    ]);
+    expect(issues({ sources: [{ kind: "compose" }], watch: [{ key: "A", class: "fatal" }] })).toEqual([
+      expect.stringMatching(/^watch\.0\.class: /),
+    ]);
+  });
+
   it("rejects an accept entry with an unknown or missing id, or without a reason", () => {
     expect(issues({ sources: [{ kind: "compose" }], accept: [{ key: "A", reason: "x" }] })).toEqual([
       expect.stringMatching(/^accept\.0\.id: /),

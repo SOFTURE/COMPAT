@@ -24,6 +24,7 @@ import { scanAppsettingsSource } from "./scan-appsettings-source.js";
 import { scanCompose } from "./scan-compose.js";
 import { scanDotenv } from "./scan-dotenv.js";
 import { scanRegex } from "./scan-regex.js";
+import { applyWatch } from "./watch.js";
 
 export type SourceScan = { index: KeyIndex; files: string[] };
 
@@ -75,9 +76,16 @@ export const configLayer = defineLayer({
       identify,
       notes,
     });
+    // After presence, so a watched key a production value resolves still reports its behaviour change.
+    const watched = applyWatch(resolved, {
+      watch: context.config.watch ?? [],
+      matching: context.config.keyMatching,
+      base,
+      revision,
+    });
     const acceptEntries = context.config.accept ?? [];
     const { findings, usage } = applyAccept(
-      resolved,
+      watched,
       acceptEntries.filter((entry) => "id" in entry),
       identify,
     );

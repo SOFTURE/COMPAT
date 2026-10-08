@@ -235,7 +235,7 @@ function getVerdictClass(verdict: MergedVerdict): FindingClass {
  * Compares the keys of both refs; the subject of a finding is the key identity. Each comparison unit is classified on its own, so one source
  * or file cannot mask a change in another; sources that reach the same verdict for a key share one finding, and
  * a key gets only the findings of its most severe class.
- * Messages never carry default values, which may be secrets.
+ * Messages never carry default values, which may be secrets; only `watch` prints those of watched keys.
  */
 export function classifyKeys({
   base,

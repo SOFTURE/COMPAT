@@ -789,8 +789,20 @@ Keys are normalized before they are compared (`"keyMatching": "normalized"`, the
 the normalized key, every source that reads it, and the original spellings when they differ.
 `"keyMatching": "exact"` compares keys as written. `accept[].key` may use any spelling.
 Keys are compared file by file for files present at both refs. A source fails the layer when it matches no file,
-loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed.
+loses its files or all its keys in the revision, or (dotenv and regex) finds no key. Default values are never printed,
+except for watched keys.
 `accept[]` entries are `{ key, id, reason }`.
+
+`watch[]` entries are `{ key, class, reason? }` for operational keys whose value changes how production runs, such as
+consumer throughput or a retry policy. A watched key that is added, removed or whose default changed gets at least
+`class` instead of `safe`, and the finding prints `reason` and the defaults at both refs
+(`default absent → "1"`), so a hard-coded value moved into configuration with a different value is visible. A watched
+key is declared non-secret by listing it. `key` may use any spelling and is normalized like other keys; `*` matches
+any run of characters and `?` one character.
+
+```json
+"watch": [{ "key": "Consumers:*", "class": "needs-action", "reason": "consumer throughput and retry policy" }]
+```
 
 `chains` compares sources with each other in the revision: in a chain, every key present in one source must be
 present in all the others (matched after normalization), so a key added to `deploy-dev` but not to `deploy-prod`,
