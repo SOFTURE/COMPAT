@@ -244,6 +244,62 @@ const onSubmit = async (data: MedicationFormData) => {
       );
     });
 
+    describe("derived from another schema const (issue #92)", () => {
+      const derived = (chain: string, side = "output") =>
+        source(
+          `
+import { z } from "zod";
+export const medicationObjectSchema = z.object({
+  days: z.array(z.string()).default([]),
+});
+${chain}
+export type MedicationFormData = z.${side}<typeof medicationSchema>;`,
+          "schemas/medication.schema.ts",
+        );
+      const stopped = stop(`cannot prove data.frequencyMode === "weekdays" ? data.days : [] non-null`, 3);
+
+      it.each([
+        [
+          "one refinement",
+          "export const medicationSchema = medicationObjectSchema.superRefine((data, ctx) => {});",
+        ],
+        [
+          "two hops",
+          `const refinedSchema = medicationObjectSchema.refine((data) => true);
+export const medicationSchema = refinedSchema.superRefine((data, ctx) => {});`,
+        ],
+      ])("proves a member read through %s", (_, chain) => {
+        expect(find(derived(chain), screen)).toEqual(ok([{ path: "app/medications.ts", line: 3 }]));
+      });
+
+      it.each([
+        ["a partial schema", "export const medicationSchema = medicationObjectSchema.partial();", "output"],
+        [
+          "an extended schema",
+          "export const medicationSchema = medicationObjectSchema.extend({});",
+          "output",
+        ],
+        [
+          "a call on the base",
+          "export const medicationSchema = medicationObjectSchema.superRefine(check)(x);",
+          "output",
+        ],
+        [
+          "z.input and a default",
+          "export const medicationSchema = medicationObjectSchema.superRefine(check);",
+          "input",
+        ],
+        [
+          "a cycle",
+          `const medicationSchema = otherSchema.refine(check);
+const otherSchema = medicationSchema.refine(check);`,
+          "output",
+        ],
+      ])("stops on %s", (_, chain, side) => {
+        expect(find(derived(chain, side), screen)).toEqual(stopped);
+      });
+    });
+
     it("stops when the schema spreads another shape", () => {
       const spread = schema("z.array(z.string()), ...base.shape");
       expect(find(spread, screen)).toEqual(
