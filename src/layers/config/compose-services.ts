@@ -1,7 +1,10 @@
 import { getIndent, isBlank, maskYamlComments } from "./yaml-text.js";
 
-/** A key a compose service sets in its `environment`, with the 1-based line of the entry. */
-export type ServiceVariable = { key: string; line: number };
+/**
+ * A key a compose service sets in its `environment`, with the 1-based line of the entry and the value as
+ * written (`${SHOP_BASE_URL}`), or `null` for a pass-through entry (`- KEY`, `KEY:`).
+ */
+export type ServiceVariable = { key: string; line: number; value: string | null };
 
 const KEY_LINE = /^( *)(?:"([^"]*)"|'([^']*)'|([^\s#'"-][^:#]*?))[ \t]*:(?:[ \t]+(.*?))?[ \t\r]*$/;
 
@@ -72,8 +75,8 @@ function readBlock(
     if (indent < parentIndent || (indent === parentIndent && !isItem)) break;
     childIndent ??= indent;
     if (indent !== childIndent) continue;
-    const key = isItem ? getEntryKey(line.slice(indent + 2)) : getMappingKey(line);
-    if (key !== null) variables.push({ key, line: index + 1 });
+    const entry = isItem ? readEntry(line.slice(indent + 2)) : readMappingEntry(line);
+    if (entry !== null) variables.push({ ...entry, line: index + 1 });
   }
   return variables;
 }
@@ -85,25 +88,39 @@ function readFlow(text: string, line: number): ServiceVariable[] {
   return text
     .slice(1, text.lastIndexOf(isMapping ? "}" : "]"))
     .split(",")
-    .map((entry) => (isMapping ? getFlowMappingKey(entry) : getEntryKey(entry)))
-    .filter((key): key is string => key !== null)
-    .map((key) => ({ key, line }));
+    .map((entry) => (isMapping ? readFlowMappingEntry(entry) : readEntry(entry)))
+    .filter((entry): entry is EntryText => entry !== null)
+    .map((entry) => ({ ...entry, line }));
 }
 
-/** The key of a sequence entry `KEY=value`, `KEY` or a quoted form. */
-function getEntryKey(entry: string): string | null {
-  const key = unquote(entry.trim()).split("=")[0]?.trim() ?? "";
-  return /^[A-Za-z_][\w.:-]*$/.test(key) ? key : null;
+type EntryText = { key: string; value: string | null };
+
+/** A sequence entry `KEY=value`, `KEY` or a quoted form. */
+function readEntry(entry: string): EntryText | null {
+  const text = unquote(entry.trim());
+  const separator = text.indexOf("=");
+  const key = (separator === -1 ? text : text.slice(0, separator)).trim();
+  if (!/^[A-Za-z_][\w.:-]*$/.test(key)) return null;
+  return { key, value: separator === -1 ? null : text.slice(separator + 1).trim() };
 }
 
-function getMappingKey(line: string): string | null {
+function readMappingEntry(line: string): EntryText | null {
   const match = KEY_LINE.exec(line);
-  return match === null ? null : (match[2] ?? match[3] ?? match[4] ?? "").trim() || null;
+  const key = match === null ? "" : (match[2] ?? match[3] ?? match[4] ?? "").trim();
+  return key === "" ? null : { key, value: readScalar(match?.[5]) };
 }
 
-function getFlowMappingKey(entry: string): string | null {
-  const key = unquote(entry.split(":")[0]?.trim() ?? "");
-  return key === "" ? null : key;
+function readFlowMappingEntry(entry: string): EntryText | null {
+  const separator = entry.indexOf(":");
+  const key = unquote((separator === -1 ? entry : entry.slice(0, separator)).trim());
+  if (key === "") return null;
+  return { key, value: separator === -1 ? null : readScalar(entry.slice(separator + 1)) };
+}
+
+/** A mapping value as written, unquoted; an empty or null value is `null`. */
+function readScalar(text: string | undefined): string | null {
+  const value = unquote((text ?? "").trim());
+  return /^(?:~|null|Null|NULL)?$/.test(value) ? null : value;
 }
 
 function unquote(text: string): string {
