@@ -55,7 +55,7 @@ function run(config: Record<string, unknown>, env: NodeJS.ProcessEnv = {}): Prom
   });
 }
 
-const FAKE_NOTE = `oasdiff oasdiff version fake at ${FAKE_OASDIFF} (from layers.openapi.oasdiff.path)`;
+const FAKE_NOTE = `oasdiff fake at ${FAKE_OASDIFF} (from layers.openapi.oasdiff.path)`;
 
 const changes = (items: object[]) => ({
   FAKE_OASDIFF_MODE: "changes",
@@ -135,7 +135,7 @@ describe("openapi layer", () => {
       layer: "openapi",
       status: "ran",
       findings: [],
-      notes: [`oasdiff oasdiff version fake at ${FAKE_OASDIFF} (from SOFTURE_COMPAT_OASDIFF)`],
+      notes: [`oasdiff fake at ${FAKE_OASDIFF} (from SOFTURE_COMPAT_OASDIFF)`],
     });
   });
 
@@ -443,7 +443,7 @@ describe("openapi layer without oasdiff on PATH", () => {
       layer: "openapi",
       status: "ran",
       findings: [],
-      notes: [`oasdiff oasdiff version fake at ${cached} (pinned release from the cache)`],
+      notes: [`oasdiff fake at ${cached} (pinned release from the cache)`],
     });
     expect(fetchSpy).not.toHaveBeenCalled();
   });

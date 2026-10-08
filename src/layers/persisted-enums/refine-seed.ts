@@ -44,6 +44,9 @@ export function refineSeedFindings(
   const revisions: FindingRevision[] = [];
   for (const { index, finding, members } of matches) {
     const reason = `writes ${describeMembers(members)}, new in the revision`;
+    // One member names what the row is about; with several, the seed finding stands on its own.
+    const [only] = members;
+    const topic = members.length === 1 && only !== undefined ? findings[only.index]?.subject : undefined;
     revisions.push({
       layer: SEED_LAYER,
       index,
@@ -57,6 +60,7 @@ export function refineSeedFindings(
           ...members.flatMap((member) => findings[member.index]?.evidence.slice(0, 1) ?? []),
         ],
         reclassified: { from: finding.class, by: PERSISTED_ENUMS_LAYER, reason },
+        ...(topic === undefined ? {} : { topic }),
       },
     });
   }

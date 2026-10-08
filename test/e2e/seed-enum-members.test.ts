@@ -27,6 +27,7 @@ type JsonFinding = {
   message: string;
   evidence: { side: string; path: string; line?: number }[];
   reclassified?: { from: string; by: string; reason: string };
+  topic?: string;
 };
 type JsonLayer = { layer: string; status: string; findings: JsonFinding[] };
 
@@ -87,6 +88,7 @@ describe("seed rows that write a persisted-enum member new in the revision", () 
     expect(templates).toMatchObject({
       id: "row-added",
       class: "rollback-risk",
+      topic: "NotificationType.TermsChange",
       reclassified: {
         from: "safe",
         by: "persisted-enums",
@@ -109,6 +111,7 @@ describe("seed rows that write a persisted-enum member new in the revision", () 
     const banners = seedLayer.findings.find((finding) => finding.subject.includes("Banners"));
     expect(banners).toMatchObject({ id: "row-added", class: "safe" });
     expect(banners?.reclassified).toBeUndefined();
+    expect(banners?.topic).toBeUndefined();
   });
 
   it("says the seed writes the added member on deploy, with the seed row as evidence", async () => {
@@ -123,5 +126,14 @@ describe("seed rows that write a persisted-enum member new in the revision", () 
       expect.objectContaining({ side: "revision", path: ENUM_PATH, line: 5 }),
       expect.objectContaining({ side: "revision", path: SEED_PATH, line: 3 }),
     ]);
+  });
+
+  it("shows the seed row and the added member as one rollback-risk entry in the Markdown report", async () => {
+    const run = createIo(repo.dir);
+    await main(["check", "--base", "2.2.4", "--revision", "2.3.4", "--config", "compat.json"], run.io);
+    const markdown = run.stdout();
+    expect(markdown).toContain(
+      "## rollback-risk (1)\n\n- **NotificationType.TermsChange** (seed, persisted-enums)\n",
+    );
   });
 });
