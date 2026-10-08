@@ -1,3 +1,4 @@
+import { err, ok, type Result } from "../../result.js";
 import type { Token } from "../persisted-enums/tokenize.js";
 import {
   isPunctuation,
@@ -13,6 +14,9 @@ export type SourceFile = { path: string; text: string };
 
 /** Where a client builds the request body it sends. */
 export type SentSite = { path: string; line: number };
+
+/** Why the call sites could not be proven to always send the property, and where the reader stopped. */
+export type SentStop = { reason: string; site?: SentSite };
 
 export type SentQuery = {
   sources: readonly SourceFile[];
@@ -41,6 +45,19 @@ const DECLARE = new Set(["const", "let", "var"]);
 const CONVERSIONS = new Set(["as", "satisfies"]);
 /** Tokens after which `{` opens a type, not a function body: `(): { a: string } {`. */
 const TYPE_CONTINUES = new Set([":", "|", "&", "<", ",", "=>"]);
+/** Tokens before `name(...): T {` that make it a declaration, not a call followed by a `:`. */
+const DECLARATION_PREFIX = new Set([
+  "{",
+  "}",
+  ";",
+  "async",
+  "function",
+  "public",
+  "private",
+  "protected",
+  "static",
+  "override",
+]);
 
 const scans = new WeakMap<readonly SourceFile[], File[]>();
 
@@ -57,10 +74,11 @@ function scanSources(sources: readonly SourceFile[]): File[] {
  * The object literals a client's own code passes as the request body, when every one of them sets
  * the property to a value that cannot be `undefined` or `null`. A literal is the argument itself, a
  * `const` initialised with one, or one passed through a parameter of the enclosing function: a call of
- * that function, or `mutate`/`mutateAsync` of the hook that holds it as `mutationFn`. `undefined`
- * when any call, argument or value cannot be followed, so a resolver miss never proves "always sent".
+ * that function, or `mutate`/`mutateAsync` of the hook that holds it as `mutationFn`. When any call,
+ * argument or value cannot be followed, the first place the reader stopped, so a resolver miss never
+ * proves "always sent".
  */
-export function findSentLiterals(query: SentQuery): SentSite[] | undefined {
+export function findSentLiterals(query: SentQuery): Result<SentSite[], SentStop> {
   const files = scanSources(query.sources);
   const types = new Map(query.clientTypes);
   for (const file of files) {
@@ -68,21 +86,62 @@ export function findSentLiterals(query: SentQuery): SentSite[] | undefined {
   }
   const context: Context = { files, types };
   const calls = findCalls(context, query.functionName);
-  if (calls === undefined || calls.length === 0) return undefined;
+  if (!calls.ok) return calls;
+  if (calls.value.length === 0) return err({ reason: `no call of ${query.functionName} in sources` });
   const sites = new Map<string, SentSite>();
-  for (const call of calls) {
+  for (const call of calls.value) {
     const argument = readArguments(call)[query.bodyIndex];
-    if (argument === undefined) return undefined;
-    const literals = resolveLiterals(context, argument, 0);
-    if (literals === undefined) return undefined;
-    for (const literal of literals) {
+    if (argument === undefined) return stopAt(call, call.start, "cannot follow the body argument");
+    const literals = resolveLiterals(context, argument, 0, "the body argument");
+    if (!literals.ok) return literals;
+    for (const literal of literals.value) {
       const values = readPath(context, literal, query.memberPath);
-      if (values === undefined || !values.every((value) => isNonNullish(context, value))) return undefined;
-      const site = { path: literal.file.path, line: tokenAt(literal, literal.start).line };
+      if (!values.ok) return values;
+      const nullable = values.value.find((value) => !isNonNullish(context, value));
+      if (nullable !== undefined) {
+        return stopAt(nullable, nullable.start, `cannot prove ${formatExpression(nullable)} non-null`);
+      }
+      const site = toSite(literal, literal.start);
       sites.set(`${site.path}:${site.line}`, site);
     }
   }
-  return [...sites.values()];
+  return ok([...sites.values()]);
+}
+
+function toSite(range: { file: File }, index: number): SentSite {
+  return { path: range.file.path, line: tokenAt(range, index).line };
+}
+
+/** A stop at token `index`: `<reason> at <path>:<line>`. */
+function stopAt(range: { file: File }, index: number, reason: string): { ok: false; error: SentStop } {
+  const site = toSite(range, index);
+  return err({ reason: `${reason} at ${site.path}:${site.line}`, site });
+}
+
+/** The expression as source-like text: `data.daysOfWeek`, `a ?? undefined`. */
+function formatExpression(expression: Range): string {
+  const range = trim(expression);
+  let text = "";
+  for (let index = range.start; index < range.end; index++) {
+    const token = tokenAt(range, index);
+    const piece = token.kind === "string" ? JSON.stringify(token.text) : token.text;
+    if (text === "") {
+      text = piece;
+      continue;
+    }
+    const previous = tokenAt(range, index - 1);
+    // The tokenizer splits `??`, `||` and `===` into single characters.
+    const isOperatorPart =
+      token.kind === "punctuation" &&
+      previous.kind === "punctuation" &&
+      /^[?|&=]{2}$/.test(previous.text + piece);
+    const isTight =
+      isOperatorPart ||
+      [".", "?.", "!", ")", "]"].includes(piece) ||
+      [".", "?.", "(", "["].includes(previous.text);
+    text += isTight ? piece : ` ${piece}`;
+  }
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
 function tokenAt(range: { file: File }, index: number): Token {
@@ -93,8 +152,8 @@ function isIdentifier(token: Token | undefined, text?: string): boolean {
   return token?.kind === "identifier" && (text === undefined || token.text === text);
 }
 
-/** The `(` of every call of `name` in the sources; `undefined` when `name` is also used other than called. */
-function findCalls(context: Context, name: string, declared?: Range): Range[] | undefined {
+/** The `(` of every call of `name` in the sources; a stop where `name` is also used other than called. */
+function findCalls(context: Context, name: string, declared?: Range): Result<Range[], SentStop> {
   const calls: Range[] = [];
   for (const file of context.files) {
     const { tokens, match } = file.s;
@@ -103,18 +162,33 @@ function findCalls(context: Context, name: string, declared?: Range): Range[] | 
       if (declared?.file === file && declared.start === index) continue;
       if (isPunctuation(tokens[index + 1], "(")) {
         const close = match[index + 1] ?? -1;
-        const after = tokens[close + 1];
-        // `name(...) {` declares a method, it does not call one.
-        if (close >= 0 && !isPunctuation(after, "{") && !isPunctuation(after, "=>")) {
+        if (close >= 0 && !isDeclaration(file, index, close)) {
           calls.push({ file, start: index + 1, end: close + 1 });
           continue;
         }
+        // A declaration of `name` neither calls it nor passes it around.
+        if (close >= 0) continue;
       }
       if (isImported(file, index)) continue;
-      return undefined;
+      return stopAt({ file }, index, `${name} is used without a call`);
     }
   }
-  return calls;
+  return ok(calls);
+}
+
+/**
+ * `name(...) {`, `name(...) =>` and `name(...): T {` declare a function or method, they do not call
+ * one. The return type form counts only where a declaration can start, so `c ? f(x) : y` stays a call.
+ */
+function isDeclaration(file: File, nameIndex: number, close: number): boolean {
+  const { tokens } = file.s;
+  const after = tokens[close + 1];
+  if (isPunctuation(after, "{") || isPunctuation(after, "=>")) return true;
+  if (!isPunctuation(after, ":")) return false;
+  const before = tokens[nameIndex - 1];
+  const isMemberStart =
+    before === undefined || (before.kind !== "string" && DECLARATION_PREFIX.has(before.text));
+  return isMemberStart && readFunction(file, nameIndex + 1, close) !== undefined;
 }
 
 /** The identifier at `index` is a name in an `import { ... }` clause. */
@@ -179,42 +253,59 @@ function trim(range: Range): Range {
   }
 }
 
-/** The object literals an expression evaluates to, or `undefined` when it cannot be followed. */
-function resolveLiterals(context: Context, expression: Range, depth: number): Range[] | undefined {
+/** The object literals an expression evaluates to; `what` names it in the stop when it cannot be followed. */
+function resolveLiterals(
+  context: Context,
+  expression: Range,
+  depth: number,
+  what: string,
+): Result<Range[], SentStop> {
   const range = trim(expression);
   const { tokens, match } = range.file.s;
-  if (isPunctuation(tokens[range.start], "{") && match[range.start] === range.end - 1) return [range];
-  if (range.end - range.start !== 1 || !isIdentifier(tokens[range.start])) return undefined;
-  return resolveIdentifier(context, range, depth);
+  if (isPunctuation(tokens[range.start], "{") && match[range.start] === range.end - 1) return ok([range]);
+  if (range.end - range.start !== 1 || !isIdentifier(tokens[range.start])) {
+    return stopAt(range, range.start, `cannot follow ${what}`);
+  }
+  return resolveIdentifier(context, range, depth, what);
 }
 
-function resolveIdentifier(context: Context, at: Range, depth: number): Range[] | undefined {
+function resolveIdentifier(
+  context: Context,
+  at: Range,
+  depth: number,
+  what: string,
+): Result<Range[], SentStop> {
   const name = tokenAt(at, at.start).text;
   for (const node of findEnclosingFunctions(at.file, at.start)) {
     const binding = findBinding(at.file, node, name);
     if (binding === undefined) continue;
-    if (depth >= MAX_FORWARDING) return undefined;
+    const site = toSite(at, node.open);
+    const reason = `cannot follow ${name} past ${node.name ?? "an anonymous function"} (${site.path}:${site.line})`;
+    const stop = err({ reason, site });
+    if (depth >= MAX_FORWARDING) return stop;
     const callers = findCallers(context, at.file, node, binding.position);
-    if (callers === undefined || callers.length === 0) return undefined;
+    if (callers === undefined || (callers.ok && callers.value.length === 0)) return stop;
+    if (!callers.ok) return callers;
     const literals: Range[] = [];
-    for (const caller of callers) {
-      const resolved = resolveLiterals(context, caller, depth + 1);
-      if (resolved === undefined) return undefined;
-      for (const literal of resolved) {
+    for (const caller of callers.value) {
+      const resolved = resolveLiterals(context, caller, depth + 1, what);
+      if (!resolved.ok) return resolved;
+      for (const literal of resolved.value) {
         if (binding.key === undefined) {
           literals.push(literal);
           continue;
         }
         const value = findProperty(literal, binding.key);
-        if (value === undefined) return undefined;
-        const inner = resolveLiterals(context, value, depth + 1);
-        if (inner === undefined) return undefined;
-        literals.push(...inner);
+        if (value === undefined) return stopAt(literal, literal.start, `cannot follow ${binding.key}`);
+        const inner = resolveLiterals(context, value, depth + 1, binding.key);
+        if (!inner.ok) return inner;
+        literals.push(...inner.value);
       }
     }
-    return literals;
+    return ok(literals);
   }
-  return resolveConst(at.file, name);
+  const literals = resolveConst(at.file, name);
+  return literals === undefined ? stopAt(at, at.start, `cannot follow ${what}`) : ok(literals);
 }
 
 /** The literals of every `const name = { ... }` in the file; `undefined` when `name` is also a `let` or `var`. */
@@ -344,19 +435,23 @@ function findBinding(file: File, node: FunctionNode, name: string): Binding | un
   return undefined;
 }
 
-/** The arguments passed at `position` to the function: by its callers, or by `mutate` of the hook holding it. */
+/**
+ * The arguments passed at `position` to the function: by its callers, or by `mutate` of the hook holding
+ * it. `undefined` when the function or hook cannot be followed; a stop where its name is used uncalled.
+ */
 function findCallers(
   context: Context,
   file: File,
   node: FunctionNode,
   position: number,
-): Range[] | undefined {
+): Result<Range[], SentStop> | undefined {
   if (node.name === undefined) return undefined;
-  let calls: Range[] | undefined;
+  let calls: Result<Range[], SentStop> | undefined;
   if (node.name === "mutationFn") {
     const hook = findEnclosingFunctions(file, node.open).find((outer) => outer.name !== undefined);
     if (hook?.name === undefined) return undefined;
-    calls = findMutateCalls(context, hook.name);
+    const mutations = findMutateCalls(context, hook.name);
+    calls = mutations === undefined ? undefined : ok(mutations);
   } else {
     const nameIndex = findNameIndex(file, node.open);
     calls = findCalls(
@@ -365,14 +460,14 @@ function findCallers(
       nameIndex === undefined ? undefined : { file, start: nameIndex, end: nameIndex + 1 },
     );
   }
-  if (calls === undefined) return undefined;
+  if (calls === undefined || !calls.ok) return calls;
   const callers: Range[] = [];
-  for (const call of calls) {
+  for (const call of calls.value) {
     const argument = readArguments(call)[position];
     if (argument === undefined) return undefined;
     callers.push(argument);
   }
-  return callers;
+  return ok(callers);
 }
 
 function findNameIndex(file: File, open: number): number | undefined {
@@ -414,8 +509,8 @@ function findMutateCalls(context: Context, hook: string): Range[] | undefined {
         // The destructuring itself names the function once without calling it.
         const declared = { file, start: name, end: name + 1 };
         const direct = findCalls({ ...context, files: [file] }, (tokens[name] as Token).text, declared);
-        if (direct === undefined) return undefined;
-        calls.push(...direct);
+        if (!direct.ok) return undefined;
+        calls.push(...direct.value);
       }
     }
   }
@@ -466,22 +561,22 @@ function findProperty(literal: Range, key: string): Range | undefined {
   return value;
 }
 
-/** The values the literal sets at the end of the path, walking nested literals; `undefined` when not readable. */
-function readPath(context: Context, literal: Range, path: string[]): Range[] | undefined {
+/** The values the literal sets at the end of the path, walking nested literals; a stop when not readable. */
+function readPath(context: Context, literal: Range, path: string[]): Result<Range[], SentStop> {
   const [key, ...rest] = path;
-  if (key === undefined) return undefined;
+  if (key === undefined) return stopAt(literal, literal.start, "cannot follow the body argument");
   const value = findProperty(literal, key);
-  if (value === undefined) return undefined;
-  if (rest.length === 0) return [value];
-  const inner = resolveLiterals(context, value, MAX_FORWARDING);
-  if (inner === undefined) return undefined;
+  if (value === undefined) return stopAt(literal, literal.start, `cannot prove ${key} is set`);
+  if (rest.length === 0) return ok([value]);
+  const inner = resolveLiterals(context, value, MAX_FORWARDING, key);
+  if (!inner.ok) return inner;
   const values: Range[] = [];
-  for (const nested of inner) {
+  for (const nested of inner.value) {
     const found = readPath(context, nested, rest);
-    if (found === undefined) return undefined;
-    values.push(...found);
+    if (!found.ok) return found;
+    values.push(...found.value);
   }
-  return values;
+  return ok(values);
 }
 
 /** The first index outside brackets in the range that passes `test`; -1 when none. */

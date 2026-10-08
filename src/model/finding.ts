@@ -32,6 +32,8 @@ export type Finding = {
   accepted?: { reason: string };
   /** Set when a later layer changed `class`, for example `client-usage` on an `openapi` finding. */
   reclassified?: { from: FindingClass; by: string; reason: string };
+  /** Set when a later layer tried to re-classify the finding and could not: why, and where it stopped. */
+  reclassifyAttempt?: { reason: string; stoppedAt?: Evidence };
   /** Where a `persisted-enums` finding reaches clients; `client-usage` refines it by these fields. */
   exposure?: Exposure[];
   /** String literals the rows of a `seed` finding write; `persisted-enums` refines it by them. */

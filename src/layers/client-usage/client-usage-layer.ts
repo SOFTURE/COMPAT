@@ -152,6 +152,8 @@ async function readClient(
     notes.push(...usage.value.notes);
   }
   const counts = usages.map((usage) => usage.model.operations.length).join("/");
+  // Notes that do not name a ref repeat for every ref; one is enough.
+  notes.splice(0, notes.length, ...new Set(notes));
   notes.unshift(
     `client "${client.name}" (API "${client.api}"): ${formatRefs(usages)}; ${counts} operation(s) read`,
     ...formatResolvers(client.name, refs.value),
@@ -200,6 +202,11 @@ async function readClientRef(
     usage.sourceIdentifiers = sources.value.identifiers;
     usage.sources = sources.value.files;
     usage.branches = sources.value.branches;
+    if (sources.value.hasGeneratedClient) {
+      notes.push(
+        `client "${client.name}": sources match the generated client ${path}, which is not read as client code`,
+      );
+    }
   }
   return ok({ usage, notes });
 }
@@ -210,6 +217,8 @@ type SourceReads = {
   identifiers: Set<string>;
   branches: Map<string, { path: string; line: number }[]>;
   files: SourceFile[];
+  /** A glob matched the generated client, which was left out. */
+  hasGeneratedClient: boolean;
 };
 
 /** The client's own sources, their identifiers, and the lines that branch on each exposed enum. */
@@ -239,5 +248,5 @@ async function readSources({
       for (const line of findEnumBranches(content, target)) sites.push({ path: file, line });
     }
   }
-  return ok({ identifiers, branches, files: read });
+  return ok({ identifiers, branches, files: read, hasGeneratedClient: sources.length < files.value.length });
 }

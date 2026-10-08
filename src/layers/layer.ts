@@ -28,7 +28,7 @@ export type ClientRefCalls = {
   operations: { method: string; path: string }[];
 };
 
-/** Replaces finding `index` of the earlier layer `layer`; only class, message, evidence and `reclassified` may change. */
+/** Replaces finding `index` of the earlier layer `layer`; only class, message, evidence, `reclassified` and `reclassifyAttempt` may change. */
 export type FindingRevision = { layer: string; index: number; finding: Finding };
 
 /**

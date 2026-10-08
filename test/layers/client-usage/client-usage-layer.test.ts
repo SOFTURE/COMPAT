@@ -376,21 +376,22 @@ describe("client-usage config", () => {
 });
 
 describe("client-usage layer with call sites (issue #75)", () => {
+  const notNullable: LayerResult = {
+    layer: "openapi",
+    status: "ran",
+    findings: [
+      createFinding("breaking", {
+        layer: "openapi",
+        scope: "b2c",
+        id: "request-property-became-not-nullable",
+        subject: "POST /api/pets/{petId}/medications",
+        message: "the request property `daysOfWeek` became not nullable",
+      }),
+    ],
+    notes: [],
+  };
+
   it("drops a not-nullable finding to safe from the literal the sources send", async () => {
-    const notNullable: LayerResult = {
-      layer: "openapi",
-      status: "ran",
-      findings: [
-        createFinding("breaking", {
-          layer: "openapi",
-          scope: "b2c",
-          id: "request-property-became-not-nullable",
-          subject: "POST /api/pets/{petId}/medications",
-          message: "the request property `daysOfWeek` became not nullable",
-        }),
-      ],
-      notes: [],
-    };
     const output = await run({ refs: ["app-7"], sources: ["app/screens/**/*.ts"] }, [notNullable]);
     expect(output.revisions?.[0]?.finding).toMatchObject({
       class: "safe",
@@ -400,5 +401,13 @@ describe("client-usage layer with call sites (issue #75)", () => {
       path: "app/screens/medications.ts",
       line: 2,
     });
+  });
+
+  it("leaves out the generated client a sources glob matches and says so (issue #82)", async () => {
+    const output = await run({ refs: ["app-7"], sources: ["app/**/*.ts"] }, [notNullable]);
+    expect(output.status === "ran" && output.notes).toContain(
+      'client "mobile": sources match the generated client app/client.ts, which is not read as client code',
+    );
+    expect(output.revisions?.[0]?.finding.class).toBe("safe");
   });
 });

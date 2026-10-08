@@ -235,6 +235,84 @@ function Screen({ petId }: Props) {
       expect(revisions[0]?.finding.class).toBe("breaking");
       expect(revisions[0]?.finding.message).toContain("; mobile@2.2.4 may send it without");
     });
+
+    it("drops the finding to safe when the sources also hold a swaggie client (issue #82)", () => {
+      const swaggie = `
+export class PetsClient {
+  postMedicationEndpoint(addMedicationRequest: AddMedicationRequest, petId: PetId, $config?: AxiosRequestConfig): AxiosPromise<MedicationScheduleId> {
+    return this.axios.request({ url: \`/api/pets/\${petId}/medications\`, method: "POST", data: addMedicationRequest, ...$config });
+  }
+}`;
+      const screen = `petsClient.postMedicationEndpoint({ name: "a", daysOfWeek: [] }, petId);`;
+      const { revisions } = refineFindings([allOf], [withSources(swaggie, screen)]);
+      expect(revisions[0]?.finding.class).toBe("safe");
+      expect(revisions[0]?.finding.evidence.at(-1)).toMatchObject({ path: "app/screen1.tsx", line: 1 });
+    });
+
+    describe("says where the proof stopped (issue #84)", () => {
+      const keep = (...texts: string[]) =>
+        refineFindings([allOf], [withSources(...texts)]).revisions[0]?.finding;
+      const prefix =
+        "the request property `allOf[subschema #2]/daysOfWeek` became not nullable; mobile@2.2.4 may send it without `allOf[subschema #2]/daysOfWeek` or with null";
+      const at = (line: number, path = "app/screen0.tsx") => ({
+        side: "client",
+        ref: "2.2.4",
+        commit: "c".repeat(40),
+        path,
+        line,
+      });
+
+      it.each([
+        [
+          "the function is not referenced",
+          "const unused = 1;",
+          "no call of postMedicationEndpoint in sources",
+          undefined,
+        ],
+        [
+          "the function is used without a call",
+          "\nrun(petsClient.postMedicationEndpoint);",
+          "postMedicationEndpoint is used without a call at app/screen0.tsx:2",
+          at(2),
+        ],
+        [
+          "the argument cannot be resolved",
+          "\n\npetsClient.postMedicationEndpoint(buildRequest(), petId);",
+          "cannot follow the body argument at app/screen0.tsx:3",
+          at(3),
+        ],
+        [
+          "the body is forwarded too far",
+          [
+            "const send = (request: AddMedicationRequest) => petsClient.postMedicationEndpoint(request, petId);",
+            "const relay = (request: AddMedicationRequest) => send(request);",
+            "relay({ name: 'a', daysOfWeek: [] });",
+          ].join("\n"),
+          "cannot follow request past relay (app/screen0.tsx:2)",
+          at(2),
+        ],
+        [
+          "the value may be nullish",
+          "function save(data: Form) {\n  petsClient.postMedicationEndpoint({ name: 'a', daysOfWeek: data.daysOfWeek }, petId);\n}",
+          "cannot prove data.daysOfWeek non-null at app/screen0.tsx:2",
+          at(2),
+        ],
+      ])("when %s", (_, screen, reason, stoppedAt) => {
+        const refined = keep(screen);
+        expect(refined?.class).toBe("breaking");
+        expect(refined?.message).toBe(`${prefix} (client-usage: ${reason})`);
+        expect(refined?.reclassifyAttempt).toEqual(
+          stoppedAt === undefined ? { reason } : { reason, stoppedAt },
+        );
+        if (stoppedAt !== undefined) expect(refined?.evidence).toContainEqual(stoppedAt);
+      });
+
+      it("leaves a proof that succeeds unchanged", () => {
+        const refined = keep("petsClient.postMedicationEndpoint({ name: 'a', daysOfWeek: [] }, petId);");
+        expect(refined?.class).toBe("safe");
+        expect(refined?.reclassifyAttempt).toBeUndefined();
+      });
+    });
   });
 
   it("drops an operation no client ref calls to safe and lists every ref", () => {
