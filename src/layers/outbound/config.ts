@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { DEFAULT_COMPOSE_FILES } from "../config/config.js";
 
 export const OUTBOUND_LAYER = "outbound";
 
@@ -58,8 +57,11 @@ export const targetSourceSchema = z
     keyFrom: z.enum(TARGET_KEY_SOURCES).optional(),
     /** The compose service that runs the app; a target whose key its `environment` sets is reported as the key. */
     service: z.string().min(1).optional(),
-    /** Where `service` is looked up; list only the deploy files, so a local-dev compose never counts. */
-    composeFiles: z.array(z.string().min(1)).min(1).default(DEFAULT_COMPOSE_FILES),
+    /**
+     * Where `service` is looked up. Defaults to the files of the `config` layer's `compose` sources, so a local-dev
+     * compose never counts as the deploy; to `DEFAULT_COMPOSE_FILES` only without one.
+     */
+    composeFiles: z.array(z.string().min(1)).min(1).optional(),
   })
   .superRefine((source, context) => {
     // A flags issue is already reported; compiling with them would only repeat it.

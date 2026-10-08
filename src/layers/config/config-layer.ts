@@ -255,13 +255,18 @@ function getScanner(
   }
 }
 
+/** The globs of the `compose` sources, which are the deploy; empty without one. */
+export function listComposeSourceFiles(sources: readonly ConfigSource[]): string[] {
+  return [...new Set(sources.flatMap((source) => (source.kind === "compose" ? source.files : [])))];
+}
+
 /**
  * The globs an `appsettings` source without `composeFiles` looks its service up in: the files of
- * the layer's `compose` sources, which are the deploy, else every compose file.
+ * the layer's `compose` sources, else every compose file.
  */
 function getDeployComposeFiles(sources: ConfigSource[]): string[] {
-  const files = sources.flatMap((source) => (source.kind === "compose" ? source.files : []));
-  return files.length > 0 ? [...new Set(files)] : DEFAULT_COMPOSE_FILES;
+  const files = listComposeSourceFiles(sources);
+  return files.length > 0 ? files : DEFAULT_COMPOSE_FILES;
 }
 
 function withPrefix(declaration: KeyDeclaration, prefix: string | undefined): KeyDeclaration {

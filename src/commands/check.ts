@@ -2,8 +2,11 @@ import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_CONFIG_FILE, loadConfig } from "../config/config.js";
+import { type CompatConfig, DEFAULT_CONFIG_FILE, loadConfig } from "../config/config.js";
 import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
+import { CONFIG_LAYER } from "../layers/config/classify.js";
+import { configLayerConfigSchema } from "../layers/config/config.js";
+import { listComposeSourceFiles } from "../layers/config/config-layer.js";
 import type { ClientRefCalls, Layer } from "../layers/layer.js";
 import { getCacheDir } from "../layers/openapi/oasdiff-download.js";
 import { LAYERS } from "../layers/registry.js";
@@ -151,6 +154,7 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
 
     let results: LayerResult[] = [];
     let calls: ClientRefCalls[] | undefined;
+    const deployComposeFiles = getConfiguredDeployComposeFiles(config.value.layers);
     for (const { layer, config: layerConfig } of config.value.layers) {
       const tempDir = join(tempRoot, `layer-${layer.name}`);
       await mkdir(tempDir, { recursive: true });
@@ -168,6 +172,7 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
             log: (message) => io.stderr(`[${layer.name}] ${message}\n`),
             results: [...results],
             calls,
+            ...(deployComposeFiles === undefined ? {} : { deployComposeFiles }),
           }),
         );
         const { result } = output;
@@ -310,4 +315,14 @@ function installTerminationHandlers(tempRoot: string, io: CheckIo): () => void {
 function resolvePath(repoDir: string, cwd: string, configPath: string | undefined): string {
   if (configPath === undefined) return join(repoDir, DEFAULT_CONFIG_FILE);
   return isAbsolute(configPath) ? configPath : resolve(cwd, configPath);
+}
+
+/** The globs of the enabled `config` layer's `compose` sources, which other layers read as the deploy. */
+function getConfiguredDeployComposeFiles(layers: CompatConfig["layers"]): string[] | undefined {
+  const entry = layers.find(({ layer }) => layer.name === CONFIG_LAYER);
+  if (entry === undefined) return undefined;
+  const parsed = configLayerConfigSchema.safeParse(entry.config);
+  if (!parsed.success) return undefined;
+  const files = listComposeSourceFiles(parsed.data.sources);
+  return files.length > 0 ? files : undefined;
 }

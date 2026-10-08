@@ -106,3 +106,72 @@ describe("outbound target whose config key the deploy overrides (issue #127)", (
     expect(markdown).not.toContain("outbound call to api-shop-dev.example.com");
   });
 });
+
+describe("outbound service lookup without composeFiles", () => {
+  const LOCAL_COMPOSE_PATH = "APP/docker-compose.yml";
+  let localRepo: TestRepo;
+
+  beforeAll(() => {
+    localRepo = createRepo([
+      {
+        files: {
+          [SETTINGS_PATH]: settings(),
+          [COMPOSE_PATH]: compose(),
+          [LOCAL_COMPOSE_PATH]: compose("Shop__BaseUrl=${SHOP_BASE_URL:-https://localhost:5001}"),
+        },
+        tag: "2.2.4",
+      },
+      {
+        files: { [SETTINGS_PATH]: settings('"Shop": { "BaseUrl": "https://api-shop-dev.example.com" }') },
+        tag: "2.3.4",
+      },
+    ]);
+    const target = {
+      name: "appsettings-urls",
+      files: ["APP/**/appsettings.json"],
+      pattern: '"BaseUrl"\\s*:\\s*"(?<host>https?://[^"/]+)',
+      keyFrom: "appsettings",
+      service: "api",
+    };
+    writeRepoFile(
+      localRepo,
+      "compat.json",
+      JSON.stringify({
+        layers: {
+          config: { sources: [{ kind: "compose", files: [COMPOSE_PATH] }] },
+          outbound: { targets: [target] },
+        },
+      }),
+    );
+    writeRepoFile(
+      localRepo,
+      "outbound-only.json",
+      JSON.stringify({ layers: { outbound: { targets: [target] } } }),
+    );
+  });
+  afterAll(() => localRepo.cleanup());
+
+  const readOutbound = async (configFile: string) => {
+    const run = createIo(localRepo.dir);
+    await main(
+      ["check", "--base", "2.2.4", "--revision", "2.3.4", "--config", configFile, "--format", "json"],
+      run.io,
+    );
+    const report = JSON.parse(run.stdout()) as { layers: JsonLayer[] };
+    return report.layers.find((layer) => layer.layer === "outbound");
+  };
+
+  it("reads the config layer's compose sources as the deploy, so a local-dev compose does not set the key", async () => {
+    const outbound = await readOutbound("compat.json");
+    expect(outbound?.findings.map((finding) => [finding.id, finding.subject])).toEqual([
+      ["outbound-added", "api-shop-dev.example.com"],
+    ]);
+  });
+
+  it("falls back to every compose file without a config compose source", async () => {
+    const outbound = await readOutbound("outbound-only.json");
+    expect(outbound?.findings.map((finding) => [finding.id, finding.subject])).toEqual([
+      ["outbound-added", "Shop:BaseUrl"],
+    ]);
+  });
+});

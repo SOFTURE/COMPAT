@@ -1,6 +1,7 @@
 import type { RefTree } from "../../git/ref-tree.js";
 import type { LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
+import { DEFAULT_COMPOSE_FILES } from "../config/config.js";
 import { readSettingLeaves, type SettingLeaf } from "../config/scan-appsettings.js";
 import { defineLayer } from "../layer.js";
 import { applyOutboundAccept, classifyOutbound, type TargetDeclaration } from "./classify.js";
@@ -22,7 +23,8 @@ export const outboundLayer = defineLayer({
     const revision = new Map<string, TargetDeclaration>();
     // Every source is read even when one fails, so its error and the others' counts reach the report.
     for (const source of context.config.targets) {
-      const outcome = await readSource(context.base, context.revision, source);
+      const composeFiles = source.composeFiles ?? context.deployComposeFiles ?? DEFAULT_COMPOSE_FILES;
+      const outcome = await readSource(context.base, context.revision, { source, composeFiles });
       if (!outcome.ok) {
         errors.push(`target source "${source.name}": ${outcome.error}`);
         continue;
@@ -82,9 +84,11 @@ function getOccurrenceKey(
 }
 
 /** The targets one source captures in the files of `tree`, each with its first capture as evidence. */
+type SourceSettings = { source: TargetSource; composeFiles: readonly string[] };
+
 async function readTree(
   tree: RefTree,
-  source: TargetSource,
+  { source, composeFiles }: SourceSettings,
   regex: RegExp,
 ): Promise<Result<{ files: number; targets: Map<string, TargetDeclaration> }>> {
   const files = await tree.listFiles(source.files);
@@ -93,7 +97,7 @@ async function readTree(
   if (source.service !== undefined) {
     const read = await readDeployOverrides(tree, {
       service: source.service,
-      composeFiles: source.composeFiles,
+      composeFiles: [...composeFiles],
     });
     if (!read.ok) return read;
     overrides = read.value;
@@ -134,14 +138,15 @@ async function readTree(
 async function readSource(
   base: RefTree,
   revision: RefTree,
-  source: TargetSource,
+  settings: SourceSettings,
 ): Promise<Result<TargetSides>> {
+  const { source } = settings;
   const regex = compileTargetPattern(source.pattern, source.flags);
   // The config schema already rejected a pattern that does not compile.
   if (!(regex instanceof RegExp)) throw new Error(`pattern ${source.pattern} ${regex.error}`);
   const [before, after] = await Promise.all([
-    readTree(base, source, regex),
-    readTree(revision, source, regex),
+    readTree(base, settings, regex),
+    readTree(revision, settings, regex),
   ]);
   if (!before.ok) return before;
   if (!after.ok) return after;
