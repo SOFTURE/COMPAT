@@ -20,7 +20,7 @@ function checkRevision(original: Finding, revised: Finding): string | undefined 
 
 /**
  * Applies the revisions a refining layer returned to the results of the layers before it.
- * A revision may change a finding's class, message, evidence and `reclassified`, never which
+ * A revision may change a finding's class, message, evidence, `reclassified` and `reclassifyAttempt`, never which
  * finding it is, so a refinement can never hide one. Any invalid revision rejects them all.
  */
 export function applyRevisions(

@@ -433,7 +433,13 @@ What changes, per `openapi` finding of the client's API that is not accepted and
   a conditional whose branches all qualify, `a ?? b` with `b` qualifying, or a name or `a.b` member whose declared
   type has neither). Then the finding is `safe`, reason `always sent non-null by the call sites of ...`, with the
   literals as evidence. A spread, an argument or value the reader cannot follow, or the client function passed
-  around uncalled keeps the class.
+  around uncalled keeps the class, and the message says where the reader stopped, e.g. `(client-usage: cannot
+  prove data.daysOfWeek non-null at app/pet/[id].tsx:187)`: `no call of <function> in sources`, `<function> is used
+  without a call at <file:line>`, `cannot follow the body argument at <file:line>`, `cannot follow <param> past
+  <function> (<file:line>)` or `cannot prove <expr> non-null at <file:line>`. That line is added as evidence, and
+  the JSON report carries `reclassifyAttempt: { reason, stoppedAt }`. The generated client is never read as client
+  code, even when a `sources` glob matches it (a layer note says so), and a method declared with a return type
+  (`name(...): AxiosPromise<T> {`) is never read as a call.
 - Otherwise the class stays, the message names the refs that call the operation (or may omit the property), and the
   calls are added as evidence.
 
