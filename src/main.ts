@@ -20,6 +20,7 @@ Options:
   --config <file>         config file (default: <repo>/compat.config.json)
   --format <md|json>      check: report format (default: md)
   --output <file>         check: write the report to a file instead of stdout
+  --json-output <file>    check: also write the JSON report to a file, from the same run
   --fail-on <class>       check: breaking | rollback-risk | needs-action | never
                           (default: check.failOn in the config, then breaking)
   --allow-incomplete      check: do not fail when a layer was skipped or failed
@@ -37,6 +38,7 @@ const CHECK_ONLY_FLAGS = [
   "revision",
   "format",
   "output",
+  "json-output",
   "fail-on",
   "allow-incomplete",
   "require",
@@ -66,6 +68,7 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       config: { type: "string" },
       format: { type: "string" },
       output: { type: "string" },
+      "json-output": { type: "string" },
       "fail-on": { type: "string" },
       "allow-incomplete": { type: "boolean" },
       require: { type: "string" },
@@ -116,6 +119,7 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       configPath: values.config,
       format,
       outputPath: values.output,
+      jsonOutputPath: values["json-output"],
       failOn,
       allowIncomplete: values["allow-incomplete"] ?? false,
       required,
