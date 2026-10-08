@@ -66,6 +66,10 @@ export const dependencyAcceptEntrySchema = z.strictObject({
   id: z.enum(DEPENDENCY_FINDING_IDS),
   /** The exact package name; NuGet names match case-insensitively. */
   name: z.string().min(1),
+  /** The base version this entry was reviewed for; without it the entry accepts any base version. */
+  from: z.string().min(1).optional(),
+  /** The revision version this entry was reviewed for; without it the entry accepts any later version. */
+  to: z.string().min(1).optional(),
   reason: z.string().min(1),
 });
 

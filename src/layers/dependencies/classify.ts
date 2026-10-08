@@ -133,7 +133,10 @@ export type ClassifyOptions = {
   ignore: string[];
 };
 
-export type Classified = { findings: Finding[]; ignoredCount: number };
+/** The distinct versions of one package at each ref; empty on the side where it is not declared. */
+export type Transition = { before: string[]; after: string[] };
+
+export type Classified = { findings: Finding[]; transitions: Map<Finding, Transition>; ignoredCount: number };
 
 /** Findings for every package whose declared versions differ between the refs. */
 export function classifyPackages(options: ClassifyOptions): Classified {
@@ -141,6 +144,7 @@ export function classifyPackages(options: ClassifyOptions): Classified {
   const watch = options.watch.map((entry) => ({ entry, matches: createNameMatcher(entry.name) }));
   const keys = [...new Set([...options.base.keys(), ...options.revision.keys()])].sort(compareText);
   const findings: Finding[] = [];
+  const transitions = new Map<Finding, Transition>();
   let ignoredCount = 0;
   for (const key of keys) {
     const before = options.base.get(key);
@@ -178,7 +182,7 @@ export function classifyPackages(options: ClassifyOptions): Classified {
       }
       if (entry.releaseNotes !== undefined) message += `; release notes: ${entry.releaseNotes}`;
     }
-    findings.push({
+    const finding: Finding = {
       layer: DEPENDENCIES_LAYER,
       scope: known.ecosystem,
       id: verdict.id,
@@ -189,25 +193,72 @@ export function classifyPackages(options: ClassifyOptions): Classified {
         ...toEvidence(options.baseTree, before?.declarations ?? []),
         ...toEvidence(options.revisionTree, after?.declarations ?? []),
       ],
+    };
+    findings.push(finding);
+    transitions.set(finding, {
+      before: uniqueVersions(before?.declarations ?? []),
+      after: uniqueVersions(after?.declarations ?? []),
     });
   }
-  return { findings, ignoredCount };
+  return { findings, transitions, ignoredCount };
 }
 
-export type AcceptUsage = { entry: DependencyAcceptEntry; count: number };
+/**
+ * `count` findings accepted; `stale` lists transitions an entry with `from`/`to` matched by id and
+ * name but not by versions, so the reviewed reason is not reused for versions nobody reviewed.
+ * `acceptedBreaking` tells whether the entry accepted a `needs-action` upgrade.
+ */
+export type AcceptUsage = {
+  entry: DependencyAcceptEntry;
+  count: number;
+  stale: string[];
+  acceptedBreaking: boolean;
+};
+
+/** Whether a version an entry names is one of the declared ones; `^1.2.0` matches `1.2.0`. */
+function isListedVersion(expected: string | undefined, declared: string[]): boolean {
+  if (expected === undefined) return true;
+  const parsed = parseVersion(expected);
+  return declared.some((version) => {
+    if (version.trim() === expected.trim()) return true;
+    const other = parseVersion(version);
+    return parsed !== null && other !== null && compareVersions(parsed, other) === 0;
+  });
+}
+
+const describeTransition = (transition: Transition) =>
+  `${transition.before.join(", ") || "none"} → ${transition.after.join(", ") || "none"}`;
 
 export function applyAccept(
   findings: Finding[],
   accept: DependencyAcceptEntry[],
+  transitions: Map<Finding, Transition> = new Map(),
 ): { findings: Finding[]; usage: AcceptUsage[] } {
-  const usage = accept.map((entry) => ({ entry, count: 0 }));
+  const usage: AcceptUsage[] = accept.map((entry) => ({
+    entry,
+    count: 0,
+    stale: [],
+    acceptedBreaking: false,
+  }));
   const isSamePackage = (entry: DependencyAcceptEntry, finding: Finding) =>
     getPackageKey(finding.scope as Ecosystem, entry.name) ===
     getPackageKey(finding.scope as Ecosystem, finding.subject);
   const accepted = findings.map((finding) => {
-    const match = usage.find(({ entry }) => entry.id === finding.id && isSamePackage(entry, finding));
-    if (match === undefined) return finding;
+    const candidates = usage.filter(({ entry }) => entry.id === finding.id && isSamePackage(entry, finding));
+    const transition = transitions.get(finding);
+    const isMatch = ({ entry }: AcceptUsage) =>
+      transition === undefined ||
+      (isListedVersion(entry.from, transition.before) && isListedVersion(entry.to, transition.after));
+    const match = candidates.find(isMatch);
+    if (match === undefined) {
+      for (const candidate of candidates) {
+        if (transition !== undefined) candidate.stale.push(describeTransition(transition));
+      }
+      return finding;
+    }
     match.count++;
+    if (finding.id === "dependency-upgraded" && finding.class === "needs-action")
+      match.acceptedBreaking = true;
     return { ...finding, accepted: { reason: match.entry.reason } };
   });
   return { findings: accepted, usage };

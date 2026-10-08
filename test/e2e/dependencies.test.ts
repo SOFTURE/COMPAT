@@ -18,6 +18,26 @@ beforeAll(() => {
     { files: files("base"), tag: "2.2.4" },
     { files: files("revision"), tag: "2.3.4" },
   ]);
+  writeRepoFile(
+    repo,
+    "stale-accept.json",
+    JSON.stringify({
+      layers: {
+        dependencies: {
+          sources: [{ kind: "nuget" }],
+          accept: [
+            {
+              id: "dependency-upgraded",
+              name: "SOFTURE.MessageBroker.Rabbit",
+              from: "0.3.0",
+              to: "0.4.0",
+              reason: "queue names reviewed",
+            },
+          ],
+        },
+      },
+    }),
+  );
   writeRepoFile(repo, "plain.json", JSON.stringify({ layers: { dependencies: {} } }));
   writeRepoFile(
     repo,
@@ -108,6 +128,18 @@ describe("dependencies layer end to end (research F9)", () => {
     );
     expect(layer.findings[1]?.accepted).toEqual({ reason: "retry policy reviewed" });
     expect(layer.notes).toContain('1 changed or declared package(s) skipped by "ignore"');
+    expect(layer.notes).toContain(
+      'accept entry dependency-upgraded on SOFTURE.MessageBroker.Rabbit accepted 1 finding(s); add "from" and "to" so it does not also accept later breaking upgrades',
+    );
+  });
+
+  it("does not reuse an accept entry written for older versions", async () => {
+    const { layer } = await runJson(...check("stale-accept.json"));
+    const rabbit = layer.findings.find((f) => f.subject === "SOFTURE.MessageBroker.Rabbit");
+    expect(rabbit?.accepted).toBeUndefined();
+    expect(layer.notes).toContain(
+      "accept entry dependency-upgraded on SOFTURE.MessageBroker.Rabbit is for 0.3.0 → 0.4.0 but the versions are now 0.4.0 → 1.2.0; review the new versions and update the entry",
+    );
   });
 
   it("fails when no dependency file matches at either ref", async () => {

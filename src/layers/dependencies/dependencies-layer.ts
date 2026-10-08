@@ -3,6 +3,7 @@ import type { LayerResult } from "../../model/finding.js";
 import { err, ok, type Result } from "../../result.js";
 import { defineLayer } from "../layer.js";
 import {
+  type AcceptUsage,
   addDeclarations,
   applyAccept,
   classifyPackages,
@@ -74,17 +75,29 @@ export const dependenciesLayer = defineLayer({
     if (classified.ignoredCount > 0) {
       notes.push(`${classified.ignoredCount} changed or declared package(s) skipped by "ignore"`);
     }
-    const { findings, usage } = applyAccept(classified.findings, context.config.accept ?? []);
-    for (const { entry, count } of usage) {
-      notes.push(
-        count === 0
-          ? `accept entry ${entry.id} on ${entry.name} matched nothing; remove it if the change is gone`
-          : `accept entry ${entry.id} on ${entry.name} accepted ${count} finding(s)`,
-      );
-    }
+    const { findings, usage } = applyAccept(
+      classified.findings,
+      context.config.accept ?? [],
+      classified.transitions,
+    );
+    notes.push(...usage.map(describeAcceptUsage));
     return { layer: DEPENDENCIES_LAYER, status: "ran", findings, notes } satisfies LayerResult;
   },
 });
+
+function describeAcceptUsage({ entry, count, stale, acceptedBreaking }: AcceptUsage): string {
+  const label = `accept entry ${entry.id} on ${entry.name}`;
+  const reviewed = `${entry.from ?? "any"} → ${entry.to ?? "any"}`;
+  if (stale.length > 0 && count === 0) {
+    return `${label} is for ${reviewed} but the versions are now ${stale.join("; ")}; review the new versions and update the entry`;
+  }
+  if (count === 0) return `${label} matched nothing; remove it if the change is gone`;
+  const pin =
+    acceptedBreaking && entry.from === undefined && entry.to === undefined
+      ? '; add "from" and "to" so it does not also accept later breaking upgrades'
+      : "";
+  return `${label} accepted ${count} finding(s)${pin}`;
+}
 
 function failed(error: string, notes: string[]): LayerResult {
   return { layer: DEPENDENCIES_LAYER, status: "failed", error, findings: [], notes };
