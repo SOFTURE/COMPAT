@@ -431,7 +431,9 @@ What changes, per `openapi` finding of the client's API that is not accepted and
   local `const`, or through one parameter of the enclosing function: its callers, or `mutate`/`mutateAsync` of the
   hook whose `mutationFn` it is) that sets the property to a value that cannot be `undefined` or `null` (a literal,
   a conditional whose branches all qualify, `a ?? b` with `b` qualifying, or a name or `a.b` member whose declared
-  type has neither). Then the finding is `safe`, reason `always sent non-null by the call sites of ...`, with the
+  type has neither; a type `z.infer`/`z.output`/`z.input<typeof s>` of a local `s = z.object({ ... })` counts, its
+  members read from the schema: no `.optional()`/`.nullable()`/`.nullish()`, and for `z.input` no `.default()`).
+  Then the finding is `safe`, reason `always sent non-null by the call sites of ...`, with the
   literals as evidence. A spread, an argument or value the reader cannot follow, or the client function passed
   around uncalled keeps the class, and the message says where the reader stopped, e.g. `(client-usage: cannot
   prove data.daysOfWeek non-null at app/pet/[id].tsx:187)`: `no call of <function> in sources`, `<function> is used
