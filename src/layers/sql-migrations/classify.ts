@@ -29,7 +29,13 @@ export type Migration = {
   statements: SqlStatement[];
 };
 
-export type ClassifiedFinding = { finding: Finding; migration: string; object: string };
+export type ClassifiedFinding = {
+  finding: Finding;
+  migration: string;
+  object: string;
+  /** `insert-explicit-id` on a table that already exists: what the preconditions command can settle. */
+  explicitIds?: { table: SqlName; ids: ExplicitIds; isSequenceMoved: boolean };
+};
 
 export type AcceptEntry = { id: string; migration: string; object?: string | undefined; reason: string };
 
@@ -203,6 +209,7 @@ export function classifyMigrations(options: ClassifyOptions): ClassifiedFinding[
     if (insert.isNewTable) continue;
     const moved = findSequenceMove(insert);
     insert.item.finding.message = describeExplicitIds(insert.table, insert.ids, moved !== undefined);
+    insert.item.explicitIds = { table: insert.table, ids: insert.ids, isSequenceMoved: moved !== undefined };
     const evidence = insert.item.finding.evidence[0];
     if (moved !== undefined && evidence) insert.item.finding.evidence.push({ ...evidence, line: moved.line });
   }

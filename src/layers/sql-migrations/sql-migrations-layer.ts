@@ -3,6 +3,7 @@ import type { Result } from "../../result.js";
 import { defineLayer, type LayerContext } from "../layer.js";
 import { applyAccept, type ClassifiedFinding, classifyMigrations, SQL_MIGRATIONS_LAYER } from "./classify.js";
 import { type MigrationSource, type SqlMigrationsConfig, sqlMigrationsConfigSchema } from "./config.js";
+import { applyPreconditions, getPreconditionTables, readMaxIds } from "./preconditions.js";
 import { type ChangedMigration, readSourceChanges } from "./sources.js";
 
 type SourceOutcome = { findings: Finding[]; notes: string[] };
@@ -54,10 +55,12 @@ async function checkSource(
     revision: context.revision,
   });
   classified.push(...changed.map((item) => describeChange(context, source, item)));
+  const preconditionNotes = await resolvePreconditions(context, source, classified);
   const { findings, usage } = applyAccept(classified, source.accept ?? []);
   const statementCount = newMigrations.reduce((sum, migration) => sum + migration.statements.length, 0);
   const notes = [
     `source "${source.name}": ${newMigrations.length} new migration(s), ${statementCount} statement(s) read`,
+    ...preconditionNotes,
     ...usage.map(({ entry, count }) => {
       const target = `${entry.id} in ${entry.migration}${entry.object ? ` on ${entry.object}` : ""}`;
       return count === 0
@@ -66,6 +69,31 @@ async function checkSource(
     }),
   ];
   return { ok: true, value: { findings, notes } };
+}
+
+/**
+ * Runs the source's preconditions command once, only when an explicit-id insert needs production
+ * `max(id)`. A failing command is a note: the findings keep their class.
+ */
+async function resolvePreconditions(
+  context: LayerContext<SqlMigrationsConfig>,
+  source: MigrationSource,
+  classified: ClassifiedFinding[],
+): Promise<string[]> {
+  const tables = getPreconditionTables(classified);
+  if (source.preconditions === undefined || tables.length === 0) return [];
+  const maxIds = await readMaxIds({
+    preconditions: source.preconditions,
+    tables,
+    dialect: source.dialect,
+    cwd: context.repoDir,
+    env: context.env,
+  });
+  if (!maxIds.ok) {
+    return [`source "${source.name}": ${maxIds.error}; explicit-id inserts stay unresolved`];
+  }
+  applyPreconditions(classified, maxIds.value);
+  return [`source "${source.name}": preconditions command listed ${maxIds.value.size} table(s)`];
 }
 
 function describeChange(
