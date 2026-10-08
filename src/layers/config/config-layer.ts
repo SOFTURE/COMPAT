@@ -20,18 +20,19 @@ import {
 } from "./config.js";
 import { getKeyIdentity, type KeyIdentity } from "./keys.js";
 import { applyPresence, hasResolvableFindings, type PresenceSettings, readPresentKeys } from "./presence.js";
+import { scanAppsettingsSource } from "./scan-appsettings-source.js";
 import { scanCompose } from "./scan-compose.js";
 import { scanDotenv } from "./scan-dotenv.js";
 import { scanRegex } from "./scan-regex.js";
 
-type SourceScan = { index: KeyIndex; files: string[] };
+export type SourceScan = { index: KeyIndex; files: string[] };
 
 const MAX_LISTED_FILES = 5;
 
 export const configLayer = defineLayer({
   name: CONFIG_LAYER,
   description:
-    "Configuration keys: compose interpolation, .env examples and configured patterns at both refs",
+    "Configuration keys: compose interpolation, .env examples, appsettings files and configured patterns at both refs",
   configSchema: configLayerConfigSchema,
   async run(context) {
     const base: KeyIndex = new Map();
@@ -159,11 +160,11 @@ async function scanSourceAtBothRefs(
   source: ConfigSource,
   { base, revision, identify }: { base: RefTree; revision: RefTree; identify: KeyIdentity },
 ): Promise<Result<[SourceScan, SourceScan]>> {
-  const scan = getScanner(source);
-  if (!scan.ok) return scan;
-  const atBase = await scanSource(source, base, { scan: scan.value, identify });
+  const scanAt = getRefScanner(source, identify);
+  if (!scanAt.ok) return scanAt;
+  const atBase = await scanAt.value(base);
   if (!atBase.ok) return atBase;
-  const atRevision = await scanSource(source, revision, { scan: scan.value, identify });
+  const atRevision = await scanAt.value(revision);
   if (!atRevision.ok) return atRevision;
   const globs = source.files.map((glob) => `"${glob}"`).join(", ");
   if (atRevision.value.files.length === 0) {
@@ -206,7 +207,20 @@ async function scanSource(
   return ok({ index, files: files.value });
 }
 
-function getScanner(source: ConfigSource): Result<(text: string) => KeyDeclaration[]> {
+type RefScanner = (tree: RefTree) => Promise<Result<SourceScan>>;
+
+function getRefScanner(source: ConfigSource, identify: KeyIdentity): Result<RefScanner> {
+  if (source.kind === "appsettings") {
+    return ok((tree) => scanAppsettingsSource(source, tree, identify));
+  }
+  const scan = getScanner(source);
+  if (!scan.ok) return scan;
+  return ok((tree) => scanSource(source, tree, { scan: scan.value, identify }));
+}
+
+function getScanner(
+  source: Exclude<ConfigSource, { kind: "appsettings" }>,
+): Result<(text: string) => KeyDeclaration[]> {
   switch (source.kind) {
     case "compose":
       return ok(scanCompose);
