@@ -16,6 +16,7 @@ import type { SourceFile } from "./find-sent-literals.js";
 import { readIdentifiers, readTypescriptClient } from "./read-typescript-client.js";
 import { type ClientRefUsage, formatRefs, isCalled, refineFindings } from "./refine.js";
 import { findExposedFindings, getBranchKey, refineExposedFindings, toBranchTarget } from "./refine-enums.js";
+import { isRollbackCandidate, refineRollbackFindings } from "./refine-rollback.js";
 
 type ClientOutcome = { usages: ClientRefUsage[]; notes: string[] };
 
@@ -61,6 +62,16 @@ export const clientUsageLayer = defineLayer({
       usages.push(...outcome.value.usages);
       notes.push(...outcome.value.notes);
     }
+    const rollbackUsages: ClientRefUsage[] = [];
+    for (const client of getRollbackClients(context.config.clients, openapiFindings ?? [])) {
+      const read = await readClientRef(context.revision, client, []);
+      if (!read.ok) {
+        errors.push(`client "${client.name}" at revision ${context.revision.ref}: ${read.error}`);
+        continue;
+      }
+      rollbackUsages.push(read.value.usage);
+      notes.push(...read.value.notes);
+    }
     // A partial view of the clients could call an operation unused when it is not, so nothing is refined.
     if (errors.length > 0) return failed(errors.join("; "), notes);
 
@@ -81,6 +92,13 @@ export const clientUsageLayer = defineLayer({
       notes.push(
         `reclassified ${summary.toSafe} openapi finding(s) to safe; ${summary.withEvidence} keep their class with client evidence`,
       );
+      if (rollbackUsages.length > 0) {
+        const rollback = refineRollbackFindings(openapiFindings, rollbackUsages);
+        revisions.push(...rollback);
+        notes.push(
+          `rollback view (${formatRefs(rollbackUsages)}): ${rollback.length} request widening(s) the revision build sends are rollback-risk`,
+        );
+      }
     }
     if (exposed.length > 0) {
       const summary = refineExposedFindings(enumFindings, usages);
@@ -100,6 +118,15 @@ export const clientUsageLayer = defineLayer({
     return { layer: CLIENT_USAGE_LAYER, status: "ran", findings: [], notes, revisions, calls };
   },
 });
+
+/** Clients deployed with the server whose API has a request widening their revision build could send after a rollback. */
+function getRollbackClients(clients: readonly ClientConfig[], findings: readonly Finding[]): ClientConfig[] {
+  return clients.filter(
+    (client) =>
+      client.deployedWith === "revision" &&
+      findings.some((finding) => finding.scope === client.api && isRollbackCandidate(finding)),
+  );
+}
 
 /** The distinct branch targets of the exposed findings for one API. */
 function getBranchTargets(exposed: { finding: Finding }[], api: string): BranchTarget[] {

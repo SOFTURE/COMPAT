@@ -401,7 +401,7 @@ of them enabled; it adds no findings of its own. What each live ref calls also s
 | `clients[].refs` | the live client builds: a list of entries, or one selector on its own (see below) |
 | `clients[].generatedClient` | `{ kind: "typescript", path }`: the generated client, read at every client ref |
 | `clients[].sources` | optional globs of the client's own code; an operation then counts as called only when its client function is referenced there |
-| `clients[].deployedWith` | optional `"revision"` for a web client deployed with the server: `refs` then only run in tabs opened before the deploy, so a finding every calling ref of which is such a client keeps its class and its message adds `stale bundle only` |
+| `clients[].deployedWith` | optional `"revision"` for a web client deployed with the server: `refs` then only run in tabs opened before the deploy, so a finding every calling ref of which is such a client keeps its class and its message adds `stale bundle only`. The client is also read at the revision for the rollback view (below) |
 
 An entry of `refs` is one of:
 
@@ -492,6 +492,22 @@ closed: a client ref missing from the clone (fetch tags, `fetch-depth: 0`), a ge
 yields no operation, a URL string (`const url = ...`, `url: ...`) the reader could not turn into an operation, or
 `sources` that match no file fail the layer and refine nothing. A path whose HTTP method cannot be read counts as
 called with every method.
+
+For a client with `deployedWith: "revision"`, the layer also takes the rollback view. After a rollback the base
+server serves every tab opened since the deploy, so the revision build of the client (its generated client and
+`sources` read at the revision) must not send what the base server does not accept. A request widening oasdiff calls
+`safe` going forward, which the revision build exercises, becomes `rollback-risk` (reason `web@<revision> deploys
+with the server and calls it; the base server does not accept this after a rollback`):
+
+- `request-property-became-nullable` and `request-property-became-optional`: unless the revision build always sends
+  the property (non-null), proved by its type or call sites as above. The message adds that a non-nullable value type
+  (number, boolean) at the base is bound to its default (0, false) instead of rejected, which saves the request
+  with a wrong value and no error.
+- `request-body-became-optional`/`-nullable`, `request-parameter-became-optional`/`-nullable`,
+  `request-parameter-property-became-nullable` and the `request-*-enum-value-added` checks: whenever the revision
+  build calls the operation.
+
+A revision build that cannot be read fails the layer like a live ref.
 
 For an `enum-member-exposed-added` finding of an enum exposed through an API with clients, the layer scans the
 `sources` of every live ref for code that branches on the exposed fields:
