@@ -178,10 +178,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # both refs must be in the clone
-      - uses: SOFTURE/COMPAT@v0.12.0   # base, revision and fail-on come from "check" in compat.config.json
+      - uses: SOFTURE/COMPAT@v0.13.0   # base, revision and fail-on come from "check" in compat.config.json
 ```
 
-Use the tag of a release (`@v0.12.0`); every release has one. The action runs the CLI version released
+Use the tag of a release (`@v0.13.0`); every release has one. The action runs the CLI version released
 from the same commit, so the action and the CLI never drift apart.
 
 | Input | Default | Meaning |
@@ -646,7 +646,11 @@ that the base already had and the revision edits is `migration-modified`, one th
       "path": "src/Db/Scripts/migrations.sql",
       "historyTable": "__EFMigrationsHistory",
       "preconditions": { "run": "scripts/prod-max-ids.sh", "timeoutSeconds": 60 },
-      "accept": [{ "id": "update-data", "migration": "20261005073152_AddMissingPetBreeds", "object": "Breeds", "reason": "backfill, old builds ignore the column" }]
+      "writers": [{ "table": "dictionaries.PetBreeds", "files": ["src/**/*.cs"], "patterns": ["new PetBreed(", "INSERT INTO dictionaries.\"PetBreeds\""] }],
+      "accept": [
+        { "id": "update-data", "migration": "20261005073152_AddMissingPetBreeds", "object": "Breeds", "reason": "backfill, old builds ignore the column" },
+        { "id": "insert-explicit-id", "migration": "20261005073152_AddMissingPetBreeds", "object": "dictionaries.PetBreeds", "basis": "migrations-only", "reason": "dictionary rows, only migrations write them" }
+      ]
     }
   ]
 }
@@ -658,8 +662,9 @@ that the base already had and the revision edits is `migration-modified`, one th
 | `dialect` | `postgres` or `sqlserver` |
 | `kind: "folder"` | every file under `path` matching `include` (default `["**/*.sql"]`) is one migration, identified by its path relative to `path` |
 | `kind: "ef-script"` | `path` is an EF Core idempotent script (`dotnet ef migrations script --idempotent`); each `MigrationId` guard block is one migration. `historyTable` defaults to `__EFMigrationsHistory` |
-| `accept[]` | `{ id, migration, object?, reason }`; `migration` is the EF migration id or the file path relative to the folder; `object` is `table` or `table.column` as the report shows it |
+| `accept[]` | `{ id, migration, object?, basis?, reason }`; `migration` is the EF migration id or the file path relative to the folder; `object` is `table` or `table.column` as the report shows it; `basis: "migrations-only"` (only for `insert-explicit-id`, below) |
 | `preconditions` | optional `{ run, timeoutSeconds? }`: a command that answers `insert-explicit-id` with production `max(id)` (below) |
+| `writers[]` | optional `{ table, files, patterns }`: base files matching the `files` globs that contain any of `patterns` (plain text, case-sensitive) write `table` outside the migrations (below) |
 
 Rules and classes:
 
@@ -695,6 +700,23 @@ finding `safe` when the migration also moves the identity sequence (otherwise it
 sequence half); a max at or above it turns the finding `breaking` (the insert collides). A table missing from the
 output keeps its class with a note; a failing command adds a note and changes nothing. `timeoutSeconds` defaults
 to 60.
+
+When production is out of reach, the base often makes the precondition very likely by itself. Every
+`insert-explicit-id` that the preconditions command did not settle also says what the base's migrations (the EF
+script's statements outside the guards included) wrote into the table, with the base line as evidence: `the base
+migrations insert explicit Id up to 417 into dictionaries.PetBreeds, and never move its identity sequence` (or `move
+its identity sequence`, `insert no explicit ids`, `insert explicit ids ... that cannot be read`). With a `writers`
+entry for the table it adds whether base code outside the migrations writes it: `no base code outside the
+migrations matches the writers of dictionaries.PetBreeds`, or `base code outside the migrations writes
+dictionaries.PetBreeds (src/Admin/BreedsController.cs:42)` with that line as evidence. The base's migration files never
+count as writers, so `files` may be as wide as `**/*`.
+
+The finding stays `needs-action`. An accept entry with `"basis": "migrations-only"` accepts it only while that
+evidence holds: a `writers` entry is configured for the table, no base file matches it, the base migrations insert
+explicit integer ids into the table, and the highest of them is below the first new id. Once a writer appears or the
+ids move, the entry accepts nothing and a note says why (`its basis migrations-only does not hold: base code writes
+dictionaries.PetBreeds (src/Admin/BreedsController.cs:42)`), so the accept cannot outlive its reason. A finding the
+preconditions command turned `breaking` is never accepted by such an entry.
 
 ### seed
 
@@ -984,16 +1006,47 @@ deploy. It does not prove that the call works.
 
 | Key | Meaning |
 | --- | --- |
-| `targets[]` | `{ name, files, pattern, flags?, host? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
+| `targets[]` | `{ name, files, pattern, flags?, host?, keyFrom?, service?, composeFiles? }`: files read at the base and the revision; the named groups `host` and `path` of `pattern` capture one target, and the pattern needs at least one of them |
 | `targets[].host` | host and base path joined before a captured `path` when the match captures no `host`, for example the `BaseAddress` of a typed `HttpClient`; it is a base with a trailing slash, so `../geocode/json` against `maps.googleapis.com/maps/api/place` reads as `maps.googleapis.com/maps/api/geocode/json`; a `path` that is an absolute URL is used as it is |
 | `flags` | regex flags out of `i`, `m`, `s`, `u` |
-| `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment) |
+| `targets[].keyFrom` | `appsettings`: each capture's configuration key is the .NET path of the JSON leaf that holds it (`Shop:BaseUrl`); a named group `key` in `pattern` gives the key instead, for example the variable of `GetEnvironmentVariable("CRM_URL") ?? "https://..."`. Requires `service` |
+| `targets[].service` | the compose service that runs the app; a target whose key its `environment` sets is reported as that key (see below). Requires `keyFrom` or a `key` group |
+| `targets[].composeFiles` | where `service` is looked up, default `**/{docker-compose,compose}{,.*}.{yml,yaml}`; list only the deploy files, so a local-dev compose that sets the same key never counts. The service must be in one of them in the revision |
+| `accept[]` | `{ target, reason }`: accepts `outbound-added` for that target; `target` may be a glob such as `maps.googleapis.com/maps/api/geocode/**` (`*` stays within one path segment), or the key of a target the deploy sets (`Shop:BaseUrl`) |
 
 A target is compared as `host/path`: without the scheme, the query string and the fragment, with a lower-case host
 and no trailing slash, and with `.` and `..` segments resolved as RFC 3986 does, so
 `https://Maps.googleapis.com/maps/api/place/../geocode/json?address={address}` reads as
 `maps.googleapis.com/maps/api/geocode/json`. Targets are compared across all sources, so a call moved from one file or
 source to another gives no finding.
+
+A URL in `appsettings.json` is often only the default the deploy replaces: with `Shop__BaseUrl=${SHOP_BASE_URL}` in
+the compose `environment` of the app, production calls whatever the secret holds, never the host in the file. A source
+with `service` reads that compose `environment` at each ref (`Shop__BaseUrl` sets `Shop:BaseUrl`, case-insensitive, as
+.NET reads it), and a target whose key the service sets is compared and reported as the key, not as the file's host:
+
+```json
+{
+  "targets": [
+    {
+      "name": "appsettings-urls",
+      "files": ["src/**/appsettings.json"],
+      "pattern": "\"BaseUrl\"\\s*:\\s*\"(?<host>https?://[^\"/]+)",
+      "keyFrom": "appsettings",
+      "service": "api",
+      "composeFiles": ["deploy/docker-compose.yml"]
+    }
+  ]
+}
+```
+
+That gives `outbound-added Shop:BaseUrl` with the message `outbound call through config key Shop:BaseUrl
+(SHOP_BASE_URL at deploy via Shop__BaseUrl of compose service api; file default api-shop-dev.example.com) is new in the
+revision`, and the file line and the compose entry as evidence. A new file default under a key the deploy sets gives
+no finding, since production does not call it. The finding's topic is the variable the compose value interpolates
+(`SHOP_BASE_URL`), or the key in upper snake case, so the Markdown report shows it in one entry with the `config`
+finding of the same key. Only the compose service is read; a key set elsewhere in the deploy (an Ansible role, a
+vault) is not seen, and its target stays the file's host.
 
 | Class | Finding ids |
 | --- | --- |
@@ -1027,7 +1080,7 @@ System.Text.Json reads them, and compares the queue names your patterns find.
 | `sources[]` | `{ name, language: "csharp", files, enumStorage? }`; `enumStorage` is `string` (default, MassTransit writes enum names) or `int` |
 | `queues[]` | `{ kind: "regex", name, files, pattern, flags?, comments?, report? }`: named group `queue`, else the first group; `flags` from `i`, `m`, `s`, `u`; `comments` `slash` (default), `hash` or `none`; `report: false` for a source that only feeds a `composed` one |
 | `queues[]` | `{ kind: "composed", name, template, parts }`: names built at runtime, see below |
-| `consumers[]` | `{ kind: "regex", name, files, pattern, queue, exclude?, flags?, comments? }`: which queue consumes which message, see below |
+| `consumers[]` | `{ kind: "regex", name, files, pattern, queue \| queueFrom, select?, exclude?, flags?, comments? }`: which queue consumes which message, see below |
 | `accept[]` | `{ id, subject, reason }`, matching the finding subject exactly |
 
 Some brokers build queue names at runtime, for example `SOFTURE.MessageBroker.Rabbit` 1.x names a consumer group
@@ -1092,6 +1145,28 @@ does not in the revision:
 A consumer source fails the layer, without consumer findings, when it matches no file or captures no consumer in the
 revision.
 
+A literal `queue` is the same at both refs, so a release that renames the receive endpoint (`Rabbit:Name`) moves no
+consumer. `queueFrom` instead takes the queue from a source of `queues`, resolved at each ref; set exactly one of
+`queue` and `queueFrom`:
+
+```json
+{
+  "consumers": [
+    { "kind": "regex", "name": "broadcast-group", "files": "src/PETSEO.Worker.Sync/Consumers/**/TermsChange/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queueFrom": "group-queues", "select": "Broadcast" },
+    { "kind": "regex", "name": "default-endpoint", "files": "src/PETSEO.Worker.Sync/Consumers/**/*.cs",
+      "pattern": "IConsumer<(?<message>\\w+)>", "queueFrom": "rabbit-endpoint", "exclude": ["broadcast-group"] }
+  ]
+}
+```
+
+`queueFrom` names a `regex` or `composed` queue source (`report: false` ones too). Without `select` the source must
+give exactly one name at the ref. `select` keeps the names of which a part value equals it exactly: for a `composed`
+source the value of any `{part}` (here the `group` part `Broadcast` picks `PETSEO.Worker.Sync.Broadcast`), for a
+`regex` source the whole name. When the source, after `select`, gives no name or several at a ref, or the source itself
+failed, the layer fails without consumer findings and names the consumer source, the queue source and the ref. With
+`queueFrom`, an endpoint rename reports every consumer of an existing message as `message-consumer-moved`.
+
 What counts: every public, non-static `class`, `record`, `record struct`, `struct` and `interface` (nested ones too),
 identified by its full name (`Namespace.Outer+Inner`, generic arity as `` `1 ``) or its `[MessageUrn]`. Its wire
 properties are the public instance properties with a public getter and the positional parameters of a record; fields,
@@ -1144,6 +1219,7 @@ materialized tree of its side.
 ```json
 {
   "start": { "run": "SCRIPTS/rebuild-integration-stack.sh", "timeoutSeconds": 1800 },
+  "verify": { "run": "docker run --rm --entrypoint cat ghcr.io/acme/api:ci /app/REVISION", "expect": "{commit}" },
   "test": {
     "run": "dotnet test APP/API/TESTS/PETSEO.Integration.Tests --logger trx",
     "results": { "kind": "trx", "path": "**/TestResults/*.trx" }
@@ -1159,6 +1235,7 @@ materialized tree of its side.
 | Key | Meaning |
 | --- | --- |
 | `start` | `{ side?, run, background?, ready?, timeoutSeconds? }`, optional. `side` is `revision` (default) or `base`. A script runs to completion (default timeout 1800 s, a non-zero exit fails the layer); with `background: true` the command is a long-running app, kept alive during the tests and stopped with its whole process group afterwards, and `ready` (an http(s) URL) is polled until it answers 2xx within `timeoutSeconds` |
+| `verify` | `{ run, expect?, timeoutSeconds? }` or `{ url, expect?, timeoutSeconds? }`, optional: an identity probe that runs after `start` and before the tests in every cycle and proves the stack runs the code of the side `start` ran at. `run` is a command at that side (default timeout 120 s, a non-zero exit fails the layer) whose stdout is checked; `url` is an http(s) URL (`{port}` allowed) fetched once (default timeout 30 s) whose 2xx body is checked. `expect` defaults to `{commit}`; see below |
 | `test` | `{ side?, run, results: { kind, path }, timeoutSeconds? }`. `side` is `base` (default) or `revision`; `kind` is `junit` (JUnit XML) or `trx`; `path` is a glob or list of globs relative to the tree root; default timeout 3600 s |
 | `stop` | `{ side?, run, timeoutSeconds? }`, optional; `side` defaults to `revision`, timeout to 600 s. It always runs, also after a failed `start`, a test timeout or unreadable results |
 | `collect` | `{ side?, run, timeoutSeconds? }`, optional: runs after a failed `start`, a failed test command or failing tests and **before** `stop`, so what only the running stack holds (container logs) survives the teardown; `side` defaults to the side `stop` runs at, timeout to 300 s. Its output is saved as a log; a failed `collect` is a note and does not fail the layer |
@@ -1172,9 +1249,21 @@ reach a background app. The exit code of the test command is ignored when result
 non-zero); files matching `results.path` are deleted before each attempt. A test name is `classname.name` in JUnit
 XML and the full method name in TRX.
 
+A `start` script that builds images under a fixed tag (`:ci`, `:latest`), rebuilds only what it thinks changed or
+reuses a cached image from another tree can leave the base and the revision cycles running the same build, and a
+green result then proves nothing. `verify` closes that gap. In `expect`, `{commit}` and `{ref}` expand to the
+resolved commit and the ref of the side the stack was started at (the test side in the `baseline` cycle). The probe
+matches when its trimmed output contains the expanded value; when that value is a full commit id, a hex word of at
+least 7 characters in the output that is a prefix of it matches too, so an image labelled with a short SHA passes
+(hex digits compare without case). A mismatch fails the layer, not a test: the error holds both what the stack
+reported and what was expected, the tests do not run, and `collect` and `stop` still run. Without `verify` each
+cycle adds the note `the stack's code was not verified to be <side> (<ref>, <commit>)`. Each cycle also notes the
+wall time of `start` (for a background app, until `ready` answered): two near-identical, very short start times
+for the baseline and the check are a hint that nothing was rebuilt.
+
 The full stdout and stderr of every `start`, `test` (each attempt), `collect` and `stop` command is written to a log
 file named after the cycle, command and side, such as `baseline-start-base.log`, `check-test-base-retry1.log` or
-`check-collect-revision.log`, in the `behaviour` folder of `--log-dir` (default: a folder per run in the cache,
+`check-collect-revision.log` (and of a `verify` command, such as `check-verify-revision.log`), in the `behaviour` folder of `--log-dir` (default: a folder per run in the cache,
 which nothing removes). A failure names its log file, the JSON report carries it with the last 40 lines of the
 output in the layer's `outputs`, and the Markdown report shows those lines as a code block with their line breaks.
 
@@ -1182,7 +1271,8 @@ output in the layer's `outputs`, and the Markdown report shows those lines as a 
 | --- | --- |
 | `base-test-failed` | `breaking`: the base test failed (or errored, or timed out) against the stack; the message holds the first lines of its failure |
 
-The layer fails, keeping its findings, when `start` fails or the app is not ready in time, when the test command
+The layer fails, keeping its findings, when `start` fails or the app is not ready in time, when `verify` cannot
+run or the stack reports another identity, when the test command
 times out, cannot start, writes no result file or results without any test case, when a result file is not valid
 JUnit XML or TRX, and when `stop` fails (the stack may still be running). `init` writes it disabled with example
 commands: nothing in a repository says how its stack starts. The materialized trees are shared with the other layers of the run.
@@ -1195,7 +1285,7 @@ its message contracts and queues (`test/e2e/message-contracts.test.ts`). Query-s
 opened by old app versions and behaviour of refactored code are caught only by your own black-box tests through the
 [`behaviour`](#behaviour) layer; messaging library behaviour beyond the version change is not checked.
 
-Known gaps in 0.12.0:
+Known gaps in 0.13.0:
 
 - psql's `\copy` meta-command in a seed script is not read; the statement after it is reported as `unreadable-write`.
 - MSBuild `Condition` attributes are decided only for `'$(Name)' == ''` and `!= ''`; a property that other conditions

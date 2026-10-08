@@ -1,7 +1,15 @@
 import type { Finding, LayerResult } from "../../model/finding.js";
 import type { Result } from "../../result.js";
 import { defineLayer, type LayerContext } from "../layer.js";
-import { applyAccept, type ClassifiedFinding, classifyMigrations, SQL_MIGRATIONS_LAYER } from "./classify.js";
+import { applyBaseEvidence, findWriters, isOpenInsert } from "./base-evidence.js";
+import {
+  applyAccept,
+  type ClassifiedFinding,
+  classifyMigrations,
+  getBaseExplicitIds,
+  type Migration,
+  SQL_MIGRATIONS_LAYER,
+} from "./classify.js";
 import { type MigrationSource, type SqlMigrationsConfig, sqlMigrationsConfigSchema } from "./config.js";
 import { applyPreconditions, getPreconditionTables, readMaxIds } from "./preconditions.js";
 import { type ChangedMigration, readSourceChanges } from "./sources.js";
@@ -46,7 +54,7 @@ async function checkSource(
 ): Promise<Result<SourceOutcome>> {
   const changes = await readSourceChanges({ source, base: context.base, revision: context.revision });
   if (!changes.ok) return changes;
-  const { newMigrations, changed, baseTables } = changes.value;
+  const { newMigrations, changed, baseTables, baseMigrations } = changes.value;
   const classified = classifyMigrations({
     sourceName: source.name,
     dialect: source.dialect,
@@ -56,19 +64,58 @@ async function checkSource(
   });
   classified.push(...changed.map((item) => describeChange(context, source, item)));
   const preconditionNotes = await resolvePreconditions(context, source, classified);
+  // Only inserts the preconditions command left open need the evidence of the base.
+  const baseEvidence = await addBaseEvidence(context, source, { classified, baseMigrations });
+  if (!baseEvidence.ok) return baseEvidence;
   const { findings, usage } = applyAccept(classified, source.accept ?? []);
   const statementCount = newMigrations.reduce((sum, migration) => sum + migration.statements.length, 0);
   const notes = [
     `source "${source.name}": ${newMigrations.length} new migration(s), ${statementCount} statement(s) read`,
     ...preconditionNotes,
-    ...usage.map(({ entry, count }) => {
+    ...usage.map(({ entry, count, refusals }) => {
       const target = `${entry.id} in ${entry.migration}${entry.object ? ` on ${entry.object}` : ""}`;
+      if (count === 0 && refusals.length > 0) {
+        return `source "${source.name}": accept entry ${target} accepted nothing; its basis ${entry.basis} does not hold: ${[...new Set(refusals)].join("; ")}`;
+      }
       return count === 0
         ? `source "${source.name}": accept entry ${target} matched nothing; remove it if the change is gone`
         : `source "${source.name}": accept entry ${target} accepted ${count} finding(s)`;
     }),
   ];
   return { ok: true, value: { findings, notes } };
+}
+
+type AddBaseEvidenceOptions = { classified: ClassifiedFinding[]; baseMigrations: Migration[] };
+
+/**
+ * Adds to explicit-id inserts what the base's migrations wrote into the table and, for tables with
+ * configured writers, whether base code outside the migrations writes it.
+ */
+async function addBaseEvidence(
+  context: LayerContext<SqlMigrationsConfig>,
+  source: MigrationSource,
+  { classified, baseMigrations }: AddBaseEvidenceOptions,
+): Promise<Result<void>> {
+  const tables = new Set(
+    classified.flatMap((item) =>
+      isOpenInsert(item) && item.explicitIds ? [item.explicitIds.table.key] : [],
+    ),
+  );
+  if (tables.size === 0) return { ok: true, value: undefined };
+  const writers = await findWriters({
+    writers: source.writers ?? [],
+    tables,
+    dialect: source.dialect,
+    base: context.base,
+    migrationPaths: new Set(baseMigrations.map((migration) => migration.path)),
+  });
+  if (!writers.ok) return writers;
+  applyBaseEvidence(classified, {
+    baseIds: getBaseExplicitIds(baseMigrations, source.dialect),
+    writers: writers.value,
+    base: context.base,
+  });
+  return { ok: true, value: undefined };
 }
 
 /**

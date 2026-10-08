@@ -71,7 +71,8 @@ async function fetchOnce(options: PollUrlOptions, timeoutMs: number): Promise<At
   return { status: "ready", body };
 }
 
-function describeFetchError(error: unknown): string {
+/** Why a fetch threw, in a few words: `request timed out`, `connection refused`, ... */
+export function describeFetchError(error: unknown): string {
   const failure = error as { name?: string; cause?: { code?: string } };
   if (failure.name === "TimeoutError") return REQUEST_TIMED_OUT;
   const code = failure.cause?.code;

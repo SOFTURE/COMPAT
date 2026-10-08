@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  composeQueueParts,
   composeQueues,
   MAX_COMPOSED_QUEUES,
   type QueueNames,
@@ -101,6 +102,32 @@ describe("composeQueues", () => {
     expect(composed).toEqual({
       ok: false,
       error: `gives 1600 queue names, more than ${MAX_COMPOSED_QUEUES}; narrow the part patterns`,
+    });
+  });
+});
+
+describe("composeQueueParts", () => {
+  it("keeps the value of every part of each name in template order", () => {
+    const composed = composeQueueParts(
+      source,
+      found({
+        endpoint: new Map([["PETSEO.Worker.Sync", ENDPOINT]]),
+        group: new Map([
+          ["Broadcast", BROADCAST],
+          ["Sync", SYNC],
+        ]),
+        separator: new Map(),
+      }),
+    );
+    expect(composed).toEqual({
+      ok: true,
+      value: new Map([
+        [
+          "PETSEO.Worker.Sync.Broadcast",
+          { site: BROADCAST, parts: ["PETSEO.Worker.Sync", ".", "Broadcast"] },
+        ],
+        ["PETSEO.Worker.Sync.Sync", { site: SYNC, parts: ["PETSEO.Worker.Sync", ".", "Sync"] }],
+      ]),
     });
   });
 });

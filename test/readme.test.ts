@@ -4,11 +4,15 @@ import { BEHAVIOUR_FINDING_IDS } from "../src/layers/behaviour/config.js";
 import { CONFIG_FINDING_IDS } from "../src/layers/config/classify.js";
 import { DEPENDENCY_FINDING_IDS } from "../src/layers/dependencies/config.js";
 import { ERROR_CODE_FINDING_CLASSES } from "../src/layers/error-codes/config.js";
-import { MESSAGE_CONTRACT_FINDING_IDS } from "../src/layers/message-contracts/config.js";
+import {
+  MESSAGE_CONTRACT_FINDING_IDS,
+  messageContractsConfigSchema,
+} from "../src/layers/message-contracts/config.js";
 import { OUTBOUND_FINDING_CLASSES } from "../src/layers/outbound/config.js";
 import { ENUM_CHANGE_IDS } from "../src/layers/persisted-enums/config.js";
 import { LAYERS } from "../src/layers/registry.js";
 import { SEED_RULE_CLASSES } from "../src/layers/seed/classify.js";
+import { sqlMigrationsConfigSchema } from "../src/layers/sql-migrations/config.js";
 import { RULE_CLASSES } from "../src/layers/sql-migrations/rules.js";
 import { USAGE } from "../src/main.js";
 
@@ -43,6 +47,15 @@ describe("README reference", () => {
     }
   });
 
+  it("has a sql-migrations example that the config schema accepts, writers and a basis included", () => {
+    const example = /```json\n([\s\S]*?)\n```/.exec(getSection("sql-migrations"))?.[1] ?? "";
+    const parsed = sqlMigrationsConfigSchema.safeParse(JSON.parse(example));
+    expect(parsed.error).toBeUndefined();
+    const legacy = parsed.data?.sources[1];
+    expect(legacy?.writers?.[0]?.table).toBe("dictionaries.PetBreeds");
+    expect(legacy?.accept?.map((entry) => entry.basis)).toEqual([undefined, "migrations-only"]);
+  });
+
   it("lists every seed finding under its class", () => {
     const section = getSection("seed");
     for (const [id, findingClass] of Object.entries(SEED_RULE_CLASSES)) {
@@ -58,6 +71,20 @@ describe("README reference", () => {
   it("lists every message-contracts finding id", () => {
     for (const id of MESSAGE_CONTRACT_FINDING_IDS)
       expect(getSection("message-contracts"), id).toContain(`\`${id}\``);
+  });
+
+  it("gives a queueFrom consumer example that the schema accepts with the composed queues example", () => {
+    const blocks = [...getSection("message-contracts").matchAll(/```json\n([\s\S]*?)\n```/g)].map(
+      (match) => JSON.parse(match[1] as string) as Record<string, unknown>,
+    );
+    const queues = blocks.find((block) => JSON.stringify(block.queues ?? []).includes('"composed"'));
+    const consumers = blocks.find((block) => JSON.stringify(block.consumers ?? []).includes('"queueFrom"'));
+    const parsed = messageContractsConfigSchema.safeParse({
+      sources: [{ name: "internal", language: "csharp", files: "src/**/*.cs" }],
+      queues: queues?.queues,
+      consumers: consumers?.consumers,
+    });
+    expect(parsed.error).toBeUndefined();
   });
 
   it("lists every behaviour finding id", () => {

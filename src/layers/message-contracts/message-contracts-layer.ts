@@ -13,7 +13,7 @@ import {
   type LocatedType,
   type Site,
 } from "./compare-contracts.js";
-import { composeQueues, type QueueNames } from "./compose-queues.js";
+import { type ComposedQueueNames, composeQueueParts, type QueueNames } from "./compose-queues.js";
 import {
   type AcceptEntry,
   type ContractSource,
@@ -112,6 +112,7 @@ export const messageContractsLayer = defineLayer({
       sources: context.config.consumers ?? [],
       sides,
       messages: getSharedMessageNames(indexes.base, indexes.revision),
+      queues: queues.resolved,
       readFiles,
     });
     errors.push(...consumers.errors);
@@ -295,11 +296,25 @@ function checkSourceCoverage(source: ContractSource, base: SourceScan, revision:
   return [];
 }
 
-type QueueOutcome = { errors: string[]; changes: ContractChange[]; notes: string[] };
+type QueueOutcome = {
+  errors: string[];
+  changes: ContractChange[];
+  notes: string[];
+  /** The names every queue source that did not fail gives at each ref, for consumers with `queueFrom`. */
+  resolved: Record<Side, Map<string, Map<string, string[]>>>;
+};
+
+/** Each name of a regex source is its own only value. */
+const toResolved = (queues: QueueNames) => new Map([...queues.keys()].map((queue) => [queue, [queue]]));
 
 /** Scans the regex queue sources, then builds the composed ones from what they found. */
 async function scanAllQueues(sources: QueueSource[], sides: Sides): Promise<QueueOutcome> {
-  const outcome: QueueOutcome = { errors: [], changes: [], notes: [] };
+  const outcome: QueueOutcome = {
+    errors: [],
+    changes: [],
+    notes: [],
+    resolved: { base: new Map(), revision: new Map() },
+  };
   const found: Record<Side, Map<string, QueueNames>> = { base: new Map(), revision: new Map() };
   const failed = new Set<string>();
   for (const source of sources) {
@@ -313,6 +328,8 @@ async function scanAllQueues(sources: QueueSource[], sides: Sides): Promise<Queu
     const [atBase, atRevision] = scanned.value;
     found.base.set(source.name, atBase.queues);
     found.revision.set(source.name, atRevision.queues);
+    outcome.resolved.base.set(source.name, toResolved(atBase.queues));
+    outcome.resolved.revision.set(source.name, toResolved(atRevision.queues));
     outcome.errors.push(...checkQueueCoverage(source, atBase, atRevision));
     if (source.report) outcome.changes.push(...compareQueues(source, atBase, atRevision));
     outcome.notes.push(
@@ -330,18 +347,29 @@ async function scanAllQueues(sources: QueueSource[], sides: Sides): Promise<Queu
       outcome.errors.push(`${name} is skipped: part source "${failedParts[0]}" failed`);
       continue;
     }
-    const atBase = composeQueues(source, found.base);
+    const atBase = composeQueueParts(source, found.base);
     if (!atBase.ok) {
       outcome.errors.push(`${name} at ${sides.base.ref} ${atBase.error}`);
       continue;
     }
-    const atRevision = composeQueues(source, found.revision);
+    const atRevision = composeQueueParts(source, found.revision);
     if (!atRevision.ok) {
       outcome.errors.push(`${name} at ${sides.revision.ref} ${atRevision.error}`);
       continue;
     }
-    const base: QueueScan = { files: [], queues: atBase.value };
-    const revision: QueueScan = { files: [], queues: atRevision.value };
+    for (const [side, composed] of [
+      ["base", atBase.value],
+      ["revision", atRevision.value],
+    ] as const) {
+      outcome.resolved[side].set(
+        source.name,
+        new Map([...composed].map(([queue, { parts }]) => [queue, parts])),
+      );
+    }
+    const toSites = (composed: ComposedQueueNames): QueueNames =>
+      new Map([...composed].map(([queue, { site }]) => [queue, site]));
+    const base: QueueScan = { files: [], queues: toSites(atBase.value) };
+    const revision: QueueScan = { files: [], queues: toSites(atRevision.value) };
     outcome.errors.push(...checkQueueNames(name, base, revision));
     outcome.changes.push(...compareQueues(source, base, revision));
     outcome.notes.push(

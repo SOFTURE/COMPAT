@@ -175,12 +175,26 @@ export const consumerSourceSchema = z
       .refine((flags) => new Set(flags).size === flags.length, "must not repeat a flag")
       .default(""),
     comments: z.enum(COMMENT_STYLES).default("slash"),
-    /** The queue (receive endpoint) the consumers in these files read from. */
-    queue: z.string().min(1),
+    /** The queue (receive endpoint) the consumers in these files read from, as a literal name. */
+    queue: z.string().min(1).optional(),
+    /** The queue source whose name at each ref is the queue of these consumers; the alternative to `queue`. */
+    queueFrom: sourceName.optional(),
+    /** With `queueFrom`: keeps the names of which a part value (a `composed` source) or the name (a `regex` one) equals it. */
+    select: z.string().min(1).optional(),
     /** Consumer sources whose files this one skips, so a catch-all glob leaves a group's folder to its own source. */
     exclude: z.array(sourceName).optional(),
   })
   .superRefine((source, context) => {
+    if ((source.queue === undefined) === (source.queueFrom === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["queue"],
+        message: "set exactly one of queue and queueFrom",
+      });
+    }
+    if (source.select !== undefined && source.queueFrom === undefined) {
+      context.addIssue({ code: "custom", path: ["select"], message: "needs queueFrom" });
+    }
     if (!/^[imsu]*$/.test(source.flags) || new Set(source.flags).size !== source.flags.length) return;
     const compiled = compileConsumerPattern(source.pattern, source.flags);
     if ("error" in compiled) context.addIssue({ code: "custom", path: ["pattern"], message: compiled.error });
@@ -249,19 +263,37 @@ function checkComposedParts(queues: QueueSource[], context: z.RefinementCtx): vo
   }
 }
 
-export const messageContractsConfigSchema = z.strictObject({
-  sources: z.array(contractSourceSchema).min(1).refine(hasUniqueNames, "source names must be unique"),
-  queues: z
-    .array(queueSourceSchema)
-    .refine(hasUniqueNames, "queue source names must be unique")
-    .superRefine(checkComposedParts)
-    .optional(),
-  consumers: z
-    .array(consumerSourceSchema)
-    .refine(hasUniqueNames, "consumer source names must be unique")
-    .superRefine(checkConsumerExcludes)
-    .optional(),
-  accept: z.array(acceptEntrySchema).optional(),
-});
+/** Every `queueFrom` names a source of the `queues` list. */
+function checkConsumerQueueSources(
+  config: { queues?: QueueSource[] | undefined; consumers?: ConsumerSource[] | undefined },
+  context: z.RefinementCtx,
+): void {
+  const queues = new Set((config.queues ?? []).map((queue) => queue.name));
+  for (const [position, consumer] of (config.consumers ?? []).entries()) {
+    if (consumer.queueFrom === undefined || queues.has(consumer.queueFrom)) continue;
+    context.addIssue({
+      code: "custom",
+      path: ["consumers", position, "queueFrom"],
+      message: `names "${consumer.queueFrom}", which is not a queue source`,
+    });
+  }
+}
+
+export const messageContractsConfigSchema = z
+  .strictObject({
+    sources: z.array(contractSourceSchema).min(1).refine(hasUniqueNames, "source names must be unique"),
+    queues: z
+      .array(queueSourceSchema)
+      .refine(hasUniqueNames, "queue source names must be unique")
+      .superRefine(checkComposedParts)
+      .optional(),
+    consumers: z
+      .array(consumerSourceSchema)
+      .refine(hasUniqueNames, "consumer source names must be unique")
+      .superRefine(checkConsumerExcludes)
+      .optional(),
+    accept: z.array(acceptEntrySchema).optional(),
+  })
+  .superRefine(checkConsumerQueueSources);
 
 export type MessageContractsConfig = z.infer<typeof messageContractsConfigSchema>;
