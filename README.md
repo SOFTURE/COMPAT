@@ -885,7 +885,7 @@ change (a new retry policy in a messaging client, a new default in an ORM).
     }
   ],
   "ignore": ["Microsoft.CodeAnalysis.*", "*.Analyzers", "xunit*", "Microsoft.NET.Test.Sdk"],
-  "accept": [{ "id": "dependency-upgraded", "name": "Npgsql", "reason": "release notes reviewed, no behaviour change" }]
+  "accept": [{ "id": "dependency-upgraded", "name": "Npgsql", "from": "8.0.3", "to": "9.0.2", "reason": "release notes reviewed, no behaviour change" }]
 }
 ```
 
@@ -919,7 +919,11 @@ be read or has a version this list does not support (set `lockfiles: false` on t
 
 `watch[]` entries are `{ name, class?, releaseNotes? }`: every finding of a matching package gets at least `class`,
 and `releaseNotes` is printed with it (nothing is fetched). `ignore[]` lists packages that produce no finding.
-Names in both are globs (`*`, `?`, `{a,b}`) matched case-insensitively. `accept[]` entries are `{ id, name, reason }`.
+Names in both are globs (`*`, `?`, `{a,b}`) matched case-insensitively. `accept[]` entries are
+`{ id, name, from?, to?, reason }`. With `from` and/or `to` an entry accepts only that transition (`"from": "0.4.0",
+"to": "1.2.0"`; `^1.2.0` in a manifest matches `1.2.0`), so a reason written for one reviewed upgrade is not reused
+for the next one: when the versions moved on, the finding stays unaccepted and a note names the new transition. An
+entry without versions that accepts a `needs-action` upgrade gets a note asking to add them.
 
 | Finding id | Class |
 | --- | --- |

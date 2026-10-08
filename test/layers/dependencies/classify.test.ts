@@ -186,4 +186,38 @@ describe("applyAccept", () => {
     ]);
     expect(result.usage.map((u) => u.count)).toEqual([1, 0]);
   });
+
+  it("accepts an entry with from and to only for that transition", () => {
+    const { findings, transitions } = classify(index(["Rabbit", "0.4.0"]), index(["Rabbit", "^1.2.0"]));
+    const result = applyAccept(
+      findings,
+      [{ id: "dependency-upgraded", name: "Rabbit", from: "0.4.0", to: "1.2.0", reason: "reviewed" }],
+      transitions,
+    );
+    expect(result.findings[0]?.accepted).toEqual({ reason: "reviewed" });
+    expect(result.usage).toEqual([expect.objectContaining({ count: 1, stale: [], acceptedBreaking: true })]);
+  });
+
+  it("does not accept a later transition and reports it as stale", () => {
+    const { findings, transitions } = classify(index(["Rabbit", "1.2.0"]), index(["Rabbit", "2.0.0"]));
+    const result = applyAccept(
+      findings,
+      [{ id: "dependency-upgraded", name: "Rabbit", from: "0.4.0", to: "1.2.0", reason: "reviewed" }],
+      transitions,
+    );
+    expect(result.findings[0]?.accepted).toBeUndefined();
+    expect(result.usage).toEqual([
+      expect.objectContaining({ count: 0, stale: ["1.2.0 → 2.0.0"], acceptedBreaking: false }),
+    ]);
+  });
+
+  it("matches a to-only entry against any base version", () => {
+    const { findings, transitions } = classify(index(["Rabbit", "0.9.0"]), index(["Rabbit", "1.2.0"]));
+    const result = applyAccept(
+      findings,
+      [{ id: "dependency-upgraded", name: "Rabbit", to: "1.2.0", reason: "reviewed" }],
+      transitions,
+    );
+    expect(result.usage[0]?.count).toBe(1);
+  });
 });
