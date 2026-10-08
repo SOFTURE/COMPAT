@@ -133,7 +133,12 @@ const appsettingsSourceSchema = z
       .optional(),
     /** The compose service that runs the app; a key its `environment` sets needs no value elsewhere. */
     service: z.string().min(1).optional(),
-    composeFiles: globs.default(DEFAULT_COMPOSE_FILES),
+    /**
+     * Where `service` is looked up. Defaults to the `files` of the layer's `compose` sources, so a
+     * local-dev compose with the same service name never counts as the deploy; to
+     * `DEFAULT_COMPOSE_FILES` only when the layer has no `compose` source.
+     */
+    composeFiles: globs.optional(),
     prefix,
   })
   .superRefine((source, context) => {
