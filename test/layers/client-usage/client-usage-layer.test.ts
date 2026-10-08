@@ -170,6 +170,35 @@ describe("client-usage layer", () => {
     );
   });
 
+  it("passes with a note when an optional workflow has no successful run (issue #93)", async () => {
+    const github = createFakeGitHub({ [RUNS]: { workflow_runs: [] } });
+    const output = await run({ refs: ["app-1", { workflowRuns: "build.yml", optional: true }] }, [openapi], {
+      env: GITHUB_ENV,
+      fetch: github.fetch,
+    });
+    expect(output.status === "failed" ? output.error : output.status).toBe("ran");
+    expect(output.status === "ran" && output.notes.slice(0, 2)).toEqual([
+      'client "mobile" (API "b2c"): mobile@app-1; 1 operation(s) read',
+      'client "mobile": optional entry skipped: cannot resolve workflowRuns:build.yml: no successful run of workflow "build.yml" in acme/shop',
+    ]);
+  });
+
+  it("reads every over-the-air update the easUpdates command prints (issue #93)", async () => {
+    const app1 = repo.git("rev-parse", "app-1").trim();
+    const app3 = repo.git("rev-parse", "app-3").trim();
+    // The store build no longer calls the operation; only the OTA bundles do, so the finding keeps its class.
+    const output = await run({
+      refs: ["app-7", { easUpdates: { run: `printf '${app3}\\tgroup-b\\tdirty\\n${app1}\\tgroup-a\\n'` } }],
+    });
+    expect(output.status === "failed" ? output.error : output.status).toBe("ran");
+    expect(output.status === "ran" && output.notes.slice(0, 3)).toEqual([
+      'client "mobile" (API "b2c"): mobile@app-7, ota:group-b, ota:group-a; 1/1/1 operation(s) read',
+      'client "mobile": easUpdates → ota:group-b, ota:group-a',
+      `client "mobile": ota:group-b was published from a dirty working tree; commit ${app3.slice(0, 12)} only approximates its bundle`,
+    ]);
+    expect(output.revisions?.map((revision) => revision.finding.class)).toEqual(["breaking"]);
+  });
+
   it("fails with a fetch hint when a resolved commit is not in the clone", async () => {
     const github = createFakeGitHub({
       [RUNS]: { workflow_runs: [{ head_sha: "f".repeat(40), head_branch: "mobile-9", event: "push" }] },
