@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -20,11 +20,13 @@ import { createTarGz } from "../../helpers/tar.js";
 const BINARY = "#!/bin/sh\necho 'oasdiff version 9.9.9'\n";
 const ARCHIVE = createTarGz({ LICENSE: "license text", oasdiff: BINARY });
 const ARCHIVE_SHA = createHash("sha256").update(ARCHIVE).digest("hex");
+const BINARY_SHA = createHash("sha256").update(BINARY).digest("hex");
 
 const release: OasdiffRelease = {
   version: "9.9.9",
   urlTemplate: "https://example.test/download/{asset}",
   sha256: { linux_amd64: ARCHIVE_SHA },
+  binarySha256: { linux_amd64: BINARY_SHA },
 };
 
 let cacheDir: string;
@@ -52,9 +54,13 @@ const offline: FetchLike = async () => {
   throw new Error("network access in a cached run");
 };
 
-function provide(fetch: FetchLike, overrides: { platform?: NodeJS.Platform; arch?: string } = {}) {
+function provide(
+  fetch: FetchLike,
+  overrides: { platform?: NodeJS.Platform; arch?: string; isDownloadAllowed?: boolean } = {},
+) {
   return provideOasdiff({
     env: { SOFTURE_COMPAT_CACHE_DIR: cacheDir },
+    isDownloadAllowed: overrides.isDownloadAllowed,
     platform: overrides.platform ?? "linux",
     arch: overrides.arch ?? "x64",
     release,
@@ -87,6 +93,13 @@ describe("getAssetSuffix", () => {
       "windows_arm64",
     ]);
     for (const sha of Object.values(PINNED_OASDIFF.sha256)) expect(sha).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("has a pinned binary checksum for every archive", () => {
+    expect(Object.keys(PINNED_OASDIFF.binarySha256).sort()).toEqual(
+      Object.keys(PINNED_OASDIFF.sha256).sort(),
+    );
+    for (const sha of Object.values(PINNED_OASDIFF.binarySha256)) expect(sha).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
@@ -166,6 +179,55 @@ describe("provideOasdiff", () => {
       ok: true,
       value: { status: "provided", oasdiff: { path: cachedBinary(), source: "cache" } },
     });
+  });
+
+  it("uses the verified cache without network access when downloads are off", async () => {
+    await provide(serve(ARCHIVE).fetch);
+    expect(await provide(offline, { isDownloadAllowed: false })).toEqual({
+      ok: true,
+      value: { status: "provided", oasdiff: { path: cachedBinary(), source: "cache" } },
+    });
+  });
+
+  it("reports not-cached when downloads are off and the cache is empty", async () => {
+    expect(await provide(offline, { isDownloadAllowed: false })).toEqual({
+      ok: true,
+      value: { status: "not-cached" },
+    });
+  });
+
+  it("ignores a cached binary whose checksum does not match when downloads are off", async () => {
+    await mkdir(dirname(cachedBinary()), { recursive: true });
+    await writeFile(cachedBinary(), "#!/bin/sh\necho evil\n");
+    expect(await provide(offline, { isDownloadAllowed: false })).toEqual({
+      ok: true,
+      value: { status: "not-cached" },
+    });
+  });
+
+  it("replaces a cached binary whose checksum does not match by downloading", async () => {
+    await mkdir(dirname(cachedBinary()), { recursive: true });
+    await writeFile(cachedBinary(), "#!/bin/sh\necho evil\n");
+    expect(await provide(serve(ARCHIVE).fetch)).toEqual({
+      ok: true,
+      value: { status: "provided", oasdiff: { path: cachedBinary(), source: "download" } },
+    });
+    expect(readFileSync(cachedBinary(), "utf8")).toBe(BINARY);
+  });
+
+  it("rejects a verified archive whose binary does not match its checksum", async () => {
+    const result = await provideOasdiff({
+      env: { SOFTURE_COMPAT_CACHE_DIR: cacheDir },
+      platform: "linux",
+      arch: "x64",
+      release: { ...release, binarySha256: { linux_amd64: "0".repeat(64) } },
+      fetch: serve(ARCHIVE).fetch,
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: `oasdiff binary in oasdiff_9.9.9_linux_amd64.tar.gz failed the checksum check (expected sha256 ${"0".repeat(64)}, got ${BINARY_SHA})`,
+    });
+    expect(existsSync(cachedBinary())).toBe(false);
   });
 
   it("rejects a tampered archive and caches nothing", async () => {
