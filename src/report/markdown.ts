@@ -1,4 +1,5 @@
 import {
+  type CommandOutput,
   type Evidence,
   FINDING_CLASSES,
   type Finding,
@@ -176,6 +177,18 @@ function formatRefInfo(info: RefInfo, side: Side): string {
   return `${escapeMarkdown(info.resolver)} → ${escapeMarkdown(info.ref)} ${commit} ${source}`;
 }
 
+/** The last lines a failed command printed, as a code block inside the list item, with its newlines kept. */
+function formatCommandOutput(output: CommandOutput): string[] {
+  const log = output.log === undefined ? "" : ` (full output: \`${output.log.replace(/`/g, "'")}\`)`;
+  const heading = `  Last lines of ${escapeMarkdown(output.command)}${log}:`;
+  if (output.tail === "") return ["", heading.replace(/:$/, ": nothing printed")];
+  // A fence longer than any backtick run in the output, so the output cannot close it.
+  const longest = Math.max(0, ...(output.tail.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  const body = output.tail.split("\n").map((line) => `  ${line}`.trimEnd());
+  return ["", heading, "", `  ${fence}text`, ...body, `  ${fence}`];
+}
+
 function formatInactiveStatus(layer: InactiveLayer): string {
   return layer.status === "disabled" ? "disabled" : "not configured";
 }
@@ -230,6 +243,7 @@ export function renderMarkdown(report: Report): string {
     for (const result of incomplete) {
       const why = result.status === "skipped" ? result.reason : result.error;
       lines.push(`- **${escapeMarkdown(result.layer)}** ${result.status}: ${escapeMarkdown(why)}`);
+      if (result.status === "failed") lines.push(...(result.outputs ?? []).flatMap(formatCommandOutput));
     }
   }
   const notes = report.layers.flatMap((result) =>

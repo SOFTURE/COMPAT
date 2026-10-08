@@ -41,7 +41,7 @@ inputs:
     required: false
     default: default
   artifact:
-    description: Upload the JSON report as a workflow artifact named `softure-compat-report-<comment-key>`.
+    description: Upload the JSON report and the command logs (`--log-dir`) as a workflow artifact named `softure-compat-report-<comment-key>`.
     required: false
     default: "true"
   package:
@@ -98,10 +98,11 @@ runs:
         fi
         REPORT="${RUNNER_TEMP}/softure-compat-report.md"
         JSON_REPORT="${RUNNER_TEMP}/softure-compat-report.json"
-        rm -f "${REPORT}" "${JSON_REPORT}"
+        LOG_DIR="${RUNNER_TEMP}/softure-compat-logs"
+        rm -rf "${REPORT}" "${JSON_REPORT}" "${LOG_DIR}"
 
         # Empty inputs are left out, so the `check` defaults of the config apply.
-        ARGS=(check --output "${REPORT}" --json-output "${JSON_REPORT}")
+        ARGS=(check --output "${REPORT}" --json-output "${JSON_REPORT}" --log-dir "${LOG_DIR}")
         if [ -n "${COMPAT_BASE}" ]; then ARGS+=(--base "${COMPAT_BASE}"); fi
         if [ -n "${COMPAT_REVISION}" ]; then ARGS+=(--revision "${COMPAT_REVISION}"); fi
         if [ -n "${COMPAT_FAIL_ON}" ]; then ARGS+=(--fail-on "${COMPAT_FAIL_ON}"); fi
@@ -116,6 +117,7 @@ runs:
         set -e
 
         echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        echo "log-dir=${LOG_DIR}" >> "$GITHUB_OUTPUT"
         if [ -f "${JSON_REPORT}" ]; then
           echo "json-report=${JSON_REPORT}" >> "$GITHUB_OUTPUT"
         else
@@ -129,12 +131,14 @@ runs:
           printf '## Backward compatibility\n\nThe check could not run (exit code %s); see the job log.\n' "${EXIT_CODE}" >> "$GITHUB_STEP_SUMMARY"
         fi
 
-    - name: Upload the JSON report
+    - name: Upload the JSON report and the command logs
       if: inputs.artifact == 'true' && steps.check.outputs.json-report != ''
       uses: actions/upload-artifact@v4
       with:
         name: softure-compat-report-${{ inputs.comment-key }}
-        path: ${{ steps.check.outputs.json-report }}
+        path: |
+          ${{ steps.check.outputs.json-report }}
+          ${{ steps.check.outputs.log-dir }}
         if-no-files-found: ignore
 
     - name: Comment the report on the pull request

@@ -10,6 +10,11 @@ export type LayerContext<C> = {
   repoDir: string;
   /** A directory owned by this layer for the current run; removed afterwards. */
   tempDir: string;
+  /**
+   * A directory owned by this layer for files that must outlive the run, such as the full output of the commands it
+   * ran; created on first use. Absent when the caller keeps no logs.
+   */
+  logDir?: string;
   env: NodeJS.ProcessEnv;
   /** `fetch` for the GitHub resolvers; tests inject a mock here, the CLI leaves it unset. */
   fetch?: FetchFn;

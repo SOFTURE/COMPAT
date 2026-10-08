@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { DEFAULT_CONFIG_FILE, loadConfig } from "../config/config.js";
 import { openRefTree, type RefTree, resolveRepoRoot } from "../git/ref-tree.js";
 import type { ClientRefCalls, Layer } from "../layers/layer.js";
+import { getCacheDir } from "../layers/openapi/oasdiff-download.js";
 import { LAYERS } from "../layers/registry.js";
 import { applyRevisions, splitOutput } from "../layers/revisions.js";
 import type { LayerResult, Side } from "../model/finding.js";
@@ -38,6 +39,8 @@ export type CheckOptions = {
   allowIncomplete: boolean;
   /** Layers that must run; a disabled, unconfigured, skipped or failed one fails the gate. */
   required?: string[];
+  /** `--log-dir`: where layers keep command logs; defaults to a directory per run in the cache. */
+  logDir?: string;
 };
 
 export type CheckIo = {
@@ -117,6 +120,10 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
   }
 
   const tempRoot = await mkdtemp(join(tmpdir(), "softure-compat-"));
+  const logRoot =
+    options.logDir === undefined
+      ? join(getCacheDir(io.env, process.platform), "logs", createRunId(new Date()))
+      : resolve(io.cwd, options.logDir);
   const stopOnSignal = installTerminationHandlers(tempRoot, io);
   try {
     const base = await openSide({
@@ -155,6 +162,7 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
             revision: revision.value.tree,
             repoDir: repoRoot.value,
             tempDir,
+            logDir: join(logRoot, layer.name),
             env: io.env,
             fetch: io.fetch,
             log: (message) => io.stderr(`[${layer.name}] ${message}\n`),
@@ -221,6 +229,12 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     stopOnSignal();
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+/** `20261008-141503-3f9a`: sorts by start time, and two runs in one second still get their own directory. */
+function createRunId(now: Date): string {
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  return `${stamp}-${Math.random().toString(16).slice(2, 6)}`;
 }
 
 /** Writes one report file; returns false (after saying why) when it cannot. */

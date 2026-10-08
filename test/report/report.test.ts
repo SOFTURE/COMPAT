@@ -150,6 +150,41 @@ describe("renderMarkdown", () => {
     );
   });
 
+  it("shows the last lines of a failed command as a code block with its newlines kept", () => {
+    const markdown = renderMarkdown(
+      buildReport([
+        {
+          layer: "behaviour",
+          status: "failed",
+          error:
+            "baseline: start command at base (2.2.4) exited 1; full output in /logs/baseline-start-base.log",
+          findings: [],
+          notes: [],
+          outputs: [
+            {
+              command: "baseline: start command at base (2.2.4) exited 1",
+              tail: "Container db Started\n```\nAborting on container exit...",
+              log: "/logs/baseline-start-base.log",
+            },
+          ],
+        },
+      ]),
+    );
+    expect(markdown).toContain(
+      [
+        "- **behaviour** failed: baseline: start command at base (2.2.4) exited 1; full output in /logs/baseline-start-base.log",
+        "",
+        "  Last lines of baseline: start command at base (2.2.4) exited 1 (full output: `/logs/baseline-start-base.log`):",
+        "",
+        "  ````text",
+        "  Container db Started",
+        "  ```",
+        "  Aborting on container exit...",
+        "  ````",
+      ].join("\n"),
+    );
+  });
+
   it("names the resolver, what it resolved to and where each ref was set in the header", () => {
     const report = buildReport([]);
     report.base = {

@@ -105,6 +105,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
 | `--require <layer,...>` | check | fail the gate unless these layers ran: disabled, not configured, skipped or failed all fail it, even with `--allow-incomplete` |
 | `--no-download` | check | never download oasdiff; use the verified cache, else skip the `openapi` layer |
+| `--log-dir <dir>` | check | where layers keep the full output of the commands they run, one folder per layer (default: `<cache>/logs/<run>`, the cache being `SOFTURE_COMPAT_CACHE_DIR` or `~/.cache/softure-compat`) |
 | `--force` | init | overwrite an existing config file |
 | `-h`, `--help` | both | show the help |
 | `-v`, `--version` | both | show the version |
@@ -193,7 +194,7 @@ from the same commit, so the action and the CLI never drift apart.
 | `args` | | extra CLI arguments, split on whitespace (`--allow-incomplete --no-download`) |
 | `comment` | `true` | create or update the report comment on pull requests |
 | `comment-key` | `default` | one comment per key, for several checks on one pull request |
-| `artifact` | `true` | upload the JSON report as the artifact `softure-compat-report-<comment-key>` |
+| `artifact` | `true` | upload the JSON report and the command logs (`--log-dir`) as the artifact `softure-compat-report-<comment-key>` |
 | `package` | the released version | npm package spec of the CLI to run instead (a version or a tarball path) |
 | `node-version` | `22` | Node.js set up for the CLI; empty keeps the job's Node.js |
 | `github-token` | `github.token` | token for the resolvers and the comment |
@@ -1117,6 +1118,7 @@ materialized tree of its side.
     "results": { "kind": "trx", "path": "**/TestResults/*.trx" }
   },
   "stop": { "run": "docker compose -f VPS/DOCKER/TESTS/docker-compose.integration-tests.yml down -v" },
+  "collect": { "run": "docker compose -f VPS/DOCKER/TESTS/docker-compose.integration-tests.yml logs --no-color" },
   "retries": 1,
   "baseline": true,
   "accept": [{ "test": "PETSEO.Integration.Tests.Legacy.*", "reason": "asserts the old paging on purpose" }]
@@ -1128,6 +1130,7 @@ materialized tree of its side.
 | `start` | `{ side?, run, background?, ready?, timeoutSeconds? }`, optional. `side` is `revision` (default) or `base`. A script runs to completion (default timeout 1800 s, a non-zero exit fails the layer); with `background: true` the command is a long-running app, kept alive during the tests and stopped with its whole process group afterwards, and `ready` (an http(s) URL) is polled until it answers 2xx within `timeoutSeconds` |
 | `test` | `{ side?, run, results: { kind, path }, timeoutSeconds? }`. `side` is `base` (default) or `revision`; `kind` is `junit` (JUnit XML) or `trx`; `path` is a glob or list of globs relative to the tree root; default timeout 3600 s |
 | `stop` | `{ side?, run, timeoutSeconds? }`, optional; `side` defaults to `revision`, timeout to 600 s. It always runs, also after a failed `start`, a test timeout or unreadable results |
+| `collect` | `{ side?, run, timeoutSeconds? }`, optional: runs after a failed `start`, a failed test command or failing tests and **before** `stop`, so what only the running stack holds (container logs) survives the teardown; `side` defaults to the side `stop` runs at, timeout to 300 s. Its output is saved as a log; a failed `collect` is a note and does not fail the layer |
 | `retries` | 0 (default) to 5: the test command reruns while tests fail; a test that passes in any attempt passes, with a note |
 | `baseline` | `true` runs a whole cycle with every command at the test side first (base tests against the base stack); tests failing there are not reported |
 | `accept[]` | `{ test, reason }`; `test` is the full test name, `*` matches any run of characters |
@@ -1137,6 +1140,12 @@ Every command runs through the shell with `COMPAT_SIDE`, `COMPAT_REF` and `COMPA
 reach a background app. The exit code of the test command is ignored when result files exist (failing tests exit
 non-zero); files matching `results.path` are deleted before each attempt. A test name is `classname.name` in JUnit
 XML and the full method name in TRX.
+
+The full stdout and stderr of every `start`, `test` (each attempt), `collect` and `stop` command is written to a log
+file named after the cycle, command and side, such as `baseline-start-base.log`, `check-test-base-retry1.log` or
+`check-collect-revision.log`, in the `behaviour` folder of `--log-dir` (default: a folder per run in the cache,
+which nothing removes). A failure names its log file, the JSON report carries it with the last 40 lines of the
+output in the layer's `outputs`, and the Markdown report shows those lines as a code block with their line breaks.
 
 | Finding id | Class |
 | --- | --- |

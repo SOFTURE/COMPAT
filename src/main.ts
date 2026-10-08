@@ -26,6 +26,8 @@ Options:
   --allow-incomplete      check: do not fail when a layer was skipped or failed
   --require <layer,...>   check: fail unless these layers ran (not disabled, unconfigured, skipped or failed)
   --no-download           check: never download oasdiff; use the verified cache, else skip the openapi layer
+  --log-dir <dir>         check: where layers keep the full output of the commands they run
+                          (default: <cache>/logs/<run>)
   --force                 init: overwrite an existing config file
   -h, --help              show this help
   -v, --version           show the version
@@ -43,6 +45,7 @@ const CHECK_ONLY_FLAGS = [
   "allow-incomplete",
   "require",
   "no-download",
+  "log-dir",
 ] as const;
 
 function readVersion(): string {
@@ -73,6 +76,7 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       "allow-incomplete": { type: "boolean" },
       require: { type: "string" },
       "no-download": { type: "boolean" },
+      "log-dir": { type: "string" },
       force: { type: "boolean" },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -123,6 +127,7 @@ async function runMain(argv: string[], io: CheckIo): Promise<number> {
       failOn,
       allowIncomplete: values["allow-incomplete"] ?? false,
       required,
+      logDir: values["log-dir"],
     },
     // Layers read the opt-out from the environment, the same switch CI can set without the flag.
     values["no-download"] ? { ...io, env: { ...io.env, [NO_DOWNLOAD_ENV_VAR]: "1" } } : io,

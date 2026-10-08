@@ -12,6 +12,7 @@ export const PORT_PLACEHOLDER = "{port}";
 export const DEFAULT_START_TIMEOUT_SECONDS = 1800;
 export const DEFAULT_TEST_TIMEOUT_SECONDS = 3600;
 export const DEFAULT_STOP_TIMEOUT_SECONDS = 600;
+export const DEFAULT_COLLECT_TIMEOUT_SECONDS = 300;
 const MAX_TIMEOUT_SECONDS = 86_400;
 const MAX_RETRIES = 5;
 
@@ -73,6 +74,19 @@ export const stopCommandSchema = z.strictObject({
 
 export type StopCommand = z.infer<typeof stopCommandSchema>;
 
+/**
+ * Runs after a failed `start` or `test` and before `stop`, so what only the running stack holds (container logs)
+ * survives the teardown; its output is saved next to the other command logs.
+ */
+export const collectCommandSchema = z.strictObject({
+  /** Defaults to the side `stop` runs at in that cycle. */
+  side: side.optional(),
+  run: z.string().min(1),
+  timeoutSeconds: timeoutSeconds.default(DEFAULT_COLLECT_TIMEOUT_SECONDS),
+});
+
+export type CollectCommand = z.infer<typeof collectCommandSchema>;
+
 export const acceptEntrySchema = z.strictObject({
   /** The full test name; `*` matches any run of characters. */
   test: z.string().min(1),
@@ -85,6 +99,7 @@ export const behaviourConfigSchema = z.strictObject({
   start: startCommandSchema.optional(),
   test: testCommandSchema,
   stop: stopCommandSchema.optional(),
+  collect: collectCommandSchema.optional(),
   /** How many times the test command reruns while tests fail. */
   retries: z.number().int().min(0).max(MAX_RETRIES).default(0),
   /** Runs the tests against the test side's own stack first and drops tests that fail there. */
