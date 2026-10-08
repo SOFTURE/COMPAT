@@ -338,6 +338,18 @@ describe("resolveRefList", () => {
       });
     });
 
+    it("names the reason the command printed on stderr when it prints no update (issue #110)", async () => {
+      expect(await resolveOptionalOta("echo 'channel production maps no branch' >&2")).toEqual({
+        ok: true,
+        value: {
+          refs: [{ ref: "2.0.1" }],
+          notes: [
+            "optional entry easUpdates resolved to nothing: the command exited 0 and printed no update: channel production maps no branch",
+          ],
+        },
+      });
+    });
+
     it("fails with the exit code and stderr tail when the command exits non-zero", async () => {
       expect(await resolveOptionalOta("echo no EXPO_TOKEN >&2; exit 3")).toEqual({
         ok: false,

@@ -429,8 +429,12 @@ resolved to, e.g. `client "mobile": workflowRuns:eas-prod.yml since 2.0.1 → 2.
 With an over-the-air channel (Expo EAS Update, CodePush), an installed build runs the newest update published to its
 channel and runtime version, not the code of the build's commit. List the updates next to the builds, so a call kept
 only by an OTA bundle keeps its class. The command runs in the repository root with the check's environment, so the
-tool itself needs no Expo token, but the CI step does (`EXPO_TOKEN`). With Expo EAS Update, `eas branch:list --json`
-lists each branch's live updates with their `gitCommitHash` (`eas update:list --json` does not carry the commit). In a
+tool itself needs no Expo token, but the CI step does (`EXPO_TOKEN`). With Expo EAS Update, builds receive updates
+through a channel, and the channel's branch mapping decides which branches it serves; the branch name matches the
+channel name only by convention. `eas channel:view <channel> --json` carries that mapping as a JSON string
+(`currentPage.branchMapping`, with `data[].branchId`), and `eas branch:list --json` lists each branch's live updates
+with their `gitCommitHash` (`eas update:list --json` does not carry the commit). The example reads the mapping of the
+`production` channel and lists the updates of every mapped branch, so a rollout between two branches lists both. In a
 monorepo, `cd` into the Expo app first:
 
 ```json
@@ -438,7 +442,7 @@ monorepo, `cd` into the Expo app first:
   { "workflowRuns": "eas-prod.yml", "since": "2.0.1" },
   {
     "easUpdates": {
-      "run": "cd apps/mobile && branches=$(eas branch:list --json --non-interactive) && printf '%s' \"$branches\" | jq -r '.[] | select(.name == \"production\") | .updates[] | [.gitCommitHash, (.runtimeVersion + \"-\" + .platform), (if .isGitWorkingTreeDirty then \"dirty\" else \"\" end)] | @tsv'"
+      "run": "cd apps/mobile && channel=$(eas channel:view production --json --non-interactive) && branches=$(eas branch:list --json --non-interactive) && ids=$(printf '%s' \"$channel\" | jq -c '.currentPage.branchMapping | fromjson | [.data[].branchId]') && updates=$(printf '%s' \"$branches\" | jq -r --argjson ids \"$ids\" '.[] | select(.id | IN($ids[])) | .updates[] | [.gitCommitHash, (.runtimeVersion + \"-\" + .platform), (if .isGitWorkingTreeDirty then \"dirty\" else \"\" end)] | @tsv') && if [ \"$ids\" = '[]' ]; then echo 'channel production maps no branch' >&2; elif [ -z \"$updates\" ]; then echo 'the branches of channel production have no update' >&2; else printf '%s\\n' \"$updates\"; fi"
     },
     "optional": true
   }
@@ -447,8 +451,11 @@ monorepo, `cd` into the Expo app first:
 
 The command runs in `sh`, so a failing `eas` call has to stop it before `jq`, which would otherwise exit 0 on empty
 input and hide the error: the example captures the JSON first and pipes it only after `eas` succeeded (in a `bash`
-script, `set -o pipefail` does the same). A branch with no update yet then prints nothing, which `optional` turns into
-a note; a missing token or a changed JSON shape fails the layer. Check the JSON fields against your `eas-cli` version.
+script, `set -o pipefail` does the same). When the command prints no update, the last line it wrote to stderr becomes
+the reason in the note, so the two empty cases read differently: a channel that maps no branch (no OTA in production)
+gives `... printed no update: channel production maps no branch`, a mapped branch with no update yet gives
+`... printed no update: the branches of channel production have no update`. A missing token or a changed JSON shape
+fails the layer. Check the JSON fields against your `eas-cli` version.
 
 An update marked `dirty` adds a note: its commit only approximates the bundle. Each OTA commit must be in the clone,
 like any other client ref.

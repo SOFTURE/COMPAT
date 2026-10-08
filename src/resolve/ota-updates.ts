@@ -58,7 +58,8 @@ type ReadOtaUpdatesOptions = { settings: OtaUpdatesSettings; cwd: string; env: N
 
 /**
  * Runs the OTA command in the consumer's repository and reads the updates it prints. A command that
- * cannot run, times out or exits non-zero is an error.
+ * cannot run, times out or exits non-zero is an error. When it prints no update, the last stderr line
+ * (if any) is the reason, e.g. "channel production maps no branch".
  */
 export async function readOtaUpdates({
   settings,
@@ -78,5 +79,10 @@ export async function readOtaUpdates({
   if (result.value.exitCode !== 0) {
     return err(`${label} exited ${result.value.exitCode}: ${getTailLines(result.value.stderr, 5)}`);
   }
-  return parseOtaOutput(result.value.stdout);
+  const updates = parseOtaOutput(result.value.stdout);
+  const reason = getTailLines(result.value.stderr, 1).trim();
+  if (updates.ok && "nothingFound" in updates.value && reason !== "") {
+    return ok({ nothingFound: `${updates.value.nothingFound}: ${reason}` });
+  }
+  return updates;
 }
