@@ -31,6 +31,8 @@ export type CheckOptions = {
   configPath?: string;
   format: ReportFormat;
   outputPath?: string;
+  /** `--json-output`: also writes the JSON report there, from the same run. */
+  jsonOutputPath?: string;
   /** `--fail-on`; falls back to `check.failOn` in the config, then `breaking`. */
   failOn?: FailOn;
   allowIncomplete: boolean;
@@ -206,17 +208,12 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     const rendered = options.format === "json" ? renderJson(report) : renderMarkdown(report);
     if (options.outputPath === undefined) {
       io.stdout(rendered);
-    } else {
-      const outputPath = resolve(io.cwd, options.outputPath);
-      try {
-        await writeFile(outputPath, rendered, "utf8");
-      } catch (error) {
-        io.stderr(
-          `softure-compat: cannot write the report to ${outputPath} (${(error as NodeJS.ErrnoException).code})\n`,
-        );
-        return EXIT_CANNOT_RUN;
-      }
-      io.stderr(`softure-compat: report written to ${outputPath}\n`);
+    } else if (!(await writeReport({ path: options.outputPath, content: rendered, io }))) {
+      return EXIT_CANNOT_RUN;
+    }
+    if (options.jsonOutputPath !== undefined) {
+      const isWritten = await writeReport({ path: options.jsonOutputPath, content: renderJson(report), io });
+      if (!isWritten) return EXIT_CANNOT_RUN;
     }
     io.stderr(`softure-compat: gate ${gate.passed ? "passed" : "failed"}\n`);
     return gate.exitCode;
@@ -224,6 +221,29 @@ export async function runCheck(options: CheckOptions, io: CheckIo): Promise<numb
     stopOnSignal();
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+/** Writes one report file; returns false (after saying why) when it cannot. */
+async function writeReport({
+  path,
+  content,
+  io,
+}: {
+  path: string;
+  content: string;
+  io: CheckIo;
+}): Promise<boolean> {
+  const outputPath = resolve(io.cwd, path);
+  try {
+    await writeFile(outputPath, content, "utf8");
+  } catch (error) {
+    io.stderr(
+      `softure-compat: cannot write the report to ${outputPath} (${(error as NodeJS.ErrnoException).code})\n`,
+    );
+    return false;
+  }
+  io.stderr(`softure-compat: report written to ${outputPath}\n`);
+  return true;
 }
 
 type OpenSideOptions = { choice: RefChoice; side: Side; repoDir: string; tempRoot: string; io: CheckIo };

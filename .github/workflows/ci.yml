@@ -98,8 +98,11 @@ jobs:
           OUTCOME: ${{ steps.compat.outcome }}
           EXIT_CODE: ${{ steps.compat.outputs.exit-code }}
           REPORT: ${{ steps.compat.outputs.report }}
+          JSON_REPORT: ${{ steps.compat.outputs.json-report }}
         run: |
           test "${OUTCOME}" = "failure" || { echo "::error::expected the step to fail, got ${OUTCOME}"; exit 1; }
           test "${EXIT_CODE}" = "1" || { echo "::error::expected exit code 1, got ${EXIT_CODE}"; exit 1; }
           grep -q '`truncate`' "${REPORT}" || { echo "::error::the report has no truncate finding"; cat "${REPORT}"; exit 1; }
+          node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if (r.gate.passed !== false) process.exit(1)' "${JSON_REPORT}" \
+            || { echo "::error::the JSON report is missing or does not show the failed gate"; exit 1; }
           echo "The action failed the gate on the truncate finding, as expected."

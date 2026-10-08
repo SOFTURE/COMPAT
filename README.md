@@ -99,6 +99,7 @@ softure-compat init [--repo <dir>] [--config <file>] [--force]
 | `--config <file>` | both | config file (default: `<repo>/compat.config.json`) |
 | `--format <md\|json>` | check | report format (default: `md`) |
 | `--output <file>` | check | write the report to a file instead of stdout |
+| `--json-output <file>` | check | also write the JSON report to a file, from the same run |
 | `--fail-on <class>` | check | `breaking`, `rollback-risk`, `needs-action` or `never` (default: `check.failOn` in the config, then `breaking`) |
 | `--allow-incomplete` | check | do not fail when a layer was skipped or failed |
 | `--require <layer,...>` | check | fail the gate unless these layers ran: disabled, not configured, skipped or failed all fail it, even with `--allow-incomplete` |
@@ -191,11 +192,13 @@ from the same commit, so the action and the CLI never drift apart.
 | `args` | | extra CLI arguments, split on whitespace (`--allow-incomplete --no-download`) |
 | `comment` | `true` | create or update the report comment on pull requests |
 | `comment-key` | `default` | one comment per key, for several checks on one pull request |
+| `artifact` | `true` | upload the JSON report as the artifact `softure-compat-report-<comment-key>` |
 | `package` | the released version | npm package spec of the CLI to run instead (a version or a tarball path) |
 | `node-version` | `22` | Node.js set up for the CLI; empty keeps the job's Node.js |
 | `github-token` | `github.token` | token for the resolvers and the comment |
 
-Outputs: `exit-code` (0 passed, 1 gate failed, 2 could not run) and `report` (path of the Markdown report). The step
+Outputs: `exit-code` (0 passed, 1 gate failed, 2 could not run), `report` (path of the Markdown report) and
+`json-report` (path of the JSON report from the same run). The step
 fails when the gate fails, after the summary and the comment are written. Without `pull-requests: write` (for example
 on a pull request from a fork) the comment is skipped with a warning and the summary still has the report.
 
@@ -222,7 +225,9 @@ No Go toolchain is needed: the first run downloads the pinned oasdiff (see [Inst
 `~/.cache/softure-compat` with `actions/cache` to skip the download, or pass `--no-download` on runners without
 internet access: the cached oasdiff is still used, and without one provide oasdiff yourself.
 
-`--format json` gives a machine-readable report with the same content.
+`--format json` gives a machine-readable report with the same content. To get both from one run, add
+`--json-output <file>`: `check --output compat-report.md --json-output compat-report.json` writes the Markdown and the
+JSON report without running the layers twice.
 
 ## Configuration
 
