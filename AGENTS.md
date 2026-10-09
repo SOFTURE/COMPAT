@@ -178,21 +178,21 @@ irreversible action nobody asked for, a secret or access only the owner has, sco
        none. Never a forge URL: the PR number lives in Stage;
   4. `Decision: …` when the owner has something to decide;
   5. one line with the times: next merge in line, deadlines that matter, next report.
-- Headers and prose in `chatLanguage`. Example (Polish owner, roadmap prefix `SA`; it drops Polish
-  diacritics only because this package ships plain ASCII, real reports use them):
+- Headers and prose in `chatLanguage` (a Polish owner gets the header row `ID | Co robi | Etap | Link`).
+  Example, shown in English (roadmap prefix `SA`):
 
   ```markdown
-  **Raport roadmapy softure-auth, 14:30**
-  Zrobione: 47 z 50 na masterze (ostatnio SA-31, SA-59).
+  **Roadmap report softure-auth, 14:30**
+  Done: 47 of 50 on master (latest SA-31, SA-59).
 
-  | ID | Co robi | Etap | Link |
+  | ID | What it does | Stage | Link |
   | --- | --- | --- | --- |
-  | **SA-33** | Rejestracja przez przelacznik funkcji | blocked (SOFTURE/AI#301) | [thread](https://claude.ai/code/session_01AbC) |
-  | **SA-35** | Reset hasla mailem | implement 2/3 | [thread](https://claude.ai/code/session_01DeF) |
-  | **SA-7** | Integracja i wydanie | waits for the owner (release) | — |
+  | **SA-33** | Registration behind a feature switch | blocked (SOFTURE/AI#301) | [thread](https://claude.ai/code/session_01AbC) |
+  | **SA-35** | Password reset by email | implement 2/3 | [thread](https://claude.ai/code/session_01DeF) |
+  | **SA-7** | Integration and release | waits for the owner (release) | — |
 
-  Decyzja: SA-7 gotowe do wydania po SA-35, czekam na Twoj znak.
-  Terminy: SA-35 do merge'a ok. 15:30; nastepny raport 15:00.
+  Decision: SA-7 can be released after SA-35; waiting for your word.
+  Times: SA-35 ready to merge around 15:30; next report 15:00.
   ```
 
   Nothing moved since the last report: one line (`14:30, no change: 47 of 50; SA-35 implement 2/3`).
