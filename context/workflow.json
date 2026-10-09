@@ -1,9 +1,12 @@
 {
+  "mode": "autonomous",
+  "timezone": "Europe/Warsaw",
   "language": "en",
   "mainBranch": "master",
   "gates": { "typecheck": "npm run typecheck", "lint": "npm run lint", "test": "npm test" },
   "integration": { "local": null, "remote": null },
   "migrations": null,
   "worktree": { "setup": ["npm ci"], "maxParallel": 4 },
-  "release": { "owner": true }
+  "release": { "owner": false },
+  "autonomy": {"source": "issues", "merge": "pr", "reports": {"every": 30, "hours": null}}
 }
