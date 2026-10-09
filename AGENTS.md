@@ -28,20 +28,24 @@ Commits, pushes and merges follow the operating mode in `context/workflow.json` 
 Installed by `@softure-ai/skills`. Project-specific rules outside this block take precedence,
 except the language rule below (when this block carries it), which always applies.
 
-## Language: English in everything you write to the repository (mandatory)
+## Language: English in the repository, `chatLanguage` in the chat (mandatory)
 
-Code, identifiers, comments, commit messages, script and log output, error messages, file and
-folder names, configuration keys, and agent or skill instructions are written in **English**.
-This holds even when the conversation with the user is in another language.
+Two languages, kept apart in every project, manual and autonomous alike:
 
-- A request in another language still produces English code. Do not carry the conversation
-  language into the code.
-- The only exception is user-facing product copy. It lives in message dictionaries
-  (e.g. `messages/pl.ts`), never inline in code.
-- When you touch a file with non-English code, comments or identifiers, translate them in the
-  same change.
-- Before every commit, scan the diff for non-English text outside message dictionaries. Any hit
-  is a failing gate, just like a red test.
+- **Everything written to the repository is English:** code, identifiers, comments, docstrings, tests
+  and test names, commit messages, branch names, pull request titles and bodies, issue texts, script,
+  log and error output, file and folder names, configuration keys, README and docs, `AGENTS.md` and
+  skill instructions. This holds whatever language the owner writes in.
+- **Everything said to the owner is in `chatLanguage`** from `context/workflow.json` (default:
+  `language`): chat replies, questions, thread results, reports. English code is no reason to answer
+  the owner in English, and a request in another language still produces English code.
+- **Two narrow exceptions:** user-facing product copy lives in message dictionaries (e.g.
+  `messages/pl.ts`), never inline in code; the prose of workflow artifacts under `context/` follows
+  `language` (their headings stay English).
+- When you touch a file with non-English code, comments or identifiers, translate them in the same
+  change. Translating a whole codebase is a change of its own, never a side effect.
+- Before every commit, scan the diff for non-English text outside message dictionaries and
+  `context/` artifacts. Any hit is a failing gate, just like a red test.
 
 ## How work flows
 
