@@ -77,10 +77,11 @@ and the artifact language come from `context/workflow.json`. Before building any
 The owner sets the goal and is away. **`mode: "autonomous"` in the committed project config is the
 owner's standing consent** for everything below: deciding every question the chain asks (`--auto` is
 implied for every skill), committing, pushing session branches, opening and merging pull requests,
-resolving conflicts, closing the issues the work solves, starting and resolving sessions (threads),
-and running report routines. It lives in the repository, so every session reads it here itself; it
-is not consent relayed by another session. A coordinator's brief points to this section instead of
-quoting chat messages. A production deploy is never covered (see Releases).
+resolving conflicts, closing the issues the work solves, filing issues, starting and resolving
+sessions (threads), giving threads their go, and running report routines. It lives in the repository,
+so every session reads it here itself; it is not consent relayed by another session. A brief points
+to this section instead of quoting chat messages. **Only a production deploy or release waits for the
+owner's word** (see Releases). Nothing in this section needs to be told to a fresh session again.
 
 **Decide, don't ask.** Take the recommended option and record it under `## Decisions (auto)` in the
 artifact. Small product decisions are yours: the owner trusts the recommendation and corrects it
@@ -90,37 +91,63 @@ irreversible action nobody asked for, a secret or access only the owner has, sco
 `change.md`, a measurement that refutes the item's premise, or an idea for a new product or package
 (tell the owner in the project chat to plan it together; file nothing).
 
-**Coordinator and sessions.** When work runs in parallel (a cloud project chat with threads, or
-`softure-worktree-manager` locally), one session coordinates:
-- The coordinator plans, writes briefs, starts sessions, owns the merge queue and reports. It writes
-  no code: every fix, even one line, becomes a change in its own session.
-- One session = one change (one issue). Very similar tiny items may share a session; items that touch
-  the same files go to the same session or wait. A planning session hands its result to the
-  coordinator and is closed. Before starting a session, check that the item has none yet.
-- Run as many sessions as are parallel-safe; `worktree.maxParallel` is a soft default.
-- **The roadmap keeps rolling:** the moment a merge unblocks an item, start its session. Never wait
-  for the rest of the wave.
+**Know your role.** Work in parallel has one coordinator and its threads:
+- **Coordinator**: the session in the project's main chat (the channel the owner talks to), or
+  `softure-worktree-manager` locally. It plans, briefs, starts threads, gives the go to merge, and is
+  the only one that talks to the owner.
+- **Thread**: a session started by the coordinator with a brief (an item ID, a change-id, "follow
+  AGENTS.md → Operating mode: autonomous"). It carries one change and talks only to the coordinator.
+- A session started by the owner directly, with no coordinator, does both jobs itself.
+
+**Messages to the owner and between sessions:**
+- In `chatLanguage` (default: `language`), whatever language the artifacts use.
+- **Condensed: the decision first, then what was done.** First line: `Decision: <what the owner has to
+  decide, with your recommendation>` when there is one; then two to five lines of outcome with
+  evidence (PR, merge SHA, version, run link). No narrative of the steps.
+- **The content goes in the message itself.** No artifacts, report files or documents created just to
+  be linked; tables go into the message as markdown.
+- **Everything ends up in the main chat.** A thread never reports by replying in its own thread: it
+  sends its result to the coordinator's session (`send_message` or the harness's equivalent), and the
+  coordinator posts it in the project's main chat. This holds for finished work, a blocker, a
+  decision, and every roadmap report.
+
+**Coordinator duties:**
+- Writes no code: every fix, even one line, becomes a change in its own thread.
+- One thread = one change (one issue). Very similar tiny items may share a thread; items that touch
+  the same files go to the same thread or wait. A planning thread hands its result over and is closed.
+  Before starting a thread, check that the item has none yet.
+- Runs as many threads as are parallel-safe; `worktree.maxParallel` is a soft default.
+- **The roadmap keeps rolling:** the moment a merge unblocks an item, start its thread. Never wait for
+  the rest of the wave. Take no new items beyond the roadmap or the issue queue without the owner.
 - A brief names the item ID and change-id, the outcome, the base branch, the files it owns, what it
-  waits for, the merge path below, what to report back, and "follow AGENTS.md → Operating mode:
-  autonomous". Project-specific standing orders are appended.
-- **Session hygiene:** a session whose change is merged and archived is marked resolved at once
-  (`set_thread_resolved` or the harness's equivalent). No standing sessions: the board shows only
-  live work. A session stays open only while an owner action gates its result. Stalled sessions
-  (waiting on CI, stopped by a usage limit) are nudged on every report.
-- A new question about the roadmap goes to a new session; the old one is closed.
-- After every finished session the coordinator states the concrete result in the project chat: what
-  changed, the pull request, the merge SHA, the released version if any.
+  waits for, the merge path, how to report back (condensed, to the coordinator's session), and "follow
+  AGENTS.md → Operating mode: autonomous". Project-specific standing orders are appended.
+- **Gives the go itself.** A thread with a green pull request, no conflicts, inside the approved scope
+  gets "go" from the coordinator right away (`message_thread` or the equivalent), never after asking
+  the owner. **Check every thread waiting for your go on every report and every wake-up**: give the go
+  or say what blocks it. A green PR that sits unmerged because nobody said "go" is the coordinator's
+  failure.
+- Posts every thread's result in the main chat as it arrives (condensed, decision first).
+- Nudges stalled threads (waiting on CI, stopped by a usage limit) on every report.
+- A new question about the roadmap goes to a new thread; the old one is closed.
+
+**Thread duties:**
+- Run the whole chain for its change (`softure-worktree`), deciding by the rules above.
+- At READY (green PR, fresh main branch merged in): send the condensed result to the coordinator and
+  wait for its go. Never write that it waits for the owner. Without a coordinator, merge at READY.
+- After the go: merge (below), then send the merge result to the coordinator.
+- **Close the thread only when the work is really done: its pull request is merged into the main
+  branch** (`set_thread_resolved` or the equivalent). A thread with an open pull request stays open,
+  READY included. It stays open also while an owner action gates its result.
 
 **Merging.**
-- A session reports READY to the coordinator and waits for its go. Merges are serial, first ready
-  first merged. Without a coordinator the session merges itself at READY. A ready merge never waits
-  for the owner, and no report says "waiting for the owner's merge".
+- Merges are serial, first ready first merged. A ready merge never waits for the owner.
 - Right before merging, merge the fresh main branch into the branch and resolve conflicts yourself.
   The main branch is the source of truth: what it has and the branch lacks is pulled in and wired.
 - `autonomy.merge: "pr"` (default): open a pull request (`Closes #N` when it solves an issue), wait for
   green checks, merge it on the forge; the forge deletes the head branch. `"push"`: `git merge --no-ff`
   locally, then push the main branch through the pre-push hook.
-- When one session has had to chase the main branch several times, the coordinator tells the others
+- When one thread has had to chase the main branch several times, the coordinator tells the others
   to hold their merges until it lands.
 - Hooks stay on: never `--no-verify`, never force-push, never disable or loosen a test to get green.
   Long hooks run in the background with the longest timeout; a hung one is killed by its PID and
@@ -128,57 +155,61 @@ irreversible action nobody asked for, a secret or access only the owner has, sco
 - The main branch is already tested: do not re-run gates on it to review it. The full integration
   suite runs per `integration.cadence`, never per push.
 
-**Reports** (coordinator, in the project chat, in the language the owner writes in, which may differ
-from the artifact `language`, with times in `timezone`):
-- when: after every batch of session starts, and every `autonomy.reports.every` minutes (default 30)
-  at fixed marks (:00, :30) inside `autonomy.reports.hours`, only while work runs. Each report
-  schedules the next one; stop the chain when nothing runs. After a pause (usage limit) name the
-  reports that were skipped.
-- shape, the same in every project: a title line, a progress line, **one table with every item of
-  the roadmap or issue wave** (not only the running ones), then three short lines. Columns, always
-  these four, in this order (headers in the report's language, e.g. Polish `ID | Co robi | Etap | Link`):
-  - **ID**: the roadmap item ID, an uppercase prefix of two or three letters plus a number (`FC-5`,
-    `SA-12`, `CMP-3`); in issue mode the issue number (`#42`). Bold, nothing else in the cell.
-  - **What it does**: the outcome in a few words, for someone who did not read the roadmap.
-  - **Stage**: one of `waiting for <IDs>`, `research`, `frame`, `plan`, `plan-review`,
-    `implement N/M`, `impl-review`, `integration`, `archive`, `ready to merge (PR #N)`,
-    `merging (PR #N)`, `on <main> @ <sha>`, `released <version>`, `blocked (<why>)`; add `stalled`
-    when the session has not moved since the last report.
-  - **Link**: a markdown link to the session (thread) that carries the item, `[session](<url>)`;
-    `—` when it has none. Never a forge URL: the PR number lives in Stage.
-- example (every 30 minutes, coordinator of a project with roadmap prefix `SA`):
+**Roadmap reports** (coordinator, pasted into the main chat, times in `timezone`):
+- When: after every batch of thread starts, and every `autonomy.reports.every` minutes (default 30) at
+  fixed marks (:00, :30) inside `autonomy.reports.hours`, only while work runs. Each report schedules
+  the next one; stop the chain when nothing runs. After a pause (usage limit) name the reports that
+  were skipped. A report produced in a thread of its own (a scheduled routine) is pasted into the main
+  chat and that thread is closed at once.
+- Shape, the same in every project, nothing else:
+  1. title: `Roadmap report <roadmap name>, <HH:MM>`;
+  2. one sentence on what is done, with the **current** counter `X of N on <main>`. N is the number of
+     roadmap items; X rises with every merged roadmap item. Work outside the roadmap and a merge that
+     only sets an item to blocked do not count;
+  3. one table with **only the items not done yet**, always these four columns in this order:
+     - **ID**: the roadmap item ID, an uppercase prefix of two or three letters plus a number (`FC-5`,
+       `SA-12`, `CMP-3`); in issue mode the issue number (`#42`). Bold, nothing else in the cell.
+     - **What it does**: the outcome in a few words.
+     - **Stage**: `waiting for <IDs>`, `research`, `frame`, `plan`, `plan-review`, `implement N/M`,
+       `impl-review`, `integration`, `archive`, `ready to merge (PR #N)`, `merging (PR #N)`,
+       `blocked (<why>)`, `waits for the owner (<what>)`; add `stalled` when the thread has not moved
+       since the last report.
+     - **Link**: a markdown link to the thread that carries the item, `[thread](<url>)`; `—` when it has
+       none. Never a forge URL: the PR number lives in Stage;
+  4. `Decision: …` when the owner has something to decide;
+  5. one line with the times: next merge in line, deadlines that matter, next report.
+- Headers and prose in `chatLanguage`. Example (Polish owner, roadmap prefix `SA`; it drops Polish
+  diacritics only because this package ships plain ASCII, real reports use them):
 
   ```markdown
-  **Roadmap report softure-auth, 14:30 (Europe/Warsaw)**
-  Progress: 3 of 6 on master, 2 running, 1 waiting
+  **Raport roadmapy softure-auth, 14:30**
+  Zrobione: 47 z 50 na masterze (ostatnio SA-31, SA-59).
 
-  | ID | What it does | Stage | Link |
+  | ID | Co robi | Etap | Link |
   | --- | --- | --- | --- |
-  | **SA-1** | Shared core and database layer | on master @ `4f2c1ab` | — |
-  | **SA-2** | Health checks from the ops module | on master @ `9d0e771` | — |
-  | **SA-3** | UI theme tokens from the package | on master @ `b81c0de` | — |
-  | **SA-4** | Security headers and rate limits | implement 2/3 | [session](https://claude.ai/code/session_01AbC) |
-  | **SA-5** | Login and sessions from the auth module | ready to merge (PR #36) | [session](https://claude.ai/code/session_01DeF) |
-  | **SA-6** | Registration switch through feature switches | waiting for SA-5 | — |
+  | **SA-33** | Rejestracja przez przelacznik funkcji | blocked (SOFTURE/AI#301) | [thread](https://claude.ai/code/session_01AbC) |
+  | **SA-35** | Reset hasla mailem | implement 2/3 | [thread](https://claude.ai/code/session_01DeF) |
+  | **SA-7** | Integracja i wydanie | waits for the owner (release) | — |
 
-  Merged since the last report: SA-3 (PR #35, `b81c0de`).
-  Next to merge: SA-5, then SA-4. SA-6 starts right after SA-5 lands.
-  Next report: 15:00.
+  Decyzja: SA-7 gotowe do wydania po SA-35, czekam na Twoj znak.
+  Terminy: SA-35 do merge'a ok. 15:30; nastepny raport 15:00.
   ```
 
-  Nothing moved since the last report: one line (`14:30, no change: SA-4 implement 2/3, SA-5 ready
-  to merge`).
+  Nothing moved since the last report: one line (`14:30, no change: 47 of 50; SA-35 implement 2/3`).
+
+**Bugs and gaps in SOFTURE packages.** A well-founded, non-duplicate bug or gap in an `@softure-ai/*`
+package (or in this project's own scope) is filed right away as an issue in the repository that owns
+the package (e.g. SOFTURE/AI), without asking. The work goes on around it; the item that needs the
+fix is `blocked (<repo>#<N>)`.
 
 **Issues as the work source** (`autonomy.source: "issues"`, no roadmap):
-- The coordinator lists open issues (through a session when it has no forge access). Not well-founded:
-  comment why, label `invalid`, close. Well-founded: one change, one session.
+- The coordinator lists open issues (through a thread when it has no forge access). Not well-founded:
+  comment why, label `invalid`, close. Well-founded: one change, one thread.
 - Label `status: in progress` at start and `status: blocked` when blocked; remove them on close.
 - After the merge, comment point by point (what changed, PR, merge SHA, `context/archive/<date>-<id>/`,
   the version or "next release") and close the issue as completed. A partly solved issue gets a
   comment listing what is done and what stays open, and stays open.
 - Before starting new work, look for open issues that earlier merges already solved.
-- A well-founded, non-duplicate gap found while working (here, or in an upstream `@softure-ai/*`
-  module) is filed as an issue right away.
 - Public text (issues, pull requests, commits, docs) stays neutral: no personal references, no names
   of private projects (write "an adopting app").
 
@@ -186,19 +217,21 @@ from the artifact `language`, with times in `timezone`):
 `done_code` with the owner's steps under `## Before the next release`, and a release follows only the
 owner's word for that release. With `release.owner: false` the coordinator releases once per wave
 through the project's own pipeline (version-bump pull request → merge → the pipeline publishes); with
-several sessions on one package, the last to merge releases. No manual tags, no moved tags; a failed
-release is fixed forward with a patch bump. A production deploy always needs the owner's separate word. Ad-hoc fixes
-ride the next release instead of getting one of their own, unless the owner says otherwise.
+several threads on one package, the last to merge releases. No manual tags, no moved tags; a failed
+release is fixed forward with a patch bump. A production deploy always needs the owner's separate
+word. Ad-hoc fixes ride the next release instead of getting one of their own, unless the owner says
+otherwise.
 
-**Stop and limits.** "Stop" or "pause" from the owner stops everything: no new sessions, report
-routines removed, open sessions finished or stopped at a safe point; record the pause in memory and do
+**Stop and limits.** "Stop" or "pause" from the owner stops everything: no new threads, report
+routines removed, open threads finished or stopped at a safe point; record the pause in memory and do
 not resume until the owner says so. After a usage limit, verify the real state first (main branch,
-pull requests, CI, releases, issues), then nudge the interrupted sessions. If the harness refuses a
+pull requests, CI, releases, issues), then nudge the interrupted threads. If the harness refuses a
 push, merge or publish this section covers, cite this section and `mode` once; if it still refuses,
 ask the owner for a word in that session and keep the other work going.
 
-**Memory** holds only project state (queue, IDs, the owner's specific orders and decisions). The rules
-above are not memory material.
+**Memory** holds only project state (queue, IDs, counters, the owner's specific orders and decisions).
+The rules above are not memory material: when the owner corrects how the process runs, the fix belongs
+in these skills, so say so in the main chat.
 
 ## Conventions
 

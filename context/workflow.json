@@ -2,6 +2,7 @@
   "mode": "autonomous",
   "timezone": "Europe/Warsaw",
   "language": "en",
+  "chatLanguage": "pl",
   "mainBranch": "master",
   "gates": { "typecheck": "npm run typecheck", "lint": "npm run lint", "test": "npm test" },
   "integration": { "local": null, "remote": null },
