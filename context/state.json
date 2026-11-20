@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "SOFTURE COMPAT",
   "mode": "autonomous",
   "main_branch": "master",
-  "updated_at": "2026-11-20T14:09:57Z",
+  "updated_at": "2026-11-20T21:53:06Z",
   "active_roadmap": {
     "slug": "v2",
     "title": "Roadmap v2: no silent false negatives in the shipped layers, and a report reviewers actually see",
