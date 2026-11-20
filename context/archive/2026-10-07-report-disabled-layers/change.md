@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: report-disabled-layers
 
 Source: issue #43. Area: `check` command, gate, Markdown and JSON reports.

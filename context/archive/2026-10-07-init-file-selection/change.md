@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: init-file-selection
 
 Source: issue #46. Command: `init`.

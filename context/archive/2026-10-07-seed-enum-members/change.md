@@ -1,7 +1,8 @@
 ---
 change_id: seed-enum-members
 title: "A seed row that writes a persisted-enum member new in the revision is rollback-risk"
-status: done
+status: archived
+legacy_status: done
 roadmap_item: null
 branch: issue-71
 created: 2026-10-07
