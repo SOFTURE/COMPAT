@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: sql-preconditions
 
 Issue #86. `insert-explicit-id` states a precondition on production data (`max(Id) < first id`) and stays

@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: check-defaults
 
 Source: issue #42. Area: config file, `check` and `init` commands, report header, GitHub Action.

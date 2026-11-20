@@ -1,7 +1,8 @@
 ---
 change_id: seed-silent-writes
 title: "Seed writes hidden in dynamic SQL or bulk loads are read or reported, never silent"
-status: done
+status: archived
+legacy_status: done
 roadmap_item: CMP-7
 branch: claude/seed-silent-writes-xtyoyw
 created: 2026-10-07

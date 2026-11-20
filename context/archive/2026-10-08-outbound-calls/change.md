@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: outbound-calls
 
 Source: issue #111. Report external API hosts and paths the revision starts calling with a credential production

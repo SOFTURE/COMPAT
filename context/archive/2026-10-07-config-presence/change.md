@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: config-presence
 
 Source: issue #20. Layer: `config`.

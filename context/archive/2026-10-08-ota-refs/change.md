@@ -1,3 +1,7 @@
+---
+status: archived
+---
+
 # Change: ota-refs
 
 Source: issue #93. Client refs (`client-usage`, `error-codes`) gain an `optional` flag on object entries and an
