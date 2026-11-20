@@ -62,7 +62,7 @@ The full contract is in `node_modules/@softure-ai/skills/WORKFLOW.md`.
 
 `context/state.json` is the machine-readable state of the project (WORKFLOW §12). Only scripts write
 it (`wt-roadmap.py`, and `context_state.py write --staged` in `softure-archive` and `softure-roadmap`),
-in the same commit as the markdown; never edit it by hand. CI runs `npx softure-skills doctor`, which
+in the same commit as the markdown; never edit it by hand. CI runs `npx softure-skills doctor` in the job `context-doctor` (keep that name), which
 fails on drift in `context/`: fix the file it names, never the check.
 
 **Every change goes through the chain, however small.** A one-line fix reported in chat is a change
@@ -344,7 +344,11 @@ word in writing, equal to the same sentence in the main chat: one decision, its 
 on it like an order in the chat: a roadmap to start goes to a roadmap thread (`--promote`), a release
 word is recorded where the release rules look for it (the roadmap header's `Release:` order, quoted with
 the issue link), a "no" or "later" is recorded in the roadmap (`## Owner decisions and checks` or the
-item's status). Then it comments what it did (thread, PR, merge SHA, roadmap line), closes the issue as
+item's status). An issue whose body carries `<!-- owner-word: {"entry": "<id>", "answer": "yes|no|later"} -->`
+answers the `owner_queue` entry with that `id` in `context/state.json`: settle that entry in its `source` file and cite
+the issue (`yes`: carry it out and tick it `— done: #N`; `no`: tick it `— declined: #N` and record what follows;
+`later`: leave it open with `(later: #N)`); an `entry` no longer in the queue gets a comment saying so (WORKFLOW §8.6).
+Then it comments what it did (thread, PR, merge SHA, roadmap line), closes the issue as
 completed, and names it in the next report. An issue it cannot act on (unclear, contradicts `change.md`
 or a standing order) gets one comment with the question and stays open; the question also goes to the
 owner in the main chat. Owner-word issues are not work items: they never get a thread of their own

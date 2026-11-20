@@ -44,18 +44,16 @@ jobs:
       - run: npm run test:pack
 
   # The context/ contract (softure-doctor): runs on every pull request, documentation-only changes included.
-  doctor:
-    name: context doctor
+  # Keep the job id and name `context-doctor`: readers look for that check run. Keep the version in step with package.json.
+  context-doctor:
+    name: context-doctor
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npx softure-skills doctor
+      - run: npx --yes --package @softure-ai/skills@0.24.0 softure-skills doctor
+        env:
+          npm_config_ignore_scripts: "true"  # run the doctor only, no install into the checkout
 
   # Runs action.yml from this commit against a throwaway repository whose seed truncates a table (a needs-action
   # finding), with the CLI packed from this commit, so the action and the CLI it runs are tested together.
