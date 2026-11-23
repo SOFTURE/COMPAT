@@ -136,6 +136,12 @@ the owner's to-do.
   AGENTS.md → Operating mode: autonomous"). It carries one change and talks only to the coordinator.
 - A session started by the owner directly, with no coordinator, does both jobs itself.
 
+**One item = one change = one thread.** This holds however the work starts: a new roadmap, the owner's
+go on an existing roadmap, an owner-word issue, an issue from the queue, a resumed run. "Item by item"
+means one thread per item, never one thread that carries several items in a row. Serial order comes
+from starting the next item's thread after the previous merge (the startable set, below), never from
+queueing items in one thread. A thread never starts a second item in the same session.
+
 **Start of a run.** A coordinator that wakes with no run in flight (a fresh or cleared session, or a
 hosted project's main-chat session on its first message) starts the run itself, without waiting for
 the owner's "go":
@@ -168,9 +174,9 @@ Only a "stop" or "pause" from the owner, recorded in memory, holds it back.
 
 **Coordinator duties:**
 - Writes no code: every fix, even one line, becomes a change in its own thread.
-- One thread = one change (one issue). Very similar tiny items may share a thread; items that touch
-  the same files go to the same thread or wait. A planning thread hands its result over and is closed.
-  Before starting a thread, check that the item has none yet.
+- One thread = one change = one roadmap item or one issue (One item = one change = one thread, above).
+  Items that touch the same files wait for each other; they never share a thread. A planning thread
+  hands its result over and is closed. Before starting a thread, check that the item has none yet.
 - **A new roadmap is two steps, never one thread.** When the owner hands over a new roadmap (or a
   revision), brief one roadmap thread that only shapes, records, commits and merges `roadmap.md`
   **and** opens the change of every new item (`context/changes/<change-id>/change.md`, with the item
@@ -178,7 +184,8 @@ Only a "stop" or "pause" from the owner, recorded in memory, holds it back.
   start one thread per ready item, as for any run; each item thread starts from its change, not
   from the roadmap row. Never brief a single thread to record a roadmap and implement its items, or
   to implement a whole roadmap.
-- Runs as many threads as are parallel-safe; `worktree.maxParallel` is a soft default.
+- Runs as many threads as are parallel-safe; `worktree.maxParallel` is a soft default for how many
+  threads run at once, each with its own item, never a number of items for one thread.
 - **The roadmap keeps rolling: recompute the startable set on every merge result and every report.**
   Read `roadmap.md` on `origin/<main>`; every item that is not done, has no thread, and whose
   prerequisites are all `done` or `done_code` on `<main>` (or has none) gets a thread now, within the
@@ -187,7 +194,8 @@ Only a "stop" or "pause" from the owner, recorded in memory, holds it back.
   merge round missed must still be picked up. `softure-worktree/scripts/wt-startable.py` prints the
   set (`START` rows; `WAIT` rows name the missing prerequisites). Never wait for the rest of the wave.
   Take no new items beyond the roadmap or the issue queue without the owner.
-- A brief names the item ID and change-id, the outcome, the base branch, the files it owns, what it
+- A brief names exactly one item ID and one change-id (check this before sending it: a brief that
+  names two items, a lane or a whole roadmap is rewritten as one brief per item), the outcome, the base branch, the files it owns, what it
   waits for, the merge path, how to report back (condensed, to the coordinator's session), and "follow
   AGENTS.md → Operating mode: autonomous". Project-specific standing orders are appended.
 - **Gives the go itself.** A thread with a green pull request, no conflicts, inside the approved scope
@@ -215,6 +223,10 @@ Only a "stop" or "pause" from the owner, recorded in memory, holds it back.
 
 **Thread duties:**
 - Run the whole chain for its change (`softure-worktree`), deciding by the rules above.
+- **One item per thread, even when the brief says otherwise.** A brief that names more than one item
+  (several IDs, a lane, a whole roadmap, "item by item") is a coordinator mistake: carry only the
+  first item, tell the coordinator at once that every other item needs its own thread, and resolve
+  after your one merge. Never start a second item in the same session.
 - **Check the coordinator's bootstrap** in a hosted project: at session start, look for the WORKFLOW
   §8.5 pointer (or any reference to this repository's `AGENTS.md`) in the project instructions the
   session was given. When it is missing, the first message to the coordinator says so, carries the
@@ -235,7 +247,9 @@ Only a "stop" or "pause" from the owner, recorded in memory, holds it back.
   READY included. It stays open also while an owner action gates its result.
 
 **Merging.**
-- Merges are serial, first ready first merged. A ready merge never waits for the owner.
+- Merges are serial, first ready first merged: one merge at a time across the threads, each thread
+  merging its own one item. Serial merges never mean several items in one thread. A ready merge never
+  waits for the owner.
 - **The roadmap state lives on the main branch, never on a change branch.** Branches do not edit
   `roadmap.md`: `wt-roadmap.py` writes every stage on the main branch (`open`, `stage`, `ready`), and
   the thread runs `wt-roadmap.py done <change-id>` right after its merge; it takes the `## Done`,
@@ -281,13 +295,17 @@ Only a "stop" or "pause" from the owner, recorded in memory, holds it back.
   unsupervised. Routines
   fire at most once an hour, on the full hour, so the schedule is `every` rounded up to a multiple of
   60 (60 → `0 * * * *`, 120 → `0 */2 * * *`; `wt_config.py --report-cron` prints it); a value below 60
-  runs hourly. **One recurring routine** drives the reports: the coordinator creates it when work
-  starts and deletes it when nothing runs, or on the owner's "stop" or "pause". Never a chain of
-  one-off wake-ups. **A coordinator without a scheduling tool** (a hosted project's main-chat session)
-  starts one short setup thread whose only job is to create that routine from the template
-  `softure-worktree-manager/references/report-routine.md` and send its id back; the setup thread is
-  then closed. The coordinator records the id in memory and, at the end of the run or on "stop" or
-  "pause", has a thread delete the routine by that id. Missing tools never mean skipped reports. After a pause (usage limit) name the reports that were skipped. A report produced in a thread of its own (a scheduled routine) is pasted into the main
+  runs hourly. **One recurring routine** drives the reports: the roadmap heartbeat,
+  `routines/roadmap-heartbeat.md` in the package. It runs in a **fresh session on every fire**
+  (`create_new_session_on_fire`), never in the coordinator's session: it reads the repository and the
+  forge, sends the coordinator the facts in one message (in issue mode also the new open issues) and
+  ends; the coordinator posts the report and runs the heartbeat. The coordinator creates it when work
+  starts and deletes it when the roadmap is archived (issue mode: after `autonomy.reports.idleHours`
+  idle hours), or on the owner's "stop" or "pause". Never a chain of one-off wake-ups. **A coordinator
+  without a scheduling tool** (a hosted project's main-chat session) starts one short setup thread with
+  the brief in that file; the thread sends the routine id back and is closed. The coordinator records
+  the id in memory and, at the end of the run or on "stop" or "pause", has a thread delete the routine
+  by that id. Missing tools never mean skipped reports. After a pause (usage limit) name the reports that were skipped. A report produced in a thread of its own (a scheduled routine) is pasted into the main
   chat and that thread is closed at once.
 - Shape, the same in every project, nothing else:
   1. title: `Roadmap report <roadmap name>, <HH:MM>`;
