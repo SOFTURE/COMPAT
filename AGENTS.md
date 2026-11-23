@@ -62,8 +62,9 @@ The full contract is in `node_modules/@softure-ai/skills/WORKFLOW.md`.
 
 `context/state.json` is the machine-readable state of the project (WORKFLOW §12). Only scripts write
 it (`wt-roadmap.py`, and `context_state.py write --staged` in `softure-archive` and `softure-roadmap`),
-in the same commit as the markdown; never edit it by hand. CI runs `npx softure-skills doctor` in the job `context-doctor` (keep that name), which
-fails on drift in `context/`: fix the file it names, never the check.
+in the same commit as the markdown; never edit it by hand. CI runs `npx softure-skills doctor` in the job `context-doctor` (keep that name), on `pull_request` and on `push` to
+the main branch with no paths filter and no condition, which fails on drift in `context/` and on a `context-doctor`
+job that misses pushes to the main branch (`ci-doctor-trigger`): fix the file it names, never the check.
 
 **Every change goes through the chain, however small.** A one-line fix reported in chat is a change
 too (`roadmap_item: null`). `new`, `plan`, `plan-review`, `implement`, `impl-review` and `archive` are
@@ -82,6 +83,11 @@ store in `workflow.json` → `evidence`, named `<change-id>/<NN>-<what>-<before|
 and link the stored files from the Progress item they prove. Owner material (briefs, real data, designs)
 stays in the project files (`<project-slug>/briefs|data|design/`, listed in `INDEX.md`) and is referenced
 by path, never copied into the repository.
+
+**Infrastructure and deploy work (WORKFLOW §14), in both modes:** survey the server read-only before writing an
+inventory, a deploy config or a server step; treat a server that runs other apps as shared; give the owner only
+commands copied from the pinned package README, run with `--check` first; keep verify on public paths and every
+public path in the Access bypass list; give the owner one complete list; stop and report on a failed step.
 
 Execution state lives only in the `## Progress` section of `plan.md`. Commands, the main branch
 and the artifact language come from `context/workflow.json`. Before building anything generic
