@@ -1294,7 +1294,7 @@ Known gaps in 0.14.0:
   `returnedBy` entry names the operations that return it; which handler returns a code is not read from the server.
 
 Open ideas live in [`context/backlog/later-layers.md`](context/backlog/later-layers.md); ideas weighed and rejected,
-with the reason, are in the "Rejected" table of [`context/foundation/roadmap.md`](context/foundation/roadmap.md).
+with the reason, are in the "Rejected" table of [`context/foundation/archive/2026-11-24-roadmap-v2.md`](context/foundation/archive/2026-11-24-roadmap-v2.md).
 
 ## Releasing (maintainers)
 

@@ -3,19 +3,14 @@
   "project": "SOFTURE COMPAT",
   "mode": "autonomous",
   "main_branch": "master",
-  "updated_at": "2026-11-20T21:53:06Z",
-  "active_roadmap": {
-    "slug": "v2",
-    "title": "Roadmap v2: no silent false negatives in the shipped layers, and a report reviewers actually see",
-    "status": "ready",
-    "version": "1",
-    "path": "context/foundation/roadmap.md",
-    "done": 6,
-    "total": 6,
-    "items": []
-  },
+  "updated_at": "2026-11-24T07:59:37Z",
+  "active_roadmap": null,
   "queued": [],
   "open_changes": [],
   "owner_queue": [],
-  "last_release": null
+  "last_release": {
+    "version": "v0.14.0",
+    "date": "2026-10-08",
+    "source": "context/foundation/archive/2026-11-24-roadmap-v2.md"
+  }
 }
