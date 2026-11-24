@@ -10,5 +10,5 @@
   "migrations": null,
   "worktree": { "setup": ["npm ci"], "maxParallel": 4 },
   "release": { "owner": false },
-  "autonomy": {"source": "issues", "merge": "pr", "reports": {"every": 30, "hours": null}, "ownerWordWake": "none"}
+  "autonomy": {"source": "issues", "merge": "pr", "reports": {"every": 30, "hours": null}, "ownerWordWake": "routine"}
 }
