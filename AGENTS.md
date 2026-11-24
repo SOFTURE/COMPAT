@@ -370,8 +370,13 @@ word is recorded where the release rules look for it (the roadmap header's `Rele
 the issue link), a "no" or "later" is recorded in the roadmap (`## Owner decisions and checks` or the
 item's status). An issue whose body carries `<!-- owner-word: {"entry": "<id>", "answer": "yes|no|later"} -->`
 answers the `owner_queue` entry with that `id` in `context/state.json`: settle that entry in its `source` file and cite
-the issue (`yes`: carry it out and tick it `— done: #N`; `no`: tick it `— declined: #N` and record what follows;
-`later`: leave it open with `(later: #N)`); an `entry` no longer in the queue gets a comment saying so (WORKFLOW §8.6).
+the issue, so the entry leaves the queue in that commit whatever the answer (never re-word it in place: an aggregator
+shows a re-worded entry as changed since the answer). `yes`: carry it out and tick it `— done: #N`; what only the owner
+can still do goes to the later roadmap as a new item (to `## Before the next release` when it gates a release). `no`:
+tick it `— declined: #N` and record what follows. `later`: move the item to `context/foundation/roadmaps/roadmap-later.md`
+as a new item with the next number of that roadmap's own prefix (its backlog entry moves with it), set the old row
+`carried (to roadmaps/roadmap-later.md <new ID>, #N)` and tick the entry `— later: #N → <new ID>`. An `entry` no longer
+in the queue gets a comment saying so (WORKFLOW §8.6).
 An entry whose `source` is `context/workflow.json#routines.packageUpdates.*` (a package bump's owner work,
 routines/package-updates.md) is settled there: `yes` on an `ownerSteps` entry sets `"confirmed": "#N"`; the answer to
 an owner hold goes on its issue, and the next package-update run applies it and removes the hold.
