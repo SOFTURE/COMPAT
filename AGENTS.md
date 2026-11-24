@@ -399,7 +399,12 @@ several threads on one package, the last to merge releases. No manual tags, no m
 release is fixed forward with a patch bump. A production deploy always needs the owner's separate
 word. Ad-hoc fixes ride the next release instead of getting one of their own, unless the owner says
 otherwise. A roadmap ordered to be archived is closed before its release, and every release of it
-(retries and redeploys included) reads the archived file (WORKFLOW §5.2).
+(retries and redeploys included) reads the archived file (WORKFLOW §5.2). The session that sees a
+release through settles the context right after the deploy's checks pass:
+`wt-roadmap.py released <tag>` (softure-worktree) turns the rows that release carries from `waiting:
+release` to `done`, ticks the owner entries it answered, closes a finished roadmap ordered to be
+archived, and commits `context/state.json` with it, so no reader keeps showing a release word the
+owner already gave. The package-update routine never runs it (it never releases).
 
 **Stop and limits.** "Stop" or "pause" from the owner stops everything: no new threads, report
 routines removed, open threads finished or stopped at a safe point; record the pause in memory and do
