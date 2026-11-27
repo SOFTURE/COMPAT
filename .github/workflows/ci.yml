@@ -51,7 +51,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: npx --yes --package @softure-ai/skills@0.41.1 softure-skills doctor
+      - run: npx --yes --package @softure-ai/skills@0.41.2 softure-skills doctor
         env:
           npm_config_ignore_scripts: "true"  # run the doctor only, no install into the checkout
 
